@@ -1,0 +1,245 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                  RAG ENTERPRISE - STRUCTURE OVERVIEW                      ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+📁 rag-enterprise-structure/
+│
+├── 📄 README.md                          ← Documentazione principale
+├── 📄 QUICKSTART.md                      ← Guida rapida installazione
+├── 📄 .env.example                       ← Template variabili ambiente
+├── 📄 Makefile                           ← Comandi facili (make install-all)
+│
+├── 🔧 docker-compose.yml                 ← Stack completo all-in-one
+│   
+├── 📂 setup scripts (installazione modularizzata):
+│   ├── setup.sh                          ← Installa TUTTO (DB+Backend+Frontend)
+│   ├── setup-database-only.sh            ← Installa solo Milvius
+│   ├── setup-backend-only.sh             ← Installa Backend+Ollama
+│   └── setup-frontend-only.sh            ← Installa solo Frontend
+│
+├── 📂 backend/                           ← Backend FastAPI (Port: 8000)
+│   ├── app.py                            ← FastAPI main app
+│   │   - Endpoints: /api/documents/upload, /api/query, /health
+│   │   - CORS enabled, background tasks per processing
+│   ├── rag_pipeline.py                   ← LangChain RAG orchestration
+│   │   - Retrieval + LLM generation
+│   │   - Prompt templates
+│   ├── ocr_service.py                    ← PaddleOCR wrapper
+│   │   - PDF → Immagini → OCR → Testo
+│   │   - Batch processing support
+│   ├── embeddings_service.py             ← Sentence-Transformers
+│   │   - Text → Embedding vectors (384-dim)
+│   │   - Batch generation con progress bar
+│   ├── milvius_connector.py              ← Vector DB operations
+│   │   - Insert vectors
+│   │   - Vector search
+│   │   - Collection management
+│   ├── requirements.txt                  ← Python dependencies
+│   ├── Dockerfile                        ← Build image (NVIDIA GPU support)
+│   └── docker-compose.yml                ← Backend standalone compose
+│
+├── 📂 frontend/                          ← Open WebUI (Port: 3000)
+│   ├── docker-compose.yml                ← Frontend standalone
+│   │   - Environment: BACKEND_URL (configurable per remote backend)
+│   └── (resta dell'interfaccia gestita da Open WebUI)
+│
+├── 📂 database/                          ← Milvius stack (Port: 19530)
+│   └── docker-compose.yml                ← Database standalone
+│       - Milvius core
+│       - Etcd (metadata)
+│       - MinIO (S3-compatible storage)
+│
+└── 📄 STRUCTURE_OVERVIEW.txt             ← Questo file!
+
+═══════════════════════════════════════════════════════════════════════════
+
+🚀 QUICK START
+
+1️⃣  Monolith (Tutto insieme):
+    $ ./setup.sh
+    → Accedi: http://localhost:3000
+
+2️⃣  Modular (Backend + Frontend separati):
+    Macchina 1: $ ./setup-backend-only.sh
+    Macchina 2: BACKEND_URL=http://mac1:8000 ./setup-frontend-only.sh
+
+3️⃣  Distributed (Completamente separato):
+    Datacenter A: $ ./setup-database-only.sh
+    Datacenter B: MILVIUS_HOST=datacenter-a ./setup-backend-only.sh
+    Office:       BACKEND_URL=datacenter-b:8000 ./setup-frontend-only.sh
+
+═══════════════════════════════════════════════════════════════════════════
+
+🏗️ ARCHITETTURA FINALE
+
+┌─────────────────────────────────────────────────────────┐
+│              OPEN WEBUI (Frontend)                      │
+│              http://localhost:3000                      │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│              FASTAPI Backend (8000)                     │
+│   - LangChain orchestration                           │
+│   - Document management                              │
+│   - RAG query pipeline                               │
+│                                                        │
+│  OCR Service      Embeddings Service     LLM Service  │
+│  (PaddleOCR)      (Sent-Transformers)     (Ollama)   │
+│                                                        │
+├────────────────────────────────────────────────────────┤
+│                                                        │
+│         MILVIUS Vector Database (19530)               │
+│  - Etcd (metadata)                                   │
+│  - MinIO (storage)                                   │
+│  - Milvius Core (search)                            │
+│                                                        │
+├────────────────────────────────────────────────────────┤
+│                                                        │
+│  Persistent Volumes:                                 │
+│  - Vector data                                       │
+│  - Embeddings cache                                  │
+│  - Document chunks                                   │
+│  - Config                                            │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════
+
+📦 COMPONENTI PRINCIPALI
+
+STACK TECNOLOGICO:
+├─ Backend Framework: FastAPI (async, auto-docs)
+├─ RAG Orchestration: LangChain
+├─ OCR: PaddleOCR (GPU-accelerated)
+├─ Embeddings: Sentence-Transformers (384-dim)
+├─ Vector DB: Milvius (with Etcd + MinIO)
+├─ LLM: Ollama (Mistral/Llama2)
+├─ Frontend: Open WebUI (ChatGPT-like)
+└─ Deployment: Docker + Docker Compose
+
+HARDWARE REQUIREMENTS (Minimo):
+├─ CPU: i7/Ryzen 7 (quad-core minimum)
+├─ RAM: 32GB (consigliato 64GB)
+├─ GPU: RTX 5070 12GB (VRAM critico)
+└─ Storage: 200GB+ SSD
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 FILE PRINCIPALI
+
+✅ app.py
+   - FastAPI application main
+   - Health check endpoint (/health)
+   - Document upload (/api/documents/upload)
+   - Query RAG (/api/query)
+   - Document management
+
+✅ rag_pipeline.py
+   - LangChain RAG orchestration
+   - Text chunking
+   - Embedding generation
+   - LLM prompting
+   - Source attribution
+
+✅ ocr_service.py
+   - PaddleOCR PDF processing
+   - Image OCR
+   - Multilingue support
+   - Batch processing
+
+✅ embeddings_service.py
+   - Sentence-Transformers wrapper
+   - Batch embedding generation
+   - Similarity calculation
+   - Model selection (multiple models available)
+
+✅ milvius_connector.py
+   - Connection pooling
+   - Vector insert/search operations
+   - Collection management
+   - Statistics/monitoring
+
+✅ docker-compose.yml
+   - Orchestration multi-service
+   - Volume management
+   - Network isolation
+   - GPU support configuration
+
+═══════════════════════════════════════════════════════════════════════════
+
+🔒 SICUREZZA & PROTEZIONE IP
+
+Code Protection:
+├─ PyArmor offuscation (non disponibile in questo release, ma raccomandato)
+├─ Codice compilato dentro container Docker
+├─ No source code visible nel container
+└─ Docker image firmato digitalmente (opzionale)
+
+Network Security:
+├─ Backend NON esposto pubblicamente
+├─ Frontend via reverse proxy consigliato
+├─ Internal networks isolated
+├─ TLS support (nginx reverse proxy recommended)
+└─ API authentication (da aggiungere su richiesta)
+
+═══════════════════════════════════════════════════════════════════════════
+
+🚦 COMANDI PRINCIPALI
+
+Installation:
+  make install-all              # Installa tutto
+  make install-db               # Database solo
+  make install-backend          # Backend solo
+  make install-frontend         # Frontend solo
+
+Management:
+  make logs                      # Visualizza log
+  make logs-backend              # Backend log
+  make stop                      # Arresta
+  make restart                   # Riavvia
+  make clean                     # Pulizia completa
+  make health                    # Verifica salute
+
+Manual (Docker Compose):
+  docker-compose up -d           # Avvia all
+  docker-compose down            # Arresta all
+  docker-compose ps              # Status
+  docker-compose build           # Rebuild backend
+
+═══════════════════════════════════════════════════════════════════════════
+
+📞 URL SERVIZI (After installation)
+
+Frontend:          http://localhost:3000
+Backend API:       http://localhost:8000
+API Docs:          http://localhost:8000/docs
+Backend Health:    http://localhost:8000/health
+Milvius Admin:     http://localhost:9091
+MinIO Console:     http://localhost:9001
+
+═══════════════════════════════════════════════════════════════════════════
+
+✨ PROSSIMI STEP
+
+1. Esegui: ./setup.sh (o uno dei setup-*-only.sh)
+2. Attendi completamento (~2-5 minuti)
+3. Accedi: http://localhost:3000
+4. Upload documento PDF di prova
+5. Fai domande al RAG
+6. Profit! 🎉
+
+═══════════════════════════════════════════════════════════════════════════
+
+📚 Documentazione:
+- README.md               ← Architettura dettagliata
+- QUICKSTART.md           ← Guida rapida scenari diversi
+- STACK_FINALE.md         ← Dettagli stack finale
+- This file              ← Overview struttura
+
+═══════════════════════════════════════════════════════════════════════════
+
+Created: RAG Enterprise v1.0.0
+Ready for: Production deployment
+License: Enterprise
+Support: Internal documentation
+
+═══════════════════════════════════════════════════════════════════════════

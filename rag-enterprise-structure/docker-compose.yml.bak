@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Database layer
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: rag-etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: 1000
+      ETCD_QUOTA_BACKEND_BYTES: 4294967296
+      ETCD_SNAPSHOT_COUNT: 50000
+    volumes:
+      - etcd-data:/etcd
+    networks:
+      - rag-network
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls=http://0.0.0.0:2379
+
+  minio:
+    image: minio/minio:latest
+    container_name: rag-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio-data:/minio_data
+    networks:
+      - rag-network
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+milvius:
+    image: milvusdb/milvius:latest
+    container_name: rag-milvius
+    environment:
+      COMMON_STORAGETYPE: local
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvius-data:/var/lib/milvius
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # Backend layer
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    environment:
+      CUDA_VISIBLE_DEVICES: 0
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - rag-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: rag-backend
+    depends_on:
+      milvius:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      MILVIUS_HOST: milvius
+      MILVIUS_PORT: 19530
+      LLM_MODEL: mistral
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      CUDA_VISIBLE_DEVICES: 0
+    volumes:
+      - backend-uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    networks:
+      - rag-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Frontend layer
+  frontend:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    environment:
+      OPENAI_API_BASE_URL: http://backend:8000/v1
+      OPENAI_API_KEY: sk-rag-enterprise
+      WEBUI_NAME: "RAG Enterprise"
+      WEBUI_URL: http://localhost:3000
+      ENABLE_SIGNUP: "false"
+    volumes:
+      - frontend-data:/app/backend/data
+      - frontend-cache:/app/frontend/.next/cache
+    ports:
+      - "3000:8080"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+volumes:
+  etcd-data:
+  minio-data:
+  milvius-data:
+  ollama-data:
+  backend-uploads:
+  frontend-data:
+  frontend-cache:
+
+networks:
+  rag-network:
+    driver: bridge

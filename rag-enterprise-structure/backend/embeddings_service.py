@@ -1,0 +1,181 @@
+"""
+Embeddings Service - Sentence-Transformers
+Genera embeddings per testi (query e documenti)
+"""
+
+import logging
+from typing import List, Union
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import torch
+
+logger = logging.getLogger(__name__)
+
+
+class EmbeddingsService:
+    """
+    Servizio Embeddings con Sentence-Transformers
+    - Modelli open-source
+    - Multilingue
+    - GPU-accelerated
+    """
+    
+    # Modelli disponibili
+    MODELS = {
+        "all-MiniLM-L6-v2": {
+            "description": "English, 22MB, veloce",
+            "lang": "en",
+            "dim": 384
+        },
+        "multilingual-MiniLM-L6-v2": {
+            "description": "Multilingual, 61MB",
+            "lang": "multilingual",
+            "dim": 384
+        },
+        "all-mpnet-base-v2": {
+            "description": "English, high quality, 430MB",
+            "lang": "en",
+            "dim": 768
+        },
+        "multilingual-e5-large": {
+            "description": "Multilingual, high quality, 1.3GB",
+            "lang": "multilingual",
+            "dim": 1024
+        },
+        "deepseek-ai/deepseek-coder-6.7b-base": {
+            "description": "DeepSeek Coder, high performance for code, 13GB",
+            "lang": "multilingual",
+            "dim": 4096
+        },
+        "BAAI/bge-large-en-v1.5": {
+            "description": "BGE Large English, SOTA performance, 1.3GB",
+            "lang": "en",
+            "dim": 1024
+        },
+        "BAAI/bge-m3": {
+            "description": "BGE M3 Multilingual, SOTA, dense+sparse+colbert, 2.3GB",
+            "lang": "multilingual",
+            "dim": 1024
+        },
+        "intfloat/e5-large-v2": {
+            "description": "E5 Large v2, high performance multilingual, 1.3GB",
+            "lang": "multilingual",
+            "dim": 1024
+        },
+        "sentence-transformers/all-roberta-large-v1": {
+            "description": "RoBERTa Large, high quality English, 1.3GB",
+            "lang": "en",
+            "dim": 1024
+        }
+    }
+    
+    
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-m3",
+        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    ):
+        """
+        Inizializza Embeddings Service
+        
+        Args:
+            model_name: Nome del modello Sentence-Transformers
+            device: 'cuda' o 'cpu'
+        """
+        self.model_name = model_name
+        self.device = device
+        
+        if model_name not in self.MODELS:
+            raise ValueError(f"Unknown model: {model_name}. Available: {list(self.MODELS.keys())}")
+        
+        logger.info(f"Loading embeddings model: {model_name} (device: {device})...")
+        
+        try:
+            self.model = SentenceTransformer(model_name, device=device)
+            self.embedding_dim = self.MODELS[model_name]["dim"]
+            logger.info(f"✅ Model loaded (dim: {self.embedding_dim}, device: {device})")
+        except Exception as e:
+            logger.error(f"❌ Error loading model: {str(e)}")
+            raise
+    
+    
+    def embed_text(self, text: str) -> List[float]:
+        """
+        Genera embedding per singolo testo
+        
+        Args:
+            text: Testo
+            
+        Returns:
+            Embedding vector (lista)
+        """
+        try:
+            embedding = self.model.encode(
+                text,
+                convert_to_numpy=True,
+                normalize_embeddings=True
+            )
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"❌ Error embedding text: {str(e)}")
+            raise
+    
+    
+    def embed_texts(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+        """
+        Genera embeddings per multipli testi
+        
+        Args:
+            texts: Lista di testi
+            batch_size: Batch size per processing
+            
+        Returns:
+            Lista di embeddings
+        """
+        try:
+            embeddings = self.model.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=True
+            )
+            
+            # Converti a lista di liste
+            return embeddings.tolist()
+            
+        except Exception as e:
+            logger.error(f"❌ Error embedding texts: {str(e)}")
+            raise
+    
+    
+    def similarity(self, text1: str, text2: str) -> float:
+        """
+        Calcola similarità coseno tra due testi
+        
+        Returns:
+            Valore tra 0 e 1
+        """
+        try:
+            embeddings = self.model.encode([text1, text2])
+            
+            # Cosine similarity
+            from sklearn.metrics.pairwise import cosine_similarity
+            similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+            
+            return float(similarity)
+            
+        except Exception as e:
+            logger.error(f"❌ Error calculating similarity: {str(e)}")
+            raise
+    
+    
+    def get_embedding_dimension(self) -> int:
+        """Dimensionalità degli embeddings"""
+        return self.embedding_dim
+    
+    
+    @staticmethod
+    def list_available_models() -> dict:
+        """Lista modelli disponibili"""
+        return EmbeddingsService.MODELS

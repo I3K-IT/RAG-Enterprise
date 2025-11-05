@@ -1,0 +1,97 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    environment:
+      QDRANT_API_KEY: rag-enterprise-key
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    environment:
+      CUDA_VISIBLE_DEVICES: 0
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - rag-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: rag-backend
+    depends_on:
+      - qdrant
+      - ollama
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      LLM_MODEL: neural-chat
+      EMBEDDING_MODEL: BAAI/bge-m3
+      RELEVANCE_THRESHOLD: "0.35"
+      CUDA_VISIBLE_DEVICES: 0
+    volumes:
+      - backend-uploads:/app/uploads
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+      - "9998:9998"
+    networks:
+      - rag-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  frontend:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    environment:
+      OPENAI_API_BASE_URL: http://backend:8000/v1
+      OPENAI_API_KEY: sk-rag-enterprise
+      WEBUI_NAME: "RAG Enterprise"
+      WEBUI_URL: http://localhost:3000
+      ENABLE_SIGNUP: "true"
+      OLLAMA_BASE_URL: http://rag-ollama:11434
+    volumes:
+      - frontend-data:/app/backend/data
+      - frontend-cache:/app/frontend/.next/cache
+    ports:
+      - "3000:8080"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+volumes:
+  qdrant-data:
+  ollama-data:
+  backend-uploads:
+  frontend-data:
+  frontend-cache:
+
+networks:
+  rag-network:
+    driver: bridge

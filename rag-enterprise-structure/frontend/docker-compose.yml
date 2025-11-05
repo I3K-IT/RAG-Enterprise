@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: rag-frontend
+    ports:
+      - "3000:8080"
+    environment:
+      # Configurazione backend RAG
+      OPENAI_API_BASE_URL: ${BACKEND_URL:-http://localhost:8000/v1}
+      OPENAI_API_KEY: ${API_KEY:-sk-rag-enterprise}
+      
+      # OpenWebUI config
+      WEBUI_NAME: "RAG Enterprise"
+      WEBUI_URL: http://localhost:3000
+      
+      # Optional: autenticazione
+      ENABLE_SIGNUP: "false"
+      
+    volumes:
+      # Persisti data
+      - open-webui-data:/app/backend/data
+      - open-webui-cache:/app/frontend/.next/cache
+    
+    networks:
+      - rag-network
+    
+    depends_on:
+      - backend-check
+    
+    restart: unless-stopped
+
+  # Servizio per verificare backend disponibile
+  backend-check:
+    image: alpine:latest
+    container_name: backend-check
+    command: >
+      sh -c "
+      echo 'Checking backend availability...'
+      until wget --quiet --tries=1 --spider http://localhost:8000/health 2>/dev/null || curl -sf http://localhost:8000/health > /dev/null 2>&1; do
+        echo 'Backend not ready, waiting...'
+        sleep 5
+      done
+      echo 'Backend is ready!'
+      "
+    networks:
+      - rag-network
+    restart: no
+
+
+volumes:
+  open-webui-data:
+  open-webui-cache:
+
+networks:
+  rag-network:
+    driver: bridge

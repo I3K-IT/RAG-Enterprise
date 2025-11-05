@@ -1,0 +1,30 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# LangChain
+langchain==0.1.0
+langchain-community==0.0.10
+
+# Embeddings
+sentence-transformers==2.2.2
+scikit-learn==1.3.2
+huggingface-hub==0.16.4
+
+# OCR
+paddleocr==2.7.0.3
+paddlepaddle==3.2.1
+pdf2image==1.16.3
+Pillow==10.1.0
+opencv-python==4.6.0.66
+
+# Qdrant
+qdrant-client==1.15.1
+
+# LLM
+ollama==0.1.0
+
+# Utils
+numpy==1.24.3
+pyyaml==6.0.1
