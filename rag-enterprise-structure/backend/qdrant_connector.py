@@ -21,7 +21,7 @@ class QdrantConnector:
     """
     
     COLLECTION_NAME = "rag_documents"
-    VECTOR_SIZE = 384  # Sentence-Transformers default
+    VECTOR_SIZE = 1024  # BAAI/bge-m3
     
     def __init__(self, host: str = "localhost", port: int = 6333):
         """

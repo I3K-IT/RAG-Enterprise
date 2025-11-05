@@ -21,7 +21,7 @@ function App() {
 
   const checkBackendHealth = async () => {
     try {
-      const response = await axios.get('/api/health')
+      const response = await axios.get('http://localhost:8000/health')
       setBackendHealth(response.data)
       setStatus('ready')
     } catch (error) {
@@ -50,7 +50,7 @@ function App() {
         }
       }
 
-      const response = await axios.post('/api/documents/upload', formData, config)
+      const response = await axios.post('http://localhost:8000/api/documents/upload', formData, config)
       
       setDocuments([...documents, {
         name: file.name,
@@ -60,7 +60,7 @@ function App() {
       }])
 
       setUploadProgress(0)
-      alert(`✅ File caricato: ${response.data.chunks_count} chunks`)
+      alert(`✅ File caricato: ${response.data.filename}\nElaborazione in corso...`)
     } catch (error) {
       console.error('Upload error:', error)
       alert(`❌ Errore upload: ${error.response?.data?.detail || error.message}`)
@@ -84,7 +84,7 @@ function App() {
       formData.append('file', file)
 
       try {
-        const response = await axios.post('/api/documents/upload', formData)
+        const response = await axios.post('http://localhost:8000/api/documents/upload', formData)
         totalChunks += response.data.chunks_count
       } catch (error) {
         console.error(`Errore uploading ${file.name}:`, error)
@@ -108,7 +108,7 @@ function App() {
     setResults(null)
 
     try {
-      const response = await axios.post('/api/query', {
+      const response = await axios.post('http://localhost:8000/api/query', {
         query: query,
         top_k: 5
       })

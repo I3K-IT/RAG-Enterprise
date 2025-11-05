@@ -46,7 +46,7 @@ class RAGPipeline:
         
         # LLM (via Ollama)
         self.llm = Ollama(
-            model=llm_model,
+            model="neural-chat:7b",
             base_url="http://ollama:11434",
             temperature=0.7
         )
