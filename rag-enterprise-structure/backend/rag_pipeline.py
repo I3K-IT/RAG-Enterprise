@@ -254,7 +254,7 @@ RISPOSTA:"""
                 similarity = doc.get("similarity", 0)
                 
                 # Usa il documento con similarity più alta
-                if doc_id not in sources_dict or similarity > sources_dict[doc_id]["similarity"]:
+                if doc_id not in sources_dict or similarity > sources_dict[doc_id]["similarity_score"]:
                     sources_dict[doc_id] = {
                         "filename": filename,
                         "document_id": doc_id,
