@@ -50,6 +50,8 @@ services:
     volumes:
       - backend-uploads:/app/uploads
       - ./backend:/app
+      - huggingface-cache:/root/.cache/huggingface
+      - ollama-cache:/root/.ollama
     ports:
       - "8000:8000"
       - "9998:9998"
@@ -91,6 +93,8 @@ volumes:
   backend-uploads:
   frontend-data:
   frontend-cache:
+  huggingface-cache:
+  ollama-cache:
 
 networks:
   rag-network:

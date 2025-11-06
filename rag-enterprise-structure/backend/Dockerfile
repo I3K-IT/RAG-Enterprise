@@ -1,5 +1,9 @@
 FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
 
+ENV HF_HOME=/root/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/root/.cache/huggingface
+ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
+
 WORKDIR /app
 
 # Installa Python e dipendenze di sistema
