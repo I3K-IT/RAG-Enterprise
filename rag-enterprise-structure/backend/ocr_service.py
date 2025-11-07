@@ -119,7 +119,7 @@ class OCRService:
                         f"{self.TIKA_URL}/tika",
                         data=file_data,
                         headers={'Content-Type': mime_type},
-                        timeout=30
+                        timeout=600
                     )
                     
                     logger.info(f"Tika response status: {response.status_code}")

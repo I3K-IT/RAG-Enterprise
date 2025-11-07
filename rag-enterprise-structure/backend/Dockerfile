@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libgomp1 \
+	tesseract-ocr \
+    libtesseract-dev \
     poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
