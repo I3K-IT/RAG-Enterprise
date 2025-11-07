@@ -44,7 +44,8 @@ class QdrantConnector:
             
             self.client = QdrantClient(
                 host=self.host,
-                port=self.port
+                port=self.port,
+                timeout=600
             )
             
             # Test connection
@@ -104,49 +105,49 @@ class QdrantConnector:
         vectors: List[List[float]],
         metadatas: List[Dict]
     ) -> List[str]:
-        """
-        Inserisci vettori in collection
-        
-        Args:
-            vectors: Lista di embeddings
-            metadatas: Lista di metadata (uno per vettore)
-            
-        Returns:
-            IDs inseriti
-        """
+        """Inserisci vettori in collection con batching"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
-            
+        
             if len(vectors) != len(metadatas):
                 raise ValueError("Vectors and metadatas must have same length")
-            
+        
             logger.info(f"Inserting {len(vectors)} vectors...")
-            
-            # Prepara punti
-            points = []
+        
             inserted_ids = []
+            BATCH_SIZE = 1000  # ← AGGIUNGI BATCH
+        
+            # Insert in batch
+            for batch_idx in range(0, len(vectors), BATCH_SIZE):
+                batch_end = min(batch_idx + BATCH_SIZE, len(vectors))
+                batch_vectors = vectors[batch_idx:batch_end]
+                batch_metadatas = metadatas[batch_idx:batch_end]
             
-            for i, (vector, metadata) in enumerate(zip(vectors, metadatas)):
-                point_id = str(uuid.uuid4())
-                points.append(
-                    PointStruct(
-                        id=point_id,
-                        vector=vector,
-                        payload=metadata
+                points = []
+                for vector, metadata in zip(batch_vectors, batch_metadatas):
+                    point_id = str(uuid.uuid4())
+                    points.append(
+                        PointStruct(
+                            id=point_id,
+                            vector=vector,
+                            payload=metadata
+                        )
                     )
+                    inserted_ids.append(point_id)
+            
+                # Insert batch
+                self.client.upsert(
+                    collection_name=self.COLLECTION_NAME,
+                    points=points,
+                    wait=True
                 )
-                inserted_ids.append(point_id)
             
-            # Insert
-            self.client.upsert(
-                collection_name=self.COLLECTION_NAME,
-                points=points
-            )
-            
+                logger.info(f"  ✓ Batch {batch_idx}-{batch_end} inserted")
+        
             logger.info(f"✓ Inserted {len(inserted_ids)} vectors")
             return inserted_ids
-            
+        
         except Exception as e:
             logger.error(f"✗ Insert error: {str(e)}")
             raise
