@@ -44,20 +44,24 @@ class OCRService:
     
     def _aggressive_kill_tika(self):
         try:
-            subprocess.run(['pkill', '-9', '-f', 'java.*tika'], 
+            result1 = subprocess.run(['pkill', '-9', '-f', 'java.*tika'], 
                          capture_output=True, timeout=5)
-            subprocess.run(['pkill', '-9', '-f', '9998'], 
+            print(f"Kill java.*tika result: {result1.returncode}")
+        
+            result2 = subprocess.run(['pkill', '-9', '-f', '9998'], 
                          capture_output=True, timeout=5)
-            time.sleep(1)
-        except:
-            pass
+            print(f"Kill 9998 result: {result2.returncode}")
+        
+            time.sleep(2)  # Aumenta da 1 a 2 secondi
+        except Exception as e:
+            print(f"Kill error: {e}")
     
     def _start_tika(self):
         logger.info("Starting Tika...")
         self.tika_process = subprocess.Popen(
             ['java', '-jar', '/opt/tika-server.jar', '-h', '0.0.0.0', '-p', '9998'],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             preexec_fn=os.setsid
         )
         logger.info(f"Tika PID: {self.tika_process.pid}")

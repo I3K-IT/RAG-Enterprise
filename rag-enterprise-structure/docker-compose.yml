@@ -65,34 +65,24 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
   frontend:
-    image: ghcr.io/open-webui/open-webui:main
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.frontend
     container_name: rag-frontend
     depends_on:
       - backend
     environment:
-      OPENAI_API_BASE_URL: http://backend:8000/v1
-      OPENAI_API_KEY: sk-rag-enterprise
-      WEBUI_NAME: "RAG Enterprise"
-      WEBUI_URL: http://localhost:3000
-      ENABLE_SIGNUP: "true"
-      OLLAMA_BASE_URL: http://rag-ollama:11434
-    volumes:
-      - frontend-data:/app/backend/data
-      - frontend-cache:/app/frontend/.next/cache
+      REACT_APP_API_URL: http://localhost:8000
     ports:
-      - "3000:8080"
+      - "3000:3000"
     networks:
       - rag-network
     restart: unless-stopped
-
 volumes:
   qdrant-data:
   ollama-data:
   backend-uploads:
-  frontend-data:
-  frontend-cache:
   huggingface-cache:
   ollama-cache:
 
