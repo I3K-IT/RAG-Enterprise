@@ -260,16 +260,18 @@ async def upload_document(
         )
     
     try:
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        # Crea document_id con timestamp PRIMA
+        document_id = f"{datetime.now().timestamp()}_{file.filename}"
+        file_path = os.path.join(UPLOAD_DIR, document_id)
         content = await file.read()
         
-        # Salva file
+        # Salva file con il document_id (con timestamp)
         with open(file_path, "wb") as f:
             f.write(content)
         
         logger.info(f"📄 File ricevuto: '{file.filename}' ({len(content)} bytes)")
-        
-        document_id = f"{datetime.now().timestamp()}_{file.filename}"
+        logger.info(f"   Document ID: {document_id}")
+        logger.info(f"   File path: {file_path}")
         
         # Aggiungi background task
         background_tasks.add_task(
@@ -388,6 +390,52 @@ async def list_documents():
         )
     except Exception as e:
         logger.error(f"Errore lista documenti: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/download")
+async def download_document(document_id: str):
+    """Scarica il documento originale caricato"""
+    from fastapi.responses import FileResponse
+    import glob
+    
+    try:
+        # Cerca il file nella cartella upload
+        # Il document_id ha formato: timestamp_nomefile.ext
+        search_pattern = os.path.join(UPLOAD_DIR, f"{document_id}")
+        
+        # Verifica se il file esiste esattamente
+        if os.path.exists(search_pattern):
+            file_path = search_pattern
+        else:
+            # Altrimenti cerca con wildcard (nel caso il path sia leggermente diverso)
+            files = glob.glob(search_pattern)
+            if not files:
+                raise HTTPException(status_code=404, detail=f"Documento non trovato: {document_id}")
+            file_path = files[0]
+        
+        logger.info(f"📥 Download documento: {document_id}")
+        logger.info(f"   Path: {file_path}")
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File non trovato")
+        
+        # Estrai il nome del file originale (senza timestamp)
+        # Formato: 1762533561.231156_TU-81-08-Ed.-Gennaio-2025-1.pdf
+        filename = os.path.basename(file_path)
+        original_filename = filename.split('_', 1)[1] if '_' in filename else filename
+        
+        return FileResponse(
+            path=file_path,
+            media_type='application/octet-stream',
+            filename=original_filename
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Errore download: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 

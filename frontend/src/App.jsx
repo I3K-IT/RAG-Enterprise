@@ -278,17 +278,24 @@ function App() {
                       <div className="space-y-3">
                         {results.sources.map((source, idx) => (
                           <div key={idx} className="bg-slate-600 rounded p-4">
-                            <div className="flex justify-between items-start mb-2">
-                              <p className="text-white font-semibold truncate">
-                                {source.document_id}
-                              </p>
-                              <span className="bg-green-600 text-white px-3 py-1 rounded text-sm font-bold">
-                                {(source.similarity * 100).toFixed(1)}%
+                            <div className="flex justify-between items-center gap-2 mb-2">
+                              <a
+                                href={`http://localhost:8000/api/documents/${source.document_id}/download`}
+                                download
+                                className="text-blue-400 hover:text-blue-300 underline font-semibold truncate flex-1"
+                                title={source.filename || source.document_id}
+                              >
+                                {source.filename || source.document_id}
+                              </a>
+                              <span className="bg-green-600 text-white px-3 py-1 rounded text-sm font-bold whitespace-nowrap">
+                                {source.similarity_score ? (source.similarity_score * 100).toFixed(1) : 'N/A'}%
                               </span>
                             </div>
-                            <p className="text-slate-300 text-sm leading-relaxed">
-                              {source.text}
-                            </p>
+                            {source.text && (
+                              <p className="text-slate-300 text-sm leading-relaxed line-clamp-3">
+                                {source.text}
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>
