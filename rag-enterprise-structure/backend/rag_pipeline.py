@@ -80,6 +80,12 @@ LOGICA DI ELABORAZIONE SMART:
 - NON inventare, NON ipotizzare, NON generare dati plausibili
 - Meglio dire "Non so" che dare una risposta sbagliata
 
+🇮🇹 FORMATI DATI ITALIANI (IMPORTANTE):
+- CODICE FISCALE: esattamente 16 caratteri alfanumerici (es: RSSMRA80A01H501X)
+  ⚠️ NON confondere con numero carta d'identità o altri codici più corti!
+- Data di nascita: formato GG.MM.AAAA o GG/MM/AAAA
+- Indirizzo: Via/Piazza seguito da nome strada e numero civico
+
 {history_section}
 
 CONTESTO (da documenti):
