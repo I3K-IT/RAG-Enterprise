@@ -664,6 +664,53 @@ async def reindex_all(background_tasks: BackgroundTasks):
     return {"message": "Reindexing in corso..."}
 
 
+@app.delete("/api/admin/memory/{user_id}")
+async def clear_user_memory(user_id: str):
+    """Pulisce la memoria conversazionale di un utente specifico"""
+    if user_id in user_conversations:
+        num_exchanges = len(user_conversations[user_id])
+        del user_conversations[user_id]
+        logger.info(f"🧹 Memoria cancellata per user '{user_id}' ({num_exchanges} scambi rimossi)")
+        return {
+            "message": f"Memoria cancellata per user '{user_id}'",
+            "exchanges_removed": num_exchanges
+        }
+    else:
+        return {
+            "message": f"Nessuna memoria trovata per user '{user_id}'",
+            "exchanges_removed": 0
+        }
+
+
+@app.delete("/api/admin/memory")
+async def clear_all_memory():
+    """Pulisce TUTTA la memoria conversazionale di tutti gli utenti"""
+    total_users = len(user_conversations)
+    total_exchanges = sum(len(conv) for conv in user_conversations.values())
+    user_conversations.clear()
+    logger.info(f"🧹 Memoria globale cancellata: {total_users} utenti, {total_exchanges} scambi totali")
+    return {
+        "message": "Memoria globale cancellata",
+        "users_removed": total_users,
+        "exchanges_removed": total_exchanges
+    }
+
+
+@app.get("/api/admin/memory")
+async def get_memory_stats():
+    """Statistiche memoria conversazionale"""
+    stats = {
+        "total_users": len(user_conversations),
+        "users": {}
+    }
+    for user_id, history in user_conversations.items():
+        stats["users"][user_id] = {
+            "exchanges": len(history),
+            "last_questions": [msg["user"] for msg in history[-3:]]
+        }
+    return stats
+
+
 @app.get("/api/admin/stats")
 async def get_stats():
     """Statistiche del sistema"""
