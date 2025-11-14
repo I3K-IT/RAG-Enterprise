@@ -257,9 +257,29 @@ RISPOSTA:"""
                 logger.warning(f"⚠️  Possibili cause: threshold troppo alto ({self.relevance_threshold}) o documenti non rilevanti")
                 return "Non ho trovato documenti rilevanti per rispondere a questa domanda.", []
 
-            # ✅ Qdrant ha già filtrato per threshold, quindi retrieved_docs sono TUTTI rilevanti
-            relevant_docs = retrieved_docs
-            logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (già filtrati da Qdrant)")
+            # 🎯 Gap-based filtering intelligente per ridurre il "noise dilution"
+            if len(retrieved_docs) > 1:
+                first_score = retrieved_docs[0].get("similarity", 0)
+                second_score = retrieved_docs[1].get("similarity", 0)
+                gap = first_score - second_score
+
+                # Se c'è un documento CHIARAMENTE più rilevante (score alto + gap significativo)
+                # filtra via i documenti con score medio-basso per evitare confusione nell'LLM
+                if first_score >= 0.60 and gap > 0.15:
+                    logger.info(f"      🎯 Gap filtering attivato: top_score={first_score:.3f}, gap={gap:.3f}")
+                    relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.50]
+                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documenti (filtrati < 0.50)")
+
+                    # Safety check: mantieni almeno il primo documento
+                    if not relevant_docs:
+                        logger.warning("⚠️  Gap filtering ha rimosso TUTTI i documenti, mantengo il primo")
+                        relevant_docs = [retrieved_docs[0]]
+                else:
+                    relevant_docs = retrieved_docs
+                    logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (nessun gap significativo)")
+            else:
+                relevant_docs = retrieved_docs
+                logger.info(f"      ✅ {len(relevant_docs)} documento rilevante")
             
             # 3. Build context dalla ricerca
             logger.debug("  2/3 Creando contesto...")

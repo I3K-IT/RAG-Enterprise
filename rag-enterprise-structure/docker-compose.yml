@@ -45,7 +45,7 @@ services:
       QDRANT_PORT: 6333
       LLM_MODEL: neural-chat
       EMBEDDING_MODEL: BAAI/bge-m3
-      RELEVANCE_THRESHOLD: "0.30"
+      RELEVANCE_THRESHOLD: "0.35"
       CUDA_VISIBLE_DEVICES: 0
     volumes:
       - backend-uploads:/app/uploads
