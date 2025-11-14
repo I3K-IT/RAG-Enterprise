@@ -253,21 +253,13 @@ RISPOSTA:"""
                     logger.info(f"         {i}. {filename}: {similarity:.3f} ({similarity:.1%})")
             
             if not retrieved_docs:
-                logger.warning("⚠️  Qdrant non ha ritornato risultati!")
+                logger.warning("⚠️  Qdrant non ha ritornato risultati sopra threshold!")
+                logger.warning(f"⚠️  Possibili cause: threshold troppo alto ({self.relevance_threshold}) o documenti non rilevanti")
                 return "Non ho trovato documenti rilevanti per rispondere a questa domanda.", []
-            
-            # 2. Filtra per relevance threshold
-            logger.debug(f"     Filtrando per threshold {self.relevance_threshold}...")
-            relevant_docs = [
-                doc for doc in retrieved_docs
-                if doc.get("similarity", 0) >= self.relevance_threshold
-            ]
-            
-            logger.info(f"      ✅ {len(relevant_docs)}/{len(retrieved_docs)} documenti sopra threshold")
-            
-            if not relevant_docs:
-                logger.warning(f"⚠️  Nessun documento supera il threshold {self.relevance_threshold}")
-                return "Non ho trovato informazioni sufficientemente rilevanti per rispondere.", []
+
+            # ✅ Qdrant ha già filtrato per threshold, quindi retrieved_docs sono TUTTI rilevanti
+            relevant_docs = retrieved_docs
+            logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (già filtrati da Qdrant)")
             
             # 3. Build context dalla ricerca
             logger.debug("  2/3 Creando contesto...")
