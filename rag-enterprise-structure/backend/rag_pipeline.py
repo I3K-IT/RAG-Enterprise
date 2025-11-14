@@ -92,16 +92,22 @@ RISPOSTA:"""
     
     
     def _format_history(self, history: List[Dict] = None) -> str:
-        """Formatta la cronologia conversazionale"""
+        """
+        Formatta la cronologia conversazionale - SOLO DOMANDE
+
+        Fix anti-hallucination: Include solo le domande dell'utente,
+        NON le risposte dell'assistant (che potrebbero essere sbagliate
+        e creare loop di allucinazione)
+        """
         if not history or len(history) == 0:
             return ""
-        
-        history_text = "CRONOLOGIA CONVERSAZIONE PRECEDENTE:\n"
-        for i, msg in enumerate(history[-5:], 1):  # Ultimi 5 scambi
+
+        history_text = "DOMANDE PRECEDENTI DELL'UTENTE (per contesto):\n"
+        for i, msg in enumerate(history[-3:], 1):  # Ultimi 3 scambi (ridotto da 5)
             user_msg = msg.get("user", "")
-            assistant_msg = msg.get("assistant", "")
-            history_text += f"{i}. User: {user_msg}\n   Assistant: {assistant_msg}\n"
-        
+            if user_msg:  # Solo se c'è effettivamente una domanda
+                history_text += f"{i}. {user_msg}\n"
+
         return history_text + "\n"
     
     
