@@ -74,6 +74,12 @@ LOGICA DI ELABORAZIONE SMART:
 7. Non ripetere inutilmente informazioni già date
 8. Sii conciso e diritto al punto
 
+⚠️ REGOLA CRITICA ANTI-HALLUCINATION:
+- Rispondi SOLO con informazioni presenti nel CONTESTO sottostante
+- Se un dato (nome, codice fiscale, indirizzo, data) NON è nel contesto → di' "Non ho questa informazione nei documenti"
+- NON inventare, NON ipotizzare, NON generare dati plausibili
+- Meglio dire "Non so" che dare una risposta sbagliata
+
 {history_section}
 
 CONTESTO (da documenti):
@@ -226,10 +232,19 @@ RISPOSTA:"""
             
             retrieved_docs = self.qdrant_connector.search(
                 query_vector=query_embedding,
-                top_k=top_k
+                top_k=top_k,
+                score_threshold=self.relevance_threshold  # ✅ FIX: Filtra a monte in Qdrant
             )
-            
-            logger.info(f"      ✅ Recuperati {len(retrieved_docs)} documenti raw")
+
+            logger.info(f"      ✅ Recuperati {len(retrieved_docs)} documenti (già filtrati da Qdrant con threshold={self.relevance_threshold})")
+
+            # Log dettagliato dei documenti recuperati
+            if retrieved_docs:
+                logger.info("      📊 Similarity scores:")
+                for i, doc in enumerate(retrieved_docs, 1):
+                    filename = doc["metadata"].get("filename", "unknown")
+                    similarity = doc.get("similarity", 0)
+                    logger.info(f"         {i}. {filename}: {similarity:.3f} ({similarity:.1%})")
             
             if not retrieved_docs:
                 logger.warning("⚠️  Qdrant non ha ritornato risultati!")
