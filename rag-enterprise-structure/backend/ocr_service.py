@@ -1,5 +1,5 @@
 """
-OCR Service - Tika
+OCR Service - Tika + Tesseract Fallback
 """
 import logging
 import subprocess
@@ -52,7 +52,7 @@ class OCRService:
                          capture_output=True, timeout=5)
             print(f"Kill 9998 result: {result2.returncode}")
         
-            time.sleep(2)  # Aumenta da 1 a 2 secondi
+            time.sleep(2)
         except Exception as e:
             print(f"Kill error: {e}")
     
@@ -127,11 +127,18 @@ class OCRService:
                     
                     if response.status_code == 200:
                         text = self._extract_text_from_tika_xml(response.text)
-                        if text and len(text.strip()) > 0:
+                        if text and len(text.strip()) > 100:
                             logger.info(f"✅ {len(text)} chars (Tika)")
                             return text
                 except Exception as e:
                     logger.error(f"Tika request error: {type(e).__name__}: {str(e)}")
+            
+            # 🔧 FALLBACK A TESSERACT se Tika non ha estratto abbastanza
+            logger.warning("⚠️  Tika extraction insufficient, trying Tesseract...")
+            tesseract_text = self._extract_with_tesseract(file_path)
+            if tesseract_text and len(tesseract_text.strip()) > 0:
+                logger.info(f"✅ {len(tesseract_text)} chars (Tesseract fallback)")
+                return tesseract_text
             
             logger.warning("⚠️  No extraction worked")
             return ""
@@ -174,4 +181,31 @@ class OCRService:
             
         except Exception as e:
             logger.error(f"XML error: {type(e).__name__}: {str(e)}")
+            return ""
+    
+    def _extract_with_tesseract(self, file_path: str) -> str:
+        """Fallback: estrae testo usando Tesseract direttamente"""
+        try:
+            import pytesseract
+            from pdf2image import convert_from_path
+            
+            logger.info(f"🔍 Tesseract: convertendo PDF a immagini...")
+            images = convert_from_path(file_path)
+            logger.info(f"📄 {len(images)} pagine convertite")
+            
+            text = ""
+            for i, img in enumerate(images):
+                logger.info(f"  OCR pagina {i+1}/{len(images)}...")
+                page_text = pytesseract.image_to_string(img, lang='ita+eng')
+                text += page_text + "\n"
+            
+            logger.info(f"✅ Tesseract estratto {len(text)} chars")
+            logger.info(f"📋 TESTO TESSERACT:\n{text[:1000]}")
+            return text
+            
+        except ImportError as e:
+            logger.error(f"❌ Modulo mancante: {e}")
+            return ""
+        except Exception as e:
+            logger.error(f"❌ Tesseract failed: {type(e).__name__}: {str(e)}")
             return ""

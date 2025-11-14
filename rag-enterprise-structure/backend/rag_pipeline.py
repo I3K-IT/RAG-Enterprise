@@ -28,7 +28,7 @@ class RAGPipeline:
         qdrant_connector,
         embeddings_service,
         llm_model: str = "mistral",
-        chunk_size: int = 500,
+        chunk_size: int = 1000,
         chunk_overlap: int = 100,
         relevance_threshold: float = 0.5  # Filtro relevance
     ):
@@ -61,12 +61,22 @@ class RAGPipeline:
     
     
     def _get_prompt_template(self) -> str:
-        """Template per le risposte RAG"""
-        return """Sei un assistente AI esperto e affidabile. Usa il contesto sottostante per rispondere alla domanda.
-Se il contesto non contiene informazioni sufficienti, dillo chiaramente.
-Sii conciso e preciso. Cita il contesto quando appropriato.
+        """Template intelligente con controllo smart della memoria"""
+        return """Sei un assistente AI con memoria conversazionale smart e intelligente.
 
-CONTESTO:
+LOGICA DI ELABORAZIONE SMART:
+1. Leggi la domanda attuale con attenzione
+2. Se contiene TUTTI i dati necessari (nomi, soggetti, riferimenti, date) → USALI DIRETTAMENTE senza consultare memoria
+3. Se mancano dati (nome del soggetto, periodo temporale, etc.) → ALLORA controlla la cronologia per integrarli
+4. Se trovi i dati mancanti in cronologia → usali in modo trasparente senza sottolineare che vengono da ricerca precedente
+5. Se i dati non si trovano in nessun luogo (query + memoria + contesto) → ALLORA chiedi chiaramente cosa serve
+6. Sii SEMPRE preciso nei calcoli matematici e temporali (anno attuale: 2025)
+7. Non ripetere inutilmente informazioni già date
+8. Sii conciso e diritto al punto
+
+{history_section}
+
+CONTESTO (da documenti):
 {context}
 
 DOMANDA:
@@ -75,10 +85,24 @@ DOMANDA:
 RISPOSTA:"""
     
     
+    def _format_history(self, history: List[Dict] = None) -> str:
+        """Formatta la cronologia conversazionale"""
+        if not history or len(history) == 0:
+            return ""
+        
+        history_text = "CRONOLOGIA CONVERSAZIONE PRECEDENTE:\n"
+        for i, msg in enumerate(history[-5:], 1):  # Ultimi 5 scambi
+            user_msg = msg.get("user", "")
+            assistant_msg = msg.get("assistant", "")
+            history_text += f"{i}. User: {user_msg}\n   Assistant: {assistant_msg}\n"
+        
+        return history_text + "\n"
+    
+    
     def chunk_text(
         self,
         text: str,
-        chunk_size: int = 500,
+        chunk_size: int = 1000,
         overlap: int = 100
     ) -> List[str]:
         """
@@ -105,8 +129,13 @@ RISPOSTA:"""
         self,
         chunks: List[str],
         document_id: str,
-        filename: str
+        filename: str,
+        document_type: str = "GENERIC_DOCUMENT",
+        structured_fields: dict = None
     ):
+        if structured_fields is None:
+            structured_fields = {}
+            
         """
         Indicizza chunks su Qdrant
         1. Genera embeddings per ogni chunk
@@ -142,6 +171,8 @@ RISPOSTA:"""
                     "chunk_index": i,
                     "text": chunk,
                     "chunk_size": len(chunk),
+                    "document_type": document_type,
+                    "structured_fields": str(structured_fields),
                 }
                 for i, chunk in enumerate(chunks)
             ]
@@ -165,7 +196,8 @@ RISPOSTA:"""
         self,
         query: str,
         top_k: int = 5,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        history: List[Dict] = None
     ) -> Tuple[str, List[Dict]]:
         """
         Esegue query RAG completa
@@ -233,7 +265,12 @@ RISPOSTA:"""
             
             # 4. LLM Generation
             logger.debug("  3/3 LLM Generation...")
+            
+            # Formatta la storia conversazionale
+            history_section = self._format_history(history)
+            
             prompt = self.qa_prompt.format(
+                history_section=history_section,
                 context=context,
                 question=query
             )
@@ -260,6 +297,7 @@ RISPOSTA:"""
                         "document_id": doc_id,
                         "similarity_score": round(similarity, 3),
                         "chunk_index": doc["metadata"].get("chunk_index", 0),
+                        "text": doc["metadata"].get("text", "")
                     }
             
             sources = list(sources_dict.values())
