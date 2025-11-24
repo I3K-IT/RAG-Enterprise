@@ -78,7 +78,13 @@ LOGICA DI ELABORAZIONE SMART:
 - Rispondi SOLO con informazioni presenti nel CONTESTO sottostante
 - Se un dato (nome, codice fiscale, indirizzo, data) NON è nel contesto → di' "Non ho questa informazione nei documenti"
 - NON inventare, NON ipotizzare, NON generare dati plausibili
-- Meglio dire "Non so" che dare una risposta sbagliata
+- Meglio dire "Non so" che dare una risposta sbagliato
+
+🎯 GESTIONE CONFLITTI TRA DOCUMENTI:
+- I documenti sono ordinati per RILEVANZA (la percentuale indica quanto sono pertinenti alla domanda)
+- Se trovi informazioni DIVERSE in documenti DIVERSI → dai PRIORITÀ al documento con rilevanza PIÙ ALTA
+- Esempio: Se doc al 65% dice "codice X" e doc al 45% dice "codice Y" → usa il codice X (più rilevante)
+- Verifica che il nome della persona nella domanda CORRISPONDA al nome nel documento prima di estrarre dati
 
 🇮🇹 FORMATI DATI ITALIANI (IMPORTANTE):
 - CODICE FISCALE: esattamente 16 caratteri alfanumerici (es: RSSMRA80A01H501X)
@@ -271,7 +277,8 @@ RISPOSTA:"""
 
                 # Se c'è un documento CHIARAMENTE più rilevante (score alto + gap significativo)
                 # filtra via i documenti con score medio-basso per evitare confusione nell'LLM
-                if first_score >= 0.60 and gap > 0.15:
+                # Gap threshold abbassato da 0.15 a 0.12 per essere più aggressivo
+                if first_score >= 0.60 and gap > 0.12:
                     logger.info(f"      🎯 Gap filtering attivato: top_score={first_score:.3f}, gap={gap:.3f}")
                     relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.50]
                     logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documenti (filtrati < 0.50)")
@@ -282,7 +289,7 @@ RISPOSTA:"""
                         relevant_docs = [retrieved_docs[0]]
                 else:
                     relevant_docs = retrieved_docs
-                    logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (nessun gap significativo)")
+                    logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (gap={gap:.3f}, sotto soglia 0.12)")
             else:
                 relevant_docs = retrieved_docs
                 logger.info(f"      ✅ {len(relevant_docs)} documento rilevante")
