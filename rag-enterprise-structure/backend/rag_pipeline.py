@@ -257,11 +257,11 @@ RISPOSTA (usa SOLO info dal contesto):"""
 
                 # Se c'è un documento CHIARAMENTE più rilevante (score alto + gap significativo)
                 # filtra via i documenti con score medio-basso per evitare confusione nell'LLM
-                # Gap threshold abbassato da 0.15 a 0.12 per essere più aggressivo
-                if first_score >= 0.60 and gap > 0.12:
+                # Soglie abbassate per essere più aggressivi: 0.60→0.50, 0.12→0.08
+                if first_score >= 0.50 and gap > 0.08:
                     logger.info(f"      🎯 Gap filtering attivato: top_score={first_score:.3f}, gap={gap:.3f}")
-                    relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.50]
-                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documenti (filtrati < 0.50)")
+                    relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.45]
+                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documenti (filtrati < 0.45)")
 
                     # Safety check: mantieni almeno il primo documento
                     if not relevant_docs:
@@ -269,7 +269,7 @@ RISPOSTA (usa SOLO info dal contesto):"""
                         relevant_docs = [retrieved_docs[0]]
                 else:
                     relevant_docs = retrieved_docs
-                    logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (gap={gap:.3f}, sotto soglia 0.12)")
+                    logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (gap={gap:.3f}, sotto soglia 0.08)")
             else:
                 relevant_docs = retrieved_docs
                 logger.info(f"      ✅ {len(relevant_docs)} documento rilevante")
