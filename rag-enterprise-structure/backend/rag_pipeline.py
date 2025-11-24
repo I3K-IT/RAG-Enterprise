@@ -45,11 +45,11 @@ class RAGPipeline:
         )
         
         # LLM (via Ollama)
-        # Temperature abbassata a 0.1 per ridurre allucinazioni su dati fattuali
+        # Temperature 0.0 = completamente deterministico per garantire risposte consistenti
         self.llm = Ollama(
             model="neural-chat:7b",
             base_url="http://ollama:11434",
-            temperature=0.1
+            temperature=0.0
         )
         
         # Prompt template
