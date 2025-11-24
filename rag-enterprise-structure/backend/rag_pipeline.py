@@ -45,10 +45,11 @@ class RAGPipeline:
         )
         
         # LLM (via Ollama)
+        # Temperature abbassata a 0.1 per ridurre allucinazioni su dati fattuali
         self.llm = Ollama(
             model="neural-chat:7b",
             base_url="http://ollama:11434",
-            temperature=0.7
+            temperature=0.1
         )
         
         # Prompt template
@@ -61,46 +62,25 @@ class RAGPipeline:
     
     
     def _get_prompt_template(self) -> str:
-        """Template intelligente con controllo smart della memoria"""
-        return """Sei un assistente AI con memoria conversazionale smart e intelligente.
+        """Template semplificato per ridurre allucinazioni"""
+        return """Sei un assistente che risponde SOLO usando le informazioni presenti nei documenti forniti.
 
-LOGICA DI ELABORAZIONE SMART:
-1. Leggi la domanda attuale con attenzione
-2. Se contiene TUTTI i dati necessari (nomi, soggetti, riferimenti, date) → USALI DIRETTAMENTE senza consultare memoria
-3. Se mancano dati (nome del soggetto, periodo temporale, etc.) → ALLORA controlla la cronologia per integrarli
-4. Se trovi i dati mancanti in cronologia → usali in modo trasparente senza sottolineare che vengono da ricerca precedente
-5. Se i dati non si trovano in nessun luogo (query + memoria + contesto) → ALLORA chiedi chiaramente cosa serve
-6. Sii SEMPRE preciso nei calcoli matematici e temporali (anno attuale: 2025)
-7. Non ripetere inutilmente informazioni già date
-8. Sii conciso e diritto al punto
-
-⚠️ REGOLA CRITICA ANTI-HALLUCINATION:
-- Rispondi SOLO con informazioni presenti nel CONTESTO sottostante
-- Se un dato (nome, codice fiscale, indirizzo, data) NON è nel contesto → di' "Non ho questa informazione nei documenti"
-- NON inventare, NON ipotizzare, NON generare dati plausibili
-- Meglio dire "Non so" che dare una risposta sbagliato
-
-🎯 GESTIONE CONFLITTI TRA DOCUMENTI:
-- I documenti sono ordinati per RILEVANZA (la percentuale indica quanto sono pertinenti alla domanda)
-- Se trovi informazioni DIVERSE in documenti DIVERSI → dai PRIORITÀ al documento con rilevanza PIÙ ALTA
-- Esempio: Se doc al 65% dice "codice X" e doc al 45% dice "codice Y" → usa il codice X (più rilevante)
-- Verifica che il nome della persona nella domanda CORRISPONDA al nome nel documento prima di estrarre dati
-
-🇮🇹 FORMATI DATI ITALIANI (IMPORTANTE):
-- CODICE FISCALE: esattamente 16 caratteri alfanumerici (es: RSSMRA80A01H501X)
-  ⚠️ NON confondere con numero carta d'identità o altri codici più corti!
-- Data di nascita: formato GG.MM.AAAA o GG/MM/AAAA
-- Indirizzo: Via/Piazza seguito da nome strada e numero civico
+REGOLE CRITICHE:
+1. Usa SOLO informazioni presenti nel CONTESTO sottostante
+2. Se l'informazione NON è nel contesto → rispondi "Non ho questa informazione nei documenti"
+3. NON inventare, NON ipotizzare, NON generare dati
+4. Se ci sono più documenti, usa quello con rilevanza più alta
+5. Il CODICE FISCALE italiano ha esattamente 16 caratteri (es: MRCFNC69E20E329H)
+6. Verifica che il nome nel documento corrisponda al nome nella domanda
 
 {history_section}
 
-CONTESTO (da documenti):
+CONTESTO:
 {context}
 
-DOMANDA:
-{question}
+DOMANDA: {question}
 
-RISPOSTA:"""
+RISPOSTA (usa SOLO info dal contesto):"""
     
     
     def _format_history(self, history: List[Dict] = None) -> str:

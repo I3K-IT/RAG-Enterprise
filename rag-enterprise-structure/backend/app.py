@@ -248,7 +248,7 @@ async def shutdown_event():
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
-    temperature: float = 0.7
+    temperature: float = 0.1  # Abbassato da 0.7 a 0.1 per ridurre allucinazioni su dati fattuali
 
 
 class SourceInfo(BaseModel):
