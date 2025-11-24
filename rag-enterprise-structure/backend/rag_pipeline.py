@@ -47,7 +47,7 @@ class RAGPipeline:
         # LLM (via Ollama)
         # Temperature 0.0 = completamente deterministico per garantire risposte consistenti
         self.llm = Ollama(
-            model="neural-chat:7b",
+            model=self.llm_model,  # Usa il modello passato dal docker-compose.yml
             base_url="http://ollama:11434",
             temperature=0.0
         )

@@ -46,9 +46,9 @@ declare -A PROFILES_RAM=(
 )
 
 declare -A PROFILES_GPU=(
-    [minimal]="12-16GB"
-    [standard]="24GB"
-    [advanced]="48GB+"
+    [minimal]="8-12GB"
+    [standard]="12-16GB"
+    [advanced]="16-24GB"
 )
 
 declare -A PROFILES_EMBEDDING=(
@@ -58,9 +58,9 @@ declare -A PROFILES_EMBEDDING=(
 )
 
 declare -A PROFILES_LLM=(
-    [minimal]="mistral"
-    [standard]="neural-chat"
-    [advanced]="llama2"
+    [minimal]="mistral:7b-instruct"
+    [standard]="qwen2.5:7b"
+    [advanced]="qwen2.5:14b"
 )
 
 declare -A PROFILES_SPACE=(
@@ -355,16 +355,26 @@ step_6b_configure_compose() {
             ;;
     esac
     
-    # Map LLM names to actual model names
+    # Map LLM names to actual model names (già nel formato corretto)
     case $LLM in
+        "mistral:7b-instruct")
+            LLM="mistral:7b-instruct-q4_K_M"
+            ;;
+        "qwen2.5:7b")
+            LLM="qwen2.5:7b"
+            ;;
+        "qwen2.5:14b")
+            LLM="qwen2.5:14b"
+            ;;
+        # Legacy support
         "neural-chat")
-            LLM="neural-chat"
+            LLM="neural-chat:7b"
             ;;
         "mistral")
-            LLM="mistral"
+            LLM="mistral:7b-instruct"
             ;;
         "llama2")
-            LLM="llama2"
+            LLM="llama3.1:8b"
             ;;
     esac
     
@@ -453,14 +463,24 @@ step_10_final_setup() {
     
 	# Map model names to Ollama pull names
     case $LLM_MODEL in
+        "mistral:7b-instruct")
+            OLLAMA_MODEL="mistral:7b-instruct-q4_K_M"
+            ;;
+        "qwen2.5:7b")
+            OLLAMA_MODEL="qwen2.5:7b"
+            ;;
+        "qwen2.5:14b")
+            OLLAMA_MODEL="qwen2.5:14b"
+            ;;
+        # Legacy support
         "neural-chat")
             OLLAMA_MODEL="neural-chat:7b"
             ;;
         "mistral")
-            OLLAMA_MODEL="mistral"
+            OLLAMA_MODEL="mistral:7b-instruct"
             ;;
         "llama2")
-            OLLAMA_MODEL="llama2:70b"
+            OLLAMA_MODEL="llama3.1:8b"
             ;;
         *)
             OLLAMA_MODEL=$LLM_MODEL

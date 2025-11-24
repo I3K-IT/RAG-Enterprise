@@ -43,7 +43,7 @@ services:
     environment:
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
-      LLM_MODEL: neural-chat
+      LLM_MODEL: qwen2.5:7b
       EMBEDDING_MODEL: BAAI/bge-m3
       RELEVANCE_THRESHOLD: "0.35"
       CUDA_VISIBLE_DEVICES: 0
