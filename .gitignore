@@ -1,0 +1,35 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+rag-enterprise-structure/documenti_caricati.json
+rag-enterprise-structure/backend/documenti_caricati.json
+
+# Logs
+*.log
+
+# Docker volumes data (if any)
+data/
+volumes/
+
+# Environment variables
+.env.local
+.env.*.local
