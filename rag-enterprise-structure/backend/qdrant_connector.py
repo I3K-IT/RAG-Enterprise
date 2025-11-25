@@ -237,29 +237,38 @@ class QdrantConnector:
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
-            
+
             # Scroll per ottenere tutti i punti
             points, _ = self.client.scroll(
                 collection_name=self.COLLECTION_NAME,
                 limit=1000
             )
-            
+
+            logger.info(f"📊 Retrieved {len(points)} points from Qdrant")
+
             # Deduplicaci per document_id e conta chunks
             docs = {}
             for point in points:
                 doc_id = point.payload.get("document_id")
+                filename = point.payload.get("filename", "unknown")
+
                 if doc_id not in docs:
                     docs[doc_id] = {
                         "document_id": doc_id,
-                        "filename": point.payload.get("filename", "unknown"),
+                        "filename": filename,
                         "upload_date": point.payload.get("upload_date", ""),
-                        "num_chunks": 0,  # Pydantic si aspetta num_chunks, non chunks_count
-                        "status": "indexed"  # Campo richiesto da DocumentMetadata
+                        "num_chunks": 0,
+                        "status": "indexed"
                     }
                 # Incrementa conteggio chunks per questo documento
                 docs[doc_id]["num_chunks"] += 1
 
-            return list(docs.values())
+            result = list(docs.values())
+            logger.info(f"📋 Returning {len(result)} unique documents:")
+            for doc in result:
+                logger.info(f"   - {doc['filename']}: {doc['num_chunks']} chunks (ID: {doc['document_id'][:30]}...)")
+
+            return result
             
         except Exception as e:
             logger.error(f"✗ Error getting documents: {str(e)}")
