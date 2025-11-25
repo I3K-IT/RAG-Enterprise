@@ -251,12 +251,13 @@ class QdrantConnector:
                 if doc_id not in docs:
                     docs[doc_id] = {
                         "document_id": doc_id,
-                        "filename": point.payload.get("filename"),
+                        "filename": point.payload.get("filename", "unknown"),
                         "upload_date": point.payload.get("upload_date", ""),
-                        "chunks_count": 0
+                        "num_chunks": 0,  # Pydantic si aspetta num_chunks, non chunks_count
+                        "status": "indexed"  # Campo richiesto da DocumentMetadata
                     }
                 # Incrementa conteggio chunks per questo documento
-                docs[doc_id]["chunks_count"] += 1
+                docs[doc_id]["num_chunks"] += 1
 
             return list(docs.values())
             

@@ -631,7 +631,7 @@ function App() {
                             {doc.filename}
                           </p>
                           <p className="text-slate-400 text-xs mt-1">
-                            {doc.chunks_count || 0} chunks
+                            {doc.num_chunks || 0} chunks
                           </p>
                         </div>
 
