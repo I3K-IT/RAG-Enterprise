@@ -34,5 +34,6 @@ volumes/
 .env.local
 .env.*.local
 
-# Local utility scripts
+# Local utility scripts and configuration
 auto-commit.sh
+CLAUDE.md
