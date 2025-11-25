@@ -118,11 +118,18 @@ class OCRService:
                     response = requests.put(
                         f"{self.TIKA_URL}/tika",
                         data=file_data,
-                        headers={'Content-Type': mime_type},
+                        headers={
+                            'Content-Type': mime_type,
+                            'Accept-Charset': 'utf-8'  # Forza UTF-8 nella risposta
+                        },
                         timeout=600
                     )
-                    
+
+                    # Forza encoding UTF-8 sulla risposta
+                    response.encoding = 'utf-8'
+
                     logger.info(f"Tika response status: {response.status_code}")
+                    logger.info(f"Tika response encoding: {response.encoding}")
                     logger.info(f"Tika response length: {len(response.text)} chars")
                     
                     if response.status_code == 200:
