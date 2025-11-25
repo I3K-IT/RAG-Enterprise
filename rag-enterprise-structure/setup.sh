@@ -58,9 +58,9 @@ declare -A PROFILES_EMBEDDING=(
 )
 
 declare -A PROFILES_LLM=(
-    [minimal]="mistral:7b-instruct"
-    [standard]="qwen2.5:7b"
-    [advanced]="qwen2.5:14b"
+    [minimal]="mistral:7b-instruct-q4_K_M"
+    [standard]="qwen2.5:14b-instruct-q4_K_M"
+    [advanced]="qwen2.5:32b-instruct-q4_K_M"
 )
 
 declare -A PROFILES_SPACE=(
@@ -355,23 +355,29 @@ step_6b_configure_compose() {
             ;;
     esac
     
-    # Map LLM names to actual model names (già nel formato corretto)
+    # Map LLM names to actual model names (già nel formato corretto per quantizzati)
     case $LLM in
-        "mistral:7b-instruct")
+        "mistral:7b-instruct-q4_K_M")
             LLM="mistral:7b-instruct-q4_K_M"
             ;;
+        "qwen2.5:14b-instruct-q4_K_M")
+            LLM="qwen2.5:14b-instruct-q4_K_M"
+            ;;
+        "qwen2.5:32b-instruct-q4_K_M")
+            LLM="qwen2.5:32b-instruct-q4_K_M"
+            ;;
+        # Legacy support
         "qwen2.5:7b")
             LLM="qwen2.5:7b"
             ;;
         "qwen2.5:14b")
-            LLM="qwen2.5:14b"
+            LLM="qwen2.5:14b-instruct-q4_K_M"
             ;;
-        # Legacy support
         "neural-chat")
             LLM="neural-chat:7b"
             ;;
         "mistral")
-            LLM="mistral:7b-instruct"
+            LLM="mistral:7b-instruct-q4_K_M"
             ;;
         "llama2")
             LLM="llama3.1:8b"
@@ -461,23 +467,29 @@ step_10_final_setup() {
     
     LLM_MODEL=${PROFILES_LLM[$PROFILE]}
     
-	# Map model names to Ollama pull names
+	# Map model names to Ollama pull names (supporta quantizzati)
     case $LLM_MODEL in
-        "mistral:7b-instruct")
+        "mistral:7b-instruct-q4_K_M")
             OLLAMA_MODEL="mistral:7b-instruct-q4_K_M"
             ;;
+        "qwen2.5:14b-instruct-q4_K_M")
+            OLLAMA_MODEL="qwen2.5:14b-instruct-q4_K_M"
+            ;;
+        "qwen2.5:32b-instruct-q4_K_M")
+            OLLAMA_MODEL="qwen2.5:32b-instruct-q4_K_M"
+            ;;
+        # Legacy support
         "qwen2.5:7b")
             OLLAMA_MODEL="qwen2.5:7b"
             ;;
         "qwen2.5:14b")
-            OLLAMA_MODEL="qwen2.5:14b"
+            OLLAMA_MODEL="qwen2.5:14b-instruct-q4_K_M"
             ;;
-        # Legacy support
         "neural-chat")
             OLLAMA_MODEL="neural-chat:7b"
             ;;
         "mistral")
-            OLLAMA_MODEL="mistral:7b-instruct"
+            OLLAMA_MODEL="mistral:7b-instruct-q4_K_M"
             ;;
         "llama2")
             OLLAMA_MODEL="llama3.1:8b"
