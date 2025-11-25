@@ -30,6 +30,7 @@ function App() {
   const [loadingDocuments, setLoadingDocuments] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploading, setUploading] = useState(false)
+  const [uploadPhase, setUploadPhase] = useState('') // Fase corrente dell'upload
 
   // UI state
   const [showConversationsSidebar, setShowConversationsSidebar] = useState(true)
@@ -198,6 +199,7 @@ function App() {
 
     setUploading(true)
     setUploadProgress(0)
+    setUploadPhase('📤 Upload in corso...')
 
     const formData = new FormData()
     formData.append('file', file)
@@ -209,15 +211,25 @@ function App() {
             (progressEvent.loaded * 100) / progressEvent.total
           )
           setUploadProgress(percent)
+
+          if (percent === 100) {
+            setUploadPhase('🔄 Elaborazione in corso (OCR, chunking, embedding)...')
+          }
         }
       }
 
       const response = await axios.post('http://localhost:8000/api/documents/upload', formData, config)
 
-      alert(`✅ File caricato: ${response.data.filename}\n${response.data.chunks_count} chunks generati`)
+      // Backend ritorna 202 (Accepted) con elaborazione in background
+      setUploadPhase('✅ File ricevuto! Elaborazione completata in background')
 
-      // Refresh documents list
-      fetchDocuments()
+      // Aspetta 2 secondi per dare tempo al backend di processare
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // Refresh documents list per vedere i chunks
+      await fetchDocuments()
+
+      alert(`✅ File caricato: ${response.data.filename}\n\nElaborazione completata. Controlla la lista documenti per i dettagli.`)
 
     } catch (error) {
       console.error('Upload error:', error)
@@ -225,6 +237,7 @@ function App() {
     } finally {
       setUploading(false)
       setUploadProgress(0)
+      setUploadPhase('')
       e.target.value = ''
     }
   }
@@ -530,12 +543,22 @@ function App() {
                 {uploading ? `⏳ ${uploadProgress}%` : '+ Carica File'}
               </button>
 
-              {uploadProgress > 0 && uploading && (
-                <div className="mt-2 bg-slate-700 rounded-full h-2">
-                  <div
-                    className="bg-green-500 h-2 rounded-full transition-all"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
+              {uploading && (
+                <div className="mt-3 space-y-2">
+                  {/* Progress bar */}
+                  <div className="bg-slate-700 rounded-full h-2">
+                    <div
+                      className="bg-green-500 h-2 rounded-full transition-all"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+
+                  {/* Fase corrente */}
+                  {uploadPhase && (
+                    <p className="text-sm text-slate-300 text-center animate-pulse">
+                      {uploadPhase}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

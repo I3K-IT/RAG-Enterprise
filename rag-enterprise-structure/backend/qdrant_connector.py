@@ -244,7 +244,7 @@ class QdrantConnector:
                 limit=1000
             )
             
-            # Deduplicaci per document_id
+            # Deduplicaci per document_id e conta chunks
             docs = {}
             for point in points:
                 doc_id = point.payload.get("document_id")
@@ -252,9 +252,12 @@ class QdrantConnector:
                     docs[doc_id] = {
                         "document_id": doc_id,
                         "filename": point.payload.get("filename"),
-                        "upload_date": point.payload.get("upload_date", "")
+                        "upload_date": point.payload.get("upload_date", ""),
+                        "chunks_count": 0
                     }
-            
+                # Incrementa conteggio chunks per questo documento
+                docs[doc_id]["chunks_count"] += 1
+
             return list(docs.values())
             
         except Exception as e:
