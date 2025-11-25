@@ -1,6 +1,8 @@
 #!/bin/bash
 
-cd ~/ai/rag-enterprise-complete/
+# Usa la directory dove si trova lo script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR"
 
 # Controlla se ci sono modifiche
 if [ -z "$(git status --porcelain)" ]; then
