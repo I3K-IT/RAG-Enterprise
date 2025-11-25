@@ -233,29 +233,57 @@ class QdrantConnector:
     
     
     def get_indexed_documents(self) -> List[Dict]:
-        """Ottieni lista documenti indicizzati"""
+        """Ottieni lista documenti indicizzati - con pagination completa"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
-            
-            # Scroll per ottenere tutti i punti
-            points, _ = self.client.scroll(
-                collection_name=self.COLLECTION_NAME,
-                limit=1000
-            )
-            
-            # Deduplicaci per document_id
+
+            # Scroll con pagination per ottenere TUTTI i punti
+            all_points = []
+            offset = None
+            batch_size = 1000
+
+            while True:
+                points, next_offset = self.client.scroll(
+                    collection_name=self.COLLECTION_NAME,
+                    limit=batch_size,
+                    offset=offset
+                )
+
+                all_points.extend(points)
+                logger.info(f"📊 Fetched batch: {len(points)} points (total so far: {len(all_points)})")
+
+                # Se non c'è next_offset o è None, abbiamo finito
+                if next_offset is None:
+                    break
+
+                offset = next_offset
+
+            logger.info(f"✅ Retrieved {len(all_points)} total points from Qdrant")
+
+            # Deduplicaci per document_id e conta chunks
             docs = {}
-            for point in points:
+            for point in all_points:
                 doc_id = point.payload.get("document_id")
+                filename = point.payload.get("filename", "unknown")
+
                 if doc_id not in docs:
                     docs[doc_id] = {
                         "document_id": doc_id,
-                        "filename": point.payload.get("filename"),
-                        "upload_date": point.payload.get("upload_date", "")
+                        "filename": filename,
+                        "upload_date": point.payload.get("upload_date", ""),
+                        "num_chunks": 0,
+                        "status": "indexed"
                     }
-            
-            return list(docs.values())
+                # Incrementa conteggio chunks per questo documento
+                docs[doc_id]["num_chunks"] += 1
+
+            result = list(docs.values())
+            logger.info(f"📋 Returning {len(result)} unique documents:")
+            for doc in result:
+                logger.info(f"   - {doc['filename']}: {doc['num_chunks']} chunks (ID: {doc['document_id'][:30]}...)")
+
+            return result
             
         except Exception as e:
             logger.error(f"✗ Error getting documents: {str(e)}")

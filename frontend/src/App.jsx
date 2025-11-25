@@ -1,24 +1,157 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import './App.css'
 
+// Configurazione logo e branding (personalizzabile per ogni cliente)
+const BRANDING = {
+  clientLogo: null, // URL del logo cliente, null = usa nome testuale
+  clientName: 'RAG Enterprise',
+  primaryColor: '#3b82f6', // blue-500
+  poweredBy: 'I3K Technologies',
+  version: 'v1.0'
+}
+
 function App() {
+  // Backend status
   const [status, setStatus] = useState('checking')
   const [backendHealth, setBackendHealth] = useState(null)
-  const [uploadProgress, setUploadProgress] = useState(0)
-  const [uploading, setUploading] = useState(false)
+
+  // Conversazioni
+  const [conversations, setConversations] = useState([])
+  const [currentConversationId, setCurrentConversationId] = useState(null)
+  const [messages, setMessages] = useState([])
+
+  // Input query
   const [query, setQuery] = useState('')
   const [querying, setQuerying] = useState(false)
-  const [results, setResults] = useState(null)
-  const [documents, setDocuments] = useState([])
 
-  // Check backend health on mount
+  // Documenti
+  const [documents, setDocuments] = useState([])
+  const [loadingDocuments, setLoadingDocuments] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploading, setUploading] = useState(false)
+  const [uploadPhase, setUploadPhase] = useState('') // Fase corrente dell'upload
+
+  // UI state
+  const [showConversationsSidebar, setShowConversationsSidebar] = useState(true)
+  const [showDocumentsSidebar, setShowDocumentsSidebar] = useState(true)
+
+  const messagesEndRef = useRef(null)
+  const fileInputRef = useRef(null)
+
+  // Scroll to bottom when new messages arrive
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(scrollToBottom, [messages])
+
+  // Initialize: load conversations and check backend
   useEffect(() => {
+    loadConversationsFromStorage()
     checkBackendHealth()
-    const interval = setInterval(checkBackendHealth, 10000)
+    fetchDocuments()
+
+    const interval = setInterval(checkBackendHealth, 30000)
     return () => clearInterval(interval)
   }, [])
 
+  // Load conversations from localStorage
+  const loadConversationsFromStorage = () => {
+    try {
+      const stored = localStorage.getItem('rag_conversations')
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        setConversations(parsed)
+
+        // Ripristina l'ultima conversazione attiva
+        const lastActiveId = localStorage.getItem('rag_current_conversation')
+        if (lastActiveId && parsed.find(c => c.id === lastActiveId)) {
+          loadConversation(lastActiveId)
+        } else if (parsed.length > 0) {
+          loadConversation(parsed[0].id)
+        }
+      } else {
+        // Crea conversazione iniziale
+        createNewConversation()
+      }
+    } catch (error) {
+      console.error('Errore caricamento conversazioni:', error)
+      createNewConversation()
+    }
+  }
+
+  // Save conversations to localStorage
+  const saveConversationsToStorage = (convs) => {
+    localStorage.setItem('rag_conversations', JSON.stringify(convs))
+  }
+
+  // Create new conversation
+  const createNewConversation = () => {
+    const newConv = {
+      id: Date.now().toString(),
+      title: 'Nuova Conversazione',
+      messages: [],
+      createdAt: new Date().toISOString()
+    }
+
+    const updated = [newConv, ...conversations]
+    setConversations(updated)
+    saveConversationsToStorage(updated)
+    loadConversation(newConv.id)
+  }
+
+  // Load conversation
+  const loadConversation = (convId) => {
+    const conv = conversations.find(c => c.id === convId)
+    if (conv) {
+      setCurrentConversationId(convId)
+      setMessages(conv.messages || [])
+      localStorage.setItem('rag_current_conversation', convId)
+    }
+  }
+
+  // Delete conversation
+  const deleteConversation = (convId) => {
+    if (conversations.length === 1) {
+      alert('Non puoi eliminare l\'ultima conversazione')
+      return
+    }
+
+    const updated = conversations.filter(c => c.id !== convId)
+    setConversations(updated)
+    saveConversationsToStorage(updated)
+
+    if (currentConversationId === convId) {
+      loadConversation(updated[0].id)
+    }
+  }
+
+  // Update conversation title (first message preview)
+  const updateConversationTitle = (convId, firstMessage) => {
+    const updated = conversations.map(c => {
+      if (c.id === convId && c.title === 'Nuova Conversazione') {
+        return {
+          ...c,
+          title: firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '')
+        }
+      }
+      return c
+    })
+    setConversations(updated)
+    saveConversationsToStorage(updated)
+  }
+
+  // Update conversation messages
+  const updateConversationMessages = (convId, newMessages) => {
+    const updated = conversations.map(c =>
+      c.id === convId ? { ...c, messages: newMessages } : c
+    )
+    setConversations(updated)
+    saveConversationsToStorage(updated)
+  }
+
+  // Check backend health
   const checkBackendHealth = async () => {
     try {
       const response = await axios.get('http://localhost:8000/health')
@@ -30,12 +163,80 @@ function App() {
     }
   }
 
+  // Fetch documents from backend
+  const fetchDocuments = async () => {
+    setLoadingDocuments(true)
+    try {
+      const response = await axios.get('http://localhost:8000/api/documents')
+      console.log('📊 Response from /api/documents:', response.data)
+      console.log('📄 Documents array:', response.data.documents)
+
+      const docs = response.data.documents || []
+      console.log(`✅ Fetched ${docs.length} documents:`, docs)
+
+      setDocuments(docs)
+    } catch (error) {
+      console.error('❌ Errore fetch documenti:', error)
+      console.error('Error details:', error.response?.data)
+    } finally {
+      setLoadingDocuments(false)
+    }
+  }
+
+  // Check if document already exists
+  const checkDuplicateDocument = (filename) => {
+    return documents.some(doc => doc.filename === filename)
+  }
+
+  // Poll documents until count increases (max 30 secondi)
+  const pollDocumentsUntilReady = async (initialCount, maxAttempts = 15) => {
+    setUploadPhase('⏳ Attesa completamento elaborazione...')
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000)) // Check ogni 2 secondi
+
+      try {
+        const response = await axios.get('http://localhost:8000/api/documents')
+        const currentDocs = response.data.documents || []
+
+        console.log(`🔍 Poll attempt ${i + 1}: ${currentDocs.length} docs (was ${initialCount})`)
+
+        if (currentDocs.length > initialCount) {
+          console.log('✅ Nuovo documento rilevato!')
+          return currentDocs
+        }
+
+        setUploadPhase(`⏳ Elaborazione in corso... (${i * 2}s)`)
+      } catch (error) {
+        console.error('Poll error:', error)
+      }
+    }
+
+    console.warn('⚠️ Timeout polling - documento potrebbe non essere pronto')
+    return null
+  }
+
+  // Handle file upload
   const handleFileUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
 
+    // Controllo duplicati
+    if (checkDuplicateDocument(file.name)) {
+      const confirm = window.confirm(
+        `⚠️ Il documento "${file.name}" è già presente.\n\nVuoi caricarlo comunque?`
+      )
+      if (!confirm) {
+        e.target.value = ''
+        return
+      }
+    }
+
+    const initialDocCount = documents.length
+
     setUploading(true)
     setUploadProgress(0)
+    setUploadPhase('📤 Caricamento file...')
 
     const formData = new FormData()
     formData.append('file', file)
@@ -50,264 +251,457 @@ function App() {
         }
       }
 
+      setUploadPhase('📤 Invio al server...')
       const response = await axios.post('http://localhost:8000/api/documents/upload', formData, config)
-      
-      setDocuments([...documents, {
-        name: file.name,
-        size: file.size,
-        chunks: response.data.chunks_count,
-        timestamp: new Date().toLocaleString()
-      }])
 
-      setUploadProgress(0)
-      alert(`✅ File caricato: ${response.data.filename}\nElaborazione in corso...`)
+      console.log('📤 Upload response:', response.data)
+
+      // Backend ritorna 202 (Accepted) con elaborazione in background
+      setUploadProgress(100)
+      setUploadPhase('🔄 Elaborazione documento (OCR → Chunking → Embedding)...')
+
+      // Poll finché il documento non appare nella lista
+      const updatedDocs = await pollDocumentsUntilReady(initialDocCount)
+
+      if (updatedDocs) {
+        setDocuments(updatedDocs)
+        setUploadPhase('✅ Completato!')
+
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        alert(`✅ File caricato con successo: ${response.data.filename}\n\nIl documento è ora disponibile per le ricerche.`)
+      } else {
+        setUploadPhase('⚠️ Elaborazione in corso (continua in background)')
+
+        // Refresh comunque
+        await fetchDocuments()
+
+        alert(`⚠️ File caricato: ${response.data.filename}\n\nL'elaborazione sta richiedendo più tempo del previsto.\nControlla la lista documenti tra qualche secondo.`)
+      }
+
     } catch (error) {
-      console.error('Upload error:', error)
+      console.error('❌ Upload error:', error)
       alert(`❌ Errore upload: ${error.response?.data?.detail || error.message}`)
     } finally {
       setUploading(false)
+      setUploadProgress(0)
+      setUploadPhase('')
       e.target.value = ''
     }
   }
 
-  const handleDirectoryUpload = async (e) => {
-    const files = e.target.files
-    if (!files.length) return
-
-    setUploading(true)
-    let totalChunks = 0
-
-    for (let file of files) {
-      setUploadProgress(Math.round((Array.from(files).indexOf(file) / files.length) * 100))
-
-      const formData = new FormData()
-      formData.append('file', file)
-
-      try {
-        const response = await axios.post('http://localhost:8000/api/documents/upload', formData)
-        totalChunks += response.data.chunks_count
-      } catch (error) {
-        console.error(`Errore uploading ${file.name}:`, error)
-      }
-    }
-
-    setUploadProgress(0)
-    alert(`✅ Directory caricata: ${totalChunks} chunks totali`)
-    setUploading(false)
-    e.target.value = ''
-    
-    // Refresh documents
-    checkBackendHealth()
-  }
-
+  // Handle query submit
   const handleQuery = async (e) => {
     e.preventDefault()
-    if (!query.trim()) return
+    if (!query.trim() || querying) return
 
+    const userMessage = {
+      role: 'user',
+      content: query,
+      timestamp: new Date().toISOString()
+    }
+
+    // Add user message immediately
+    const updatedMessages = [...messages, userMessage]
+    setMessages(updatedMessages)
+    updateConversationMessages(currentConversationId, updatedMessages)
+
+    // Update conversation title if first message
+    if (updatedMessages.length === 1) {
+      updateConversationTitle(currentConversationId, query)
+    }
+
+    setQuery('')
     setQuerying(true)
-    setResults(null)
 
     try {
       const response = await axios.post('http://localhost:8000/api/query', {
-        query: query,
-        top_k: 5
+        query: userMessage.content,
+        top_k: 5,
+        user_id: currentConversationId
       })
 
-      setResults(response.data)
+      const assistantMessage = {
+        role: 'assistant',
+        content: response.data.answer,
+        sources: response.data.sources || [],
+        timestamp: new Date().toISOString()
+      }
+
+      const finalMessages = [...updatedMessages, assistantMessage]
+      setMessages(finalMessages)
+      updateConversationMessages(currentConversationId, finalMessages)
+
     } catch (error) {
       console.error('Query error:', error)
-      alert(`❌ Errore query: ${error.response?.data?.detail || error.message}`)
+
+      const errorMessage = {
+        role: 'assistant',
+        content: `❌ Errore: ${error.response?.data?.detail || error.message}`,
+        error: true,
+        timestamp: new Date().toISOString()
+      }
+
+      const finalMessages = [...updatedMessages, errorMessage]
+      setMessages(finalMessages)
+      updateConversationMessages(currentConversationId, finalMessages)
     } finally {
       setQuerying(false)
     }
   }
 
+  // Delete document
+  const handleDeleteDocument = async (documentId) => {
+    if (!window.confirm('Sei sicuro di voler eliminare questo documento?')) {
+      return
+    }
+
+    try {
+      await axios.delete(`http://localhost:8000/api/documents/${documentId}`)
+      alert('✅ Documento eliminato')
+      fetchDocuments()
+    } catch (error) {
+      console.error('Delete error:', error)
+      alert(`❌ Errore eliminazione: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
-      <div className="container mx-auto px-4 py-8">
-        
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">🚀 RAG Enterprise</h1>
-          <p className="text-slate-300">Retrieval Augmented Generation Platform</p>
+    <div className="flex flex-col h-screen bg-gradient-to-br from-slate-900 to-slate-800">
+
+      {/* HEADER */}
+      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          {BRANDING.clientLogo ? (
+            <img src={BRANDING.clientLogo} alt="Logo" className="h-10" />
+          ) : (
+            <h1 className="text-2xl font-bold text-white">{BRANDING.clientName}</h1>
+          )}
         </div>
 
-        {/* Status Bar */}
-        <div className={`mb-8 p-4 rounded-lg ${
-          status === 'ready' ? 'bg-green-900/30 border border-green-500' :
-          status === 'error' ? 'bg-red-900/30 border border-red-500' :
-          'bg-yellow-900/30 border border-yellow-500'
-        }`}>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-white font-semibold">
-                {status === 'ready' ? '✅ Sistema Pronto' :
-                 status === 'error' ? '❌ Backend Non Disponibile' :
-                 '⏳ Checking...'}
-              </p>
-              {backendHealth && (
-                <p className="text-sm text-slate-300 mt-1">
-                  LLM: {backendHealth.configuration.llm_model} | 
-                  Embedding: {backendHealth.configuration.embedding_model} | 
-                  Threshold: {backendHealth.configuration.relevance_threshold}
-                </p>
-              )}
-            </div>
-            <button 
-              onClick={checkBackendHealth}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded"
-            >
-              Refresh
-            </button>
+        {/* Status indicator */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full ${
+              status === 'ready' ? 'bg-green-500' :
+              status === 'error' ? 'bg-red-500' :
+              'bg-yellow-500'
+            }`} />
+            <span className="text-sm text-slate-300">
+              {status === 'ready' ? 'Online' :
+               status === 'error' ? 'Offline' :
+               'Checking...'}
+            </span>
           </div>
+
+          {backendHealth && (
+            <button
+              onClick={checkBackendHealth}
+              className="text-sm text-slate-400 hover:text-white transition"
+              title={`LLM: ${backendHealth.configuration?.llm_model || 'N/A'}`}
+            >
+              🔄 Refresh
+            </button>
+          )}
         </div>
+      </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Upload Section */}
-          <div className="lg:col-span-1 space-y-6">
-            
-            {/* Single File Upload */}
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-              <h2 className="text-xl font-bold text-white mb-4">📁 Upload File</h2>
-              <label className="block">
-                <div className="border-2 border-dashed border-slate-600 rounded-lg p-8 text-center cursor-pointer hover:border-blue-500 transition">
-                  <input
-                    type="file"
-                    onChange={handleFileUpload}
-                    disabled={uploading}
-                    className="hidden"
-                    accept=".pdf,.docx,.txt,.doc,.pptx,.xlsx"
-                  />
-                  <p className="text-slate-300">
-                    {uploading ? `Uploading... ${uploadProgress}%` : 'Click to upload file'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-2">PDF, DOCX, TXT, PPT, XLS</p>
-                </div>
-              </label>
-              {uploadProgress > 0 && (
-                <div className="mt-4 bg-slate-700 rounded-full h-2">
-                  <div 
-                    className="bg-blue-500 h-2 rounded-full transition-all"
-                    style={{ width: `${uploadProgress}%` }}
-                  ></div>
-                </div>
-              )}
+      {/* MAIN CONTENT */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* SIDEBAR CONVERSAZIONI */}
+        {showConversationsSidebar && (
+          <aside className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col">
+            <div className="p-4 border-b border-slate-700">
+              <button
+                onClick={createNewConversation}
+                className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
+              >
+                + Nuova Chat
+              </button>
             </div>
 
-            {/* Directory Upload */}
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-              <h2 className="text-xl font-bold text-white mb-4">📂 Upload Directory</h2>
-              <label className="block">
-                <div className="border-2 border-dashed border-slate-600 rounded-lg p-8 text-center cursor-pointer hover:border-green-500 transition">
-                  <input
-                    type="file"
-                    onChange={handleDirectoryUpload}
-                    disabled={uploading}
-                    className="hidden"
-                    webkitdirectory="true"
-                    accept=".pdf,.docx,.txt,.doc,.pptx,.xlsx"
-                  />
-                  <p className="text-slate-300">
-                    {uploading ? `Uploading...` : 'Click to upload directory'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-2">Upload intera cartella</p>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {conversations.map(conv => (
+                <div
+                  key={conv.id}
+                  className={`group flex items-center justify-between p-3 rounded cursor-pointer transition ${
+                    currentConversationId === conv.id
+                      ? 'bg-slate-700 text-white'
+                      : 'text-slate-300 hover:bg-slate-700/50'
+                  }`}
+                  onClick={() => loadConversation(conv.id)}
+                >
+                  <span className="truncate flex-1 text-sm">{conv.title}</span>
+                  {conversations.length > 1 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteConversation(conv.id)
+                      }}
+                      className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs ml-2"
+                    >
+                      🗑️
+                    </button>
+                  )}
                 </div>
-              </label>
+              ))}
             </div>
 
-            {/* Documents List */}
-            {documents.length > 0 && (
-              <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-                <h3 className="text-lg font-bold text-white mb-4">📋 Documenti</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {documents.map((doc, idx) => (
-                    <div key={idx} className="bg-slate-700 p-3 rounded text-sm">
-                      <p className="text-white font-semibold truncate">{doc.name}</p>
-                      <p className="text-slate-400 text-xs">
-                        {doc.chunks} chunks • {new Date(doc.timestamp).toLocaleTimeString()}
-                      </p>
-                    </div>
-                  ))}
+            <div className="p-2 border-t border-slate-700">
+              <button
+                onClick={() => setShowConversationsSidebar(false)}
+                className="w-full py-1 text-xs text-slate-400 hover:text-white"
+              >
+                ◀ Chiudi
+              </button>
+            </div>
+          </aside>
+        )}
+
+        {/* CHAT AREA */}
+        <main className="flex-1 flex flex-col">
+
+          {/* Toggle sidebar button (if hidden) */}
+          {!showConversationsSidebar && (
+            <button
+              onClick={() => setShowConversationsSidebar(true)}
+              className="absolute top-20 left-4 p-2 bg-slate-700 text-white rounded-lg shadow-lg hover:bg-slate-600 z-10"
+            >
+              ▶
+            </button>
+          )}
+
+          {/* Messages area */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {messages.length === 0 ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center text-slate-400">
+                  <h2 className="text-2xl font-bold mb-2">👋 Ciao!</h2>
+                  <p>Inizia una conversazione oppure carica dei documenti per iniziare.</p>
                 </div>
               </div>
-            )}
-          </div>
-
-          {/* Query Section */}
-          <div className="lg:col-span-2">
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-              <h2 className="text-xl font-bold text-white mb-6">🔍 Query RAG</h2>
-              
-              <form onSubmit={handleQuery} className="mb-6">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Cosa vuoi cercare nei documenti?"
-                    disabled={querying}
-                    className="flex-1 bg-slate-700 text-white placeholder-slate-400 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={querying}
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white rounded-lg font-semibold transition"
+            ) : (
+              messages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-3xl rounded-lg p-4 ${
+                      msg.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : msg.error
+                        ? 'bg-red-900/30 border border-red-500 text-red-200'
+                        : 'bg-slate-700 text-slate-100'
+                    }`}
                   >
-                    {querying ? '⏳ Searching...' : '🚀 Search'}
-                  </button>
-                </div>
-              </form>
+                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
-              {/* Results */}
-              {results && (
-                <div className="space-y-6">
-                  
-                  {/* Answer */}
-                  <div className="bg-slate-700 rounded-lg p-6 border border-slate-600">
-                    <h3 className="text-white font-bold mb-3">💡 Risposta</h3>
-                    <p className="text-slate-100 leading-relaxed">
-                      {results.answer}
-                    </p>
-                  </div>
-
-                  {/* Sources */}
-                  {results.sources && results.sources.length > 0 && (
-                    <div className="bg-slate-700 rounded-lg p-6 border border-slate-600">
-                      <h3 className="text-white font-bold mb-4">📚 Fonti ({results.sources.length})</h3>
-                      <div className="space-y-3">
-                        {results.sources.map((source, idx) => (
-                          <div key={idx} className="bg-slate-600 rounded p-4">
-                            <div className="flex justify-between items-center gap-2 mb-2">
+                    {/* Sources */}
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
+                        <p className="text-sm font-semibold text-slate-300">
+                          📚 Fonti ({msg.sources.length}):
+                        </p>
+                        {msg.sources.map((source, sidx) => (
+                          <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
+                            <div className="flex justify-between items-center gap-2">
                               <a
                                 href={`http://localhost:8000/api/documents/${source.document_id}/download`}
                                 download
-                                className="text-blue-400 hover:text-blue-300 underline font-semibold truncate flex-1"
+                                className="text-blue-300 hover:text-blue-200 underline truncate flex-1"
                                 title={source.filename || source.document_id}
                               >
                                 {source.filename || source.document_id}
                               </a>
-                              <span className="bg-green-600 text-white px-3 py-1 rounded text-sm font-bold whitespace-nowrap">
+                              <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold">
                                 {source.similarity_score ? (source.similarity_score * 100).toFixed(1) : 'N/A'}%
                               </span>
                             </div>
-                            {source.text && (
-                              <p className="text-slate-300 text-sm leading-relaxed line-clamp-3">
-                                {source.text}
-                              </p>
-                            )}
                           </div>
                         ))}
                       </div>
-                    </div>
+                    )}
+
+                    <p className="text-xs text-slate-400 mt-2">
+                      {new Date(msg.timestamp).toLocaleTimeString('it-IT')}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+
+            {querying && (
+              <div className="flex justify-start">
+                <div className="bg-slate-700 rounded-lg p-4 text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin">⏳</div>
+                    <span>Ricerca in corso...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input area */}
+          <div className="border-t border-slate-700 p-4 bg-slate-800">
+            <form onSubmit={handleQuery} className="flex gap-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Scrivi la tua domanda..."
+                disabled={querying || status !== 'ready'}
+                className="flex-1 bg-slate-700 text-white placeholder-slate-400 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                disabled={querying || !query.trim() || status !== 'ready'}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition"
+              >
+                {querying ? '⏳' : '🚀'}
+              </button>
+            </form>
+          </div>
+        </main>
+
+        {/* SIDEBAR DOCUMENTI */}
+        {showDocumentsSidebar && (
+          <aside className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col">
+            <div className="p-4 border-b border-slate-700">
+              <h2 className="text-lg font-bold text-white mb-3">📁 Documenti</h2>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                onChange={handleFileUpload}
+                disabled={uploading}
+                className="hidden"
+                accept=".pdf,.docx,.txt,.doc,.pptx,.xlsx"
+              />
+
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white rounded-lg font-semibold transition"
+              >
+                {uploading ? `⏳ ${uploadProgress}%` : '+ Carica File'}
+              </button>
+
+              {uploading && (
+                <div className="mt-3 space-y-2">
+                  {/* Progress bar */}
+                  <div className="bg-slate-700 rounded-full h-2">
+                    <div
+                      className="bg-green-500 h-2 rounded-full transition-all"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+
+                  {/* Fase corrente */}
+                  {uploadPhase && (
+                    <p className="text-sm text-slate-300 text-center animate-pulse">
+                      {uploadPhase}
+                    </p>
                   )}
                 </div>
               )}
             </div>
-          </div>
 
-        </div>
+            <div className="flex-1 overflow-y-auto p-3">
+              {loadingDocuments ? (
+                <p className="text-center text-slate-400 py-4">Caricamento...</p>
+              ) : documents.length === 0 ? (
+                <p className="text-center text-slate-400 py-4 text-sm">
+                  Nessun documento caricato
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {documents.map((doc, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-slate-700 rounded-lg p-3 group hover:bg-slate-600 transition"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-sm font-semibold truncate" title={doc.filename}>
+                            {doc.filename}
+                          </p>
+                          <p className="text-slate-400 text-xs mt-1">
+                            {doc.num_chunks || 0} chunks
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => handleDeleteDocument(doc.document_id)}
+                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs transition"
+                          title="Elimina documento"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-2 border-t border-slate-700">
+              <button
+                onClick={fetchDocuments}
+                className="w-full py-2 text-sm text-slate-400 hover:text-white transition"
+              >
+                🔄 Aggiorna Lista
+              </button>
+              <button
+                onClick={() => setShowDocumentsSidebar(false)}
+                className="w-full py-1 text-xs text-slate-400 hover:text-white mt-1"
+              >
+                Chiudi ▶
+              </button>
+            </div>
+          </aside>
+        )}
+
+        {/* Toggle documents sidebar button (if hidden) */}
+        {!showDocumentsSidebar && (
+          <button
+            onClick={() => setShowDocumentsSidebar(true)}
+            className="absolute top-20 right-4 p-2 bg-slate-700 text-white rounded-lg shadow-lg hover:bg-slate-600 z-10"
+          >
+            ◀
+          </button>
+        )}
       </div>
+
+      {/* FOOTER */}
+      <footer className="bg-slate-900 border-t border-slate-700 px-6 py-3">
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <div>
+            <span>Powered by </span>
+            <span className="font-semibold text-blue-400">{BRANDING.poweredBy}</span>
+            <span className="mx-2">•</span>
+            <span>{BRANDING.version}</span>
+          </div>
+          <div>
+            <a
+              href="#"
+              className="hover:text-white transition"
+              onClick={(e) => {
+                e.preventDefault()
+                alert('⚠️ Disclaimer:\n\nQuesto sistema utilizza intelligenza artificiale per analizzare documenti e fornire risposte. Le informazioni fornite devono essere verificate e non sostituiscono la consulenza professionale.\n\n© I3K Technologies - Tutti i diritti riservati.')
+              }}
+            >
+              Disclaimer
+            </a>
+            <span className="mx-2">•</span>
+            <a href="#" className="hover:text-white transition">Privacy</a>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }
