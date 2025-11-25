@@ -168,9 +168,16 @@ function App() {
     setLoadingDocuments(true)
     try {
       const response = await axios.get('http://localhost:8000/api/documents')
-      setDocuments(response.data.documents || [])
+      console.log('📊 Response from /api/documents:', response.data)
+      console.log('📄 Documents array:', response.data.documents)
+
+      const docs = response.data.documents || []
+      console.log(`✅ Fetched ${docs.length} documents:`, docs)
+
+      setDocuments(docs)
     } catch (error) {
-      console.error('Errore fetch documenti:', error)
+      console.error('❌ Errore fetch documenti:', error)
+      console.error('Error details:', error.response?.data)
     } finally {
       setLoadingDocuments(false)
     }
@@ -179,6 +186,34 @@ function App() {
   // Check if document already exists
   const checkDuplicateDocument = (filename) => {
     return documents.some(doc => doc.filename === filename)
+  }
+
+  // Poll documents until count increases (max 30 secondi)
+  const pollDocumentsUntilReady = async (initialCount, maxAttempts = 15) => {
+    setUploadPhase('⏳ Attesa completamento elaborazione...')
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000)) // Check ogni 2 secondi
+
+      try {
+        const response = await axios.get('http://localhost:8000/api/documents')
+        const currentDocs = response.data.documents || []
+
+        console.log(`🔍 Poll attempt ${i + 1}: ${currentDocs.length} docs (was ${initialCount})`)
+
+        if (currentDocs.length > initialCount) {
+          console.log('✅ Nuovo documento rilevato!')
+          return currentDocs
+        }
+
+        setUploadPhase(`⏳ Elaborazione in corso... (${i * 2}s)`)
+      } catch (error) {
+        console.error('Poll error:', error)
+      }
+    }
+
+    console.warn('⚠️ Timeout polling - documento potrebbe non essere pronto')
+    return null
   }
 
   // Handle file upload
@@ -197,9 +232,11 @@ function App() {
       }
     }
 
+    const initialDocCount = documents.length
+
     setUploading(true)
     setUploadProgress(0)
-    setUploadPhase('📤 Upload in corso...')
+    setUploadPhase('📤 Caricamento file...')
 
     const formData = new FormData()
     formData.append('file', file)
@@ -211,28 +248,39 @@ function App() {
             (progressEvent.loaded * 100) / progressEvent.total
           )
           setUploadProgress(percent)
-
-          if (percent === 100) {
-            setUploadPhase('🔄 Elaborazione in corso (OCR, chunking, embedding)...')
-          }
         }
       }
 
+      setUploadPhase('📤 Invio al server...')
       const response = await axios.post('http://localhost:8000/api/documents/upload', formData, config)
 
+      console.log('📤 Upload response:', response.data)
+
       // Backend ritorna 202 (Accepted) con elaborazione in background
-      setUploadPhase('✅ File ricevuto! Elaborazione completata in background')
+      setUploadProgress(100)
+      setUploadPhase('🔄 Elaborazione documento (OCR → Chunking → Embedding)...')
 
-      // Aspetta 2 secondi per dare tempo al backend di processare
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      // Poll finché il documento non appare nella lista
+      const updatedDocs = await pollDocumentsUntilReady(initialDocCount)
 
-      // Refresh documents list per vedere i chunks
-      await fetchDocuments()
+      if (updatedDocs) {
+        setDocuments(updatedDocs)
+        setUploadPhase('✅ Completato!')
 
-      alert(`✅ File caricato: ${response.data.filename}\n\nElaborazione completata. Controlla la lista documenti per i dettagli.`)
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        alert(`✅ File caricato con successo: ${response.data.filename}\n\nIl documento è ora disponibile per le ricerche.`)
+      } else {
+        setUploadPhase('⚠️ Elaborazione in corso (continua in background)')
+
+        // Refresh comunque
+        await fetchDocuments()
+
+        alert(`⚠️ File caricato: ${response.data.filename}\n\nL'elaborazione sta richiedendo più tempo del previsto.\nControlla la lista documenti tra qualche secondo.`)
+      }
 
     } catch (error) {
-      console.error('Upload error:', error)
+      console.error('❌ Upload error:', error)
       alert(`❌ Errore upload: ${error.response?.data?.detail || error.message}`)
     } finally {
       setUploading(false)
