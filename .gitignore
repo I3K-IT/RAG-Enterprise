@@ -33,3 +33,6 @@ volumes/
 # Environment variables
 .env.local
 .env.*.local
+
+# Local utility scripts
+auto-commit.sh
