@@ -32,6 +32,16 @@ function App() {
   })
   const [creatingUser, setCreatingUser] = useState(false)
 
+  // Change password state
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
+  const [passwordForm, setPasswordForm] = useState({
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  })
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [passwordError, setPasswordError] = useState('')
+
   // Backend status
   const [status, setStatus] = useState('checking')
   const [backendHealth, setBackendHealth] = useState(null)
@@ -231,6 +241,51 @@ function App() {
     if (newState) {
       fetchAllUsers()
     }
+  }
+
+  // ============================================================================
+  // PASSWORD CHANGE FUNCTIONS
+  // ============================================================================
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault()
+    setPasswordError('')
+
+    // Validate new password matches confirmation
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('Le nuove password non corrispondono')
+      return
+    }
+
+    // Validate password length
+    if (passwordForm.newPassword.length < 6) {
+      setPasswordError('La nuova password deve essere di almeno 6 caratteri')
+      return
+    }
+
+    setChangingPassword(true)
+
+    try {
+      await axios.post('http://localhost:8000/api/auth/change-password', {
+        old_password: passwordForm.oldPassword,
+        new_password: passwordForm.newPassword
+      })
+
+      alert('✅ Password cambiata con successo!')
+      setShowChangePasswordModal(false)
+      setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' })
+    } catch (error) {
+      console.error('Error changing password:', error)
+      setPasswordError(error.response?.data?.detail || 'Errore cambio password')
+    } finally {
+      setChangingPassword(false)
+    }
+  }
+
+  const toggleChangePasswordModal = () => {
+    setShowChangePasswordModal(!showChangePasswordModal)
+    setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' })
+    setPasswordError('')
   }
 
   // ============================================================================
@@ -721,6 +776,97 @@ function App() {
         </div>
       )}
 
+      {/* CHANGE PASSWORD MODAL */}
+      {showChangePasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-lg shadow-2xl border border-slate-700 w-full max-w-md">
+            {/* Header */}
+            <div className="p-6 border-b border-slate-700 flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-white">🔑 Cambia Password</h2>
+              <button
+                onClick={toggleChangePasswordModal}
+                className="text-slate-400 hover:text-white text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Password Attuale
+                  </label>
+                  <input
+                    type="password"
+                    value={passwordForm.oldPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, oldPassword: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="••••••••"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Nuova Password
+                  </label>
+                  <input
+                    type="password"
+                    value={passwordForm.newPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="••••••••"
+                    required
+                    minLength={6}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">Minimo 6 caratteri</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Conferma Nuova Password
+                  </label>
+                  <input
+                    type="password"
+                    value={passwordForm.confirmPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="••••••••"
+                    required
+                    minLength={6}
+                  />
+                </div>
+
+                {passwordError && (
+                  <div className="p-3 bg-red-900/30 border border-red-500 rounded-lg text-red-200 text-sm">
+                    {passwordError}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={toggleChangePasswordModal}
+                    className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition"
+                  >
+                    Annulla
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={changingPassword}
+                    className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold rounded-lg transition"
+                  >
+                    {changingPassword ? 'Aggiornamento...' : 'Cambia Password'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* HEADER */}
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -771,6 +917,14 @@ function App() {
                 👥
               </button>
             )}
+
+            <button
+              onClick={toggleChangePasswordModal}
+              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition"
+              title="Cambia password"
+            >
+              🔑
+            </button>
 
             <button
               onClick={handleLogout}
