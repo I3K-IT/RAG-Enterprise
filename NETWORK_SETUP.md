@@ -52,14 +52,14 @@ cd /path/to/rag-enterprise
 nano .env
 ```
 
-Modifica la riga `REACT_APP_API_URL`:
+Modifica la riga `VITE_API_URL`:
 
 ```bash
 # Prima (localhost)
-REACT_APP_API_URL=http://localhost:8000
+VITE_API_URL=http://localhost:8000
 
 # Dopo (LAN) - sostituisci con il TUO IP
-REACT_APP_API_URL=http://192.168.1.100:8000
+VITE_API_URL=http://192.168.1.100:8000
 ```
 
 ### 📝 Step 3: Ricostruisci e riavvia i container
@@ -280,7 +280,7 @@ Modifica:
 
 ```bash
 # Internet con SSL
-REACT_APP_API_URL=https://tuodominio.com/api
+VITE_API_URL=https://tuodominio.com/api
 ```
 
 Ricostruisci:
@@ -376,7 +376,7 @@ sudo tail -f /var/log/nginx/access.log
 **Causa:** Frontend non riesce a contattare il backend.
 
 **Soluzione:**
-1. Verifica che `REACT_APP_API_URL` nel `.env` sia corretto
+1. Verifica che `VITE_API_URL` nel `.env` sia corretto
 2. Ricostruisci il frontend: `docker compose build frontend`
 3. Verifica che il backend sia attivo: `docker compose ps`
 
@@ -426,7 +426,7 @@ Per problemi o domande:
 
 ## 🎯 Riepilogo Configurazioni
 
-| Scenario | `.env` REACT_APP_API_URL | Accessibile Da |
+| Scenario | `.env` VITE_API_URL | Accessibile Da |
 |----------|--------------------------|----------------|
 | **Localhost** | `http://localhost:8000` | Solo questo computer |
 | **LAN** | `http://192.168.1.100:8000` | Dispositivi nella rete locale |
