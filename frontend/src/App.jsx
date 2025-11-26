@@ -11,6 +11,9 @@ const BRANDING = {
   version: 'v1.1'
 }
 
+// API Configuration - usa variabile d'ambiente o fallback a localhost
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000'
+
 function App() {
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -141,7 +144,7 @@ function App() {
     setLoginError('')
 
     try {
-      const response = await axios.post('http://localhost:8000/api/auth/login', {
+      const response = await axios.post(`${API_URL}/api/auth/login`, {
         username: loginForm.username,
         password: loginForm.password
       })
@@ -184,7 +187,7 @@ function App() {
 
     setLoadingUsers(true)
     try {
-      const response = await axios.get('http://localhost:8000/api/auth/users')
+      const response = await axios.get(`${API_URL}/api/auth/users`)
       setAllUsers(response.data.users || [])
     } catch (error) {
       console.error('Error fetching users:', error)
@@ -199,7 +202,7 @@ function App() {
     setCreatingUser(true)
 
     try {
-      await axios.post('http://localhost:8000/api/auth/users', newUserForm)
+      await axios.post(`${API_URL}/api/auth/users`, newUserForm)
       alert(`✅ Utente "${newUserForm.username}" creato con successo!`)
       setNewUserForm({ username: '', email: '', password: '', role: 'user' })
       fetchAllUsers()
@@ -217,7 +220,7 @@ function App() {
     }
 
     try {
-      await axios.delete(`http://localhost:8000/api/auth/users/${userId}`)
+      await axios.delete(`${API_URL}/api/auth/users/${userId}`)
       alert('✅ Utente eliminato')
       fetchAllUsers()
     } catch (error) {
@@ -228,7 +231,7 @@ function App() {
 
   const handleChangeUserRole = async (userId, newRole, username) => {
     try {
-      await axios.put(`http://localhost:8000/api/auth/users/${userId}`, { role: newRole })
+      await axios.put(`${API_URL}/api/auth/users/${userId}`, { role: newRole })
       alert(`✅ Ruolo di "${username}" aggiornato a "${newRole}"`)
       fetchAllUsers()
     } catch (error) {
@@ -268,7 +271,7 @@ function App() {
     setChangingPassword(true)
 
     try {
-      await axios.post('http://localhost:8000/api/auth/change-password', {
+      await axios.post(`${API_URL}/api/auth/change-password`, {
         old_password: passwordForm.oldPassword,
         new_password: passwordForm.newPassword
       })
@@ -386,7 +389,7 @@ function App() {
 
   const checkBackendHealth = async () => {
     try {
-      const response = await axios.get('http://localhost:8000/health')
+      const response = await axios.get(`${API_URL}/health`)
       setBackendHealth(response.data)
       setStatus('ready')
     } catch (error) {
@@ -398,7 +401,7 @@ function App() {
   const fetchDocuments = async () => {
     setLoadingDocuments(true)
     try {
-      const response = await axios.get('http://localhost:8000/api/documents')
+      const response = await axios.get(`${API_URL}/api/documents`)
       const docs = response.data.documents || []
       setDocuments(docs)
     } catch (error) {
@@ -419,7 +422,7 @@ function App() {
       await new Promise(resolve => setTimeout(resolve, 2000))
 
       try {
-        const response = await axios.get('http://localhost:8000/api/documents')
+        const response = await axios.get(`${API_URL}/api/documents`)
         const currentDocs = response.data.documents || []
 
         if (currentDocs.length > initialCount) {
@@ -469,7 +472,7 @@ function App() {
       }
 
       setUploadPhase('📤 Invio al server...')
-      const response = await axios.post('http://localhost:8000/api/documents/upload', formData, config)
+      const response = await axios.post(`${API_URL}/api/documents/upload`, formData, config)
 
       setUploadProgress(100)
       setUploadPhase('🔄 Elaborazione documento (OCR → Chunking → Embedding)...')
@@ -526,7 +529,7 @@ function App() {
     }, 5000)
 
     try {
-      const response = await axios.post('http://localhost:8000/api/query', {
+      const response = await axios.post(`${API_URL}/api/query`, {
         query: userMessage.content,
         top_k: 5
       })
@@ -572,7 +575,7 @@ function App() {
     }
 
     try {
-      await axios.delete(`http://localhost:8000/api/documents/${documentId}`)
+      await axios.delete(`${API_URL}/api/documents/${documentId}`)
       alert('✅ Documento eliminato')
       fetchDocuments()
     } catch (error) {
@@ -1055,7 +1058,7 @@ function App() {
                           <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
                             <div className="flex justify-between items-center gap-2">
                               <a
-                                href={`http://localhost:8000/api/documents/${source.document_id}/download`}
+                                href={`${API_URL}/api/documents/${source.document_id}/download`}
                                 download
                                 className="text-blue-300 hover:text-blue-200 underline truncate flex-1"
                                 title={source.filename || source.document_id}
