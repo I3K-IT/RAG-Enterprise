@@ -49,6 +49,7 @@ services:
       CUDA_VISIBLE_DEVICES: 0
     volumes:
       - backend-uploads:/app/uploads
+      - backend-database:/app/data
       - ./backend:/app
       - huggingface-cache:/root/.cache/huggingface
       - ollama-cache:/root/.ollama
@@ -83,6 +84,7 @@ volumes:
   qdrant-data:
   ollama-data:
   backend-uploads:
+  backend-database:
   huggingface-cache:
   ollama-cache:
 

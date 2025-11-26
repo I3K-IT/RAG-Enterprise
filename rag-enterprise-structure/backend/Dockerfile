@@ -45,8 +45,14 @@ COPY backend/ocr_service.py .
 COPY backend/embeddings_service.py .
 COPY backend/qdrant_connector.py .
 
-# Crea directory per uploads
-RUN mkdir -p /app/uploads
+# Copia file autenticazione
+COPY backend/auth.py .
+COPY backend/auth_models.py .
+COPY backend/database.py .
+COPY backend/middleware.py .
+
+# Crea directory per uploads e database
+RUN mkdir -p /app/uploads /app/data
 
 # Espone porta
 EXPOSE 8000

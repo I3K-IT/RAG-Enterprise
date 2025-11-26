@@ -7,10 +7,12 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import bcrypt
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = "rag_users.db"
+# Path database - usa /app/data in Docker, ./data in locale
+DB_PATH = os.getenv("DB_PATH", "/app/data/rag_users.db")
 
 
 class UserRole:
@@ -29,6 +31,10 @@ class UserDatabase:
 
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
+        # Crea directory se non esiste
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
         self.init_db()
 
     def get_connection(self):
