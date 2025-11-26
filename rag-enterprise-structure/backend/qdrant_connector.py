@@ -6,7 +6,7 @@ Gestisce: insert, search, delete, collections
 import logging
 from typing import List, Dict, Optional
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -205,28 +205,24 @@ class QdrantConnector:
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
-            
+
             logger.info(f"Deleting document: {document_id}")
-            
-            # Delete by filter
+
+            # Delete by filter usando API corretta
             self.client.delete(
                 collection_name=self.COLLECTION_NAME,
-                points_selector={
-                    "filter": {
-                        "must": [
-                            {
-                                "key": "document_id",
-                                "match": {
-                                    "value": document_id
-                                }
-                            }
-                        ]
-                    }
-                }
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="document_id",
+                            match=MatchValue(value=document_id)
+                        )
+                    ]
+                )
             )
-            
-            logger.info(f"✓ Document deleted")
-            
+
+            logger.info(f"✓ Document deleted: {document_id}")
+
         except Exception as e:
             logger.error(f"✗ Delete error: {str(e)}")
             raise
