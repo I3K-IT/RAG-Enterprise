@@ -1,5 +1,5 @@
 """
-Middleware per autenticazione e autorizzazione
+Middleware for authentication and authorization
 """
 
 from fastapi import Depends, HTTPException, status
@@ -17,7 +17,7 @@ security = HTTPBearer()
 
 
 class CurrentUser:
-    """Rappresenta l'utente corrente autenticato"""
+    """Represents the current authenticated user"""
 
     def __init__(self, user_id: int, username: str, role: str):
         self.user_id = user_id
@@ -34,15 +34,15 @@ class CurrentUser:
         return self.role == UserRole.USER
 
     def can_upload(self) -> bool:
-        """Può caricare documenti"""
+        """Can upload documents"""
         return self.role in [UserRole.ADMIN, UserRole.SUPER_USER]
 
     def can_delete(self) -> bool:
-        """Può cancellare documenti"""
+        """Can delete documents"""
         return self.role in [UserRole.ADMIN, UserRole.SUPER_USER]
 
     def can_manage_users(self) -> bool:
-        """Può gestire utenti"""
+        """Can manage users"""
         return self.role == UserRole.ADMIN
 
 
@@ -50,30 +50,30 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> CurrentUser:
     """
-    Dependency per ottenere l'utente corrente dal token JWT
+    Dependency to get current user from JWT token
 
     Raises:
-        HTTPException: Se token invalido o utente non trovato
+        HTTPException: If token is invalid or user not found
     """
     token = credentials.credentials
 
-    # Verifica token
+    # Verify token
     payload = verify_token(token)
 
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token invalido o scaduto",
+            detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Verifica che l'utente esista ancora nel database
+    # Verify that the user still exists in the database
     user = db.get_user_by_id(payload["user_id"])
 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Utente non trovato",
+            detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -88,15 +88,15 @@ async def require_admin(
     current_user: CurrentUser = Depends(get_current_user)
 ) -> CurrentUser:
     """
-    Dependency che richiede ruolo ADMIN
+    Dependency that requires ADMIN role
 
     Raises:
-        HTTPException: Se utente non è admin
+        HTTPException: If user is not admin
     """
     if not current_user.is_admin():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permessi insufficienti: richiesto ruolo ADMIN"
+            detail="Insufficient permissions: ADMIN role required"
         )
 
     return current_user
@@ -106,15 +106,15 @@ async def require_super_user(
     current_user: CurrentUser = Depends(get_current_user)
 ) -> CurrentUser:
     """
-    Dependency che richiede ruolo SUPER_USER o ADMIN
+    Dependency that requires SUPER_USER or ADMIN role
 
     Raises:
-        HTTPException: Se utente non è super_user o admin
+        HTTPException: If user is not super_user or admin
     """
     if not (current_user.is_super_user() or current_user.is_admin()):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permessi insufficienti: richiesto ruolo SUPER_USER o ADMIN"
+            detail="Insufficient permissions: SUPER_USER or ADMIN role required"
         )
 
     return current_user
@@ -124,15 +124,15 @@ async def require_upload_permission(
     current_user: CurrentUser = Depends(get_current_user)
 ) -> CurrentUser:
     """
-    Dependency che richiede permesso di upload
+    Dependency that requires upload permission
 
     Raises:
-        HTTPException: Se utente non ha permesso di upload
+        HTTPException: If user doesn't have upload permission
     """
     if not current_user.can_upload():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permessi insufficienti: non puoi caricare documenti"
+            detail="Insufficient permissions: you cannot upload documents"
         )
 
     return current_user
@@ -142,29 +142,29 @@ async def require_delete_permission(
     current_user: CurrentUser = Depends(get_current_user)
 ) -> CurrentUser:
     """
-    Dependency che richiede permesso di cancellazione
+    Dependency that requires delete permission
 
     Raises:
-        HTTPException: Se utente non ha permesso di cancellazione
+        HTTPException: If user doesn't have delete permission
     """
     if not current_user.can_delete():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permessi insufficienti: non puoi cancellare documenti"
+            detail="Insufficient permissions: you cannot delete documents"
         )
 
     return current_user
 
 
-# Optional: Dependency per route pubbliche con utente opzionale
+# Optional: Dependency for public routes with optional user
 async def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> Optional[CurrentUser]:
     """
-    Dependency per ottenere utente corrente se presente (route pubbliche)
+    Dependency to get current user if present (public routes)
 
     Returns:
-        CurrentUser se token valido, None altrimenti
+        CurrentUser if token valid, None otherwise
     """
     if not credentials:
         return None

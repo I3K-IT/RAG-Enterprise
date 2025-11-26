@@ -140,13 +140,13 @@ class OCRService:
                 except Exception as e:
                     logger.error(f"Tika request error: {type(e).__name__}: {str(e)}")
             
-            # 🔧 FALLBACK A TESSERACT se Tika non ha estratto abbastanza
+            # 🔧 FALLBACK TO TESSERACT if Tika didn't extract enough
             logger.warning("⚠️  Tika extraction insufficient, trying Tesseract...")
             tesseract_text = self._extract_with_tesseract(file_path)
             if tesseract_text and len(tesseract_text.strip()) > 0:
                 logger.info(f"✅ {len(tesseract_text)} chars (Tesseract fallback)")
                 return tesseract_text
-            
+
             logger.warning("⚠️  No extraction worked")
             return ""
         except Exception as e:
@@ -191,27 +191,27 @@ class OCRService:
             return ""
     
     def _extract_with_tesseract(self, file_path: str) -> str:
-        """Fallback: estrae testo usando Tesseract direttamente"""
+        """Fallback: extract text using Tesseract directly"""
         try:
             import pytesseract
             from pdf2image import convert_from_path
-            
-            logger.info(f"🔍 Tesseract: convertendo PDF a immagini...")
+
+            logger.info(f"🔍 Tesseract: converting PDF to images...")
             images = convert_from_path(file_path)
-            logger.info(f"📄 {len(images)} pagine convertite")
-            
+            logger.info(f"📄 {len(images)} pages converted")
+
             text = ""
             for i, img in enumerate(images):
-                logger.info(f"  OCR pagina {i+1}/{len(images)}...")
+                logger.info(f"  OCR page {i+1}/{len(images)}...")
                 page_text = pytesseract.image_to_string(img, lang='ita+eng')
                 text += page_text + "\n"
-            
-            logger.info(f"✅ Tesseract estratto {len(text)} chars")
-            logger.info(f"📋 TESTO TESSERACT:\n{text[:1000]}")
+
+            logger.info(f"✅ Tesseract extracted {len(text)} chars")
+            logger.info(f"📋 TESSERACT TEXT:\n{text[:1000]}")
             return text
-            
+
         except ImportError as e:
-            logger.error(f"❌ Modulo mancante: {e}")
+            logger.error(f"❌ Missing module: {e}")
             return ""
         except Exception as e:
             logger.error(f"❌ Tesseract failed: {type(e).__name__}: {str(e)}")

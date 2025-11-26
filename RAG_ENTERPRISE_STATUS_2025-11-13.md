@@ -7,33 +7,33 @@
 
 ## 📋 EXECUTIVE SUMMARY
 
-**RAG Enterprise** è un **sistema RAG enterprise-grade self-contained** per il deployment autonomo in aziende. È operazionale con architecture completa, ma **necessita stabilizzazione del retrieval** prima del primo commit.
+**RAG Enterprise** is a **self-contained enterprise-grade RAG system** for autonomous deployment in companies. It is operational with complete architecture, but **requires retrieval stabilization** before first commit.
 
-### ✅ Cosa Funziona
-- Setup automatico (setup.sh)
-- OCR end-to-end (Tika + Tesseract fallback)
-- Embedding con BAAI/bge-m3 (multilingue, 1024-dim)
+### ✅ What Works
+- Automatic setup (setup.sh)
+- End-to-end OCR (Tika + Tesseract fallback)
+- Embedding with BAAI/bge-m3 (multilingual, 1024-dim)
 - Vector storage in Qdrant (batch insertion)
-- LLM generation con Ollama (neural-chat)
-- Memory conversazionale
+- LLM generation with Ollama (neural-chat)
+- Conversational memory
 - Document type detection (IDENTITY_CARD, GENERIC_DOCUMENT, etc.)
-- Structured field extraction (CF, indirizzo, data da CI)
+- Structured field extraction (tax code, address, date from ID)
 - React custom frontend
 - GPU acceleration (NVIDIA CUDA)
 
-### ❌ Cosa Needs Fixing
-- Retrieval retrieva documenti sbagliati con >3 documenti
-- Threshold 0.40 troppo basso → contamina risposte
-- LLM hallucina dati (CF fake) quando retrieval confuso
-- Testo corrotto in alcuni sources (encoding UTF-8)
-- No validation che i dati estratti siano corretti
+### ❌ What Needs Fixing
+- Retrieval retrieves wrong documents with >3 documents
+- Threshold 0.40 too low → contaminates responses
+- LLM hallucinates data (fake tax code) when retrieval confused
+- Corrupted text in some sources (UTF-8 encoding)
+- No validation that extracted data is correct
 
-### 🎯 KPI Attuale
-- ✅ Single document: CF corretto
-- ❌ Multiple documents: CF inventato
-- ✅ Speed: 2-5 secondi per query
-- ✅ OCR quality: Tesseract estrae bene da PDF di qualità
-- ❌ Stabilità: Instabile con >3 documenti
+### 🎯 Current KPIs
+- ✅ Single document: Tax code correct
+- ❌ Multiple documents: Tax code invented
+- ✅ Speed: 2-5 seconds per query
+- ✅ OCR quality: Tesseract extracts well from quality PDFs
+- ❌ Stability: Unstable with >3 documents
 
 ---
 
@@ -285,9 +285,9 @@ else: return 'GENERIC_DOCUMENT'
 **Field Extraction** (Regex-based):
 ```
 IDENTITY_CARD:
-├─ codice_fiscale: [A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]
-├─ numero_carta: [A-Z]{2}\d{6}[A-Z]{2}
-└─ indirizzo: VIA/VIALE + numero + città
+├─ tax_code: [A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]
+├─ card_number: [A-Z]{2}\d{6}[A-Z]{2}
+└─ address: VIA/VIALE + number + city
 
 PASSPORT, DRIVING_LICENSE: [Not yet implemented]
 ```
@@ -392,7 +392,7 @@ Timeline:  Needs testing with 5+ documents
 
 **Issue 2: LLM Hallucination**
 ```
-Symptom: Invents data (CF: "051969FRM78D102F" when should be "MRCFNC69E20E329H")
+Symptom: Invents data (tax code: "051969FRM78D102F" when should be "MRCFNC69E20E329H")
 Status:  Triggered by ambiguous retrieval context
 Root Cause: LLM generates plausible-looking but fake data when unsure
 Solution:  1) Fix retrieval, 2) Add validation, 3) Better prompting
@@ -409,7 +409,7 @@ Solution:  Explicit UTF-8 validation in qdrant_connector.py
 
 **Issue 4: Regex Field Extraction Too Fragile**
 ```
-Symptom: CF not extracted if formatting changes slightly
+Symptom: Tax code not extracted if formatting changes slightly
 Root Cause: Hardcoded regex patterns don't account for OCR variations
 Solution:  Implement universal Document Schema system (see Roadmap)
 ```
@@ -420,7 +420,7 @@ Solution:  Implement universal Document Schema system (see Roadmap)
 ```
 Symptom: System accepts and indexes any extracted data
 Root Cause: No schema validation
-Solution:  Add validation layer (16-char CF, valid date format, etc.)
+Solution:  Add validation layer (16-char tax code, valid date format, etc.)
 ```
 
 **Issue 6: No Rate Limiting**
@@ -447,7 +447,7 @@ Upload: 2.94s
 ├─ Chunking: 0.00s → 1 chunk
 └─ Indexing: 1.60s
 
-Query: "Qual è il codice fiscale?"
+Query: "What is the tax code?"
 Response Time: 3.5s
 Result: ✅ MRCFNC69E20E329H (CORRECT!)
 Sources: CI_Franco2.pdf (54.9%)
@@ -460,9 +460,9 @@ Queries Tested: 5
 Results:
 ├─ Name + Birth: ✅ Correct (memory helps)
 ├─ Address: ⚠️ Found right doc but cited wrong one (49% vs 54%)
-├─ CF (1st attempt): ❌ Hallucinated "051969FRM78D102F"
-├─ CF (after restart): ✅ Correct for 1 doc, then ❌ after adding more
-└─ Overall: INSTABLE - depends on document order and memory state
+├─ Tax code (1st attempt): ❌ Hallucinated "051969FRM78D102F"
+├─ Tax code (after restart): ✅ Correct for 1 doc, then ❌ after adding more
+└─ Overall: UNSTABLE - depends on document order and memory state
 ```
 
 ### Performance Benchmarks
@@ -484,7 +484,7 @@ Results:
 
 **Scenario** (with 5 documents):
 ```
-Query: "codice fiscale di marchetti"
+Query: "marchetti tax code"
 
 Qdrant Results:
 ├─ CI_Franco.pdf: 0.56 ✅ CORRECT
@@ -561,13 +561,13 @@ git tag v1.0-beta
 
 ### Phase 1: STABILIZATION (1-2 weeks)
 - [ ] Universal Document Schema System
-  - Define schema for each doc type
+  - Define schema for each document type
   - Extract via LLM (not regex)
   - Validate results
   - Fallback to user confirmation
 - [ ] Add reranker (bge-reranker-base)
 - [ ] Implement BM25 hybrid search
-- [ ] Add rate limiting + auth
+- [ ] Add rate limiting + authentication
 
 ### Phase 2: FEATURES (2-3 weeks)
 - [ ] Multi-language support (>50 languages)
@@ -683,7 +683,7 @@ TEMPERATURE: 0.7 (balanced creativity/accuracy)
    - After fix: ready for commit
 
 2. **Biggest Technical Debt**: Regex-based field extraction
-   - Works for one doc type at a time
+   - Works for one document type at a time
    - Breaks with formatting variations
    - Future: Replace with Universal Schema System
 

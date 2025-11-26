@@ -1,5 +1,5 @@
 """
-Sistema di autenticazione JWT
+JWT Authentication System
 """
 
 import jwt
@@ -10,22 +10,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Configurazione JWT
+# JWT Configuration
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-please-2025")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 ore
+ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
-    Crea un JWT access token
+    Create a JWT access token
 
     Args:
-        data: Dati da includere nel token (user_id, username, role)
-        expires_delta: Durata del token (default: 8 ore)
+        data: Data to include in the token (user_id, username, role)
+        expires_delta: Token duration (default: 8 hours)
 
     Returns:
-        Token JWT come stringa
+        JWT token as string
     """
     to_encode = data.copy()
 
@@ -42,38 +42,38 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def decode_access_token(token: str) -> Optional[Dict]:
     """
-    Decodifica e valida un JWT token
+    Decode and validate a JWT token
 
     Args:
-        token: Token JWT da decodificare
+        token: JWT token to decode
 
     Returns:
-        Payload del token se valido, None se invalido o scaduto
+        Token payload if valid, None if invalid or expired
     """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
-        logger.warning("Token JWT scaduto")
+        logger.warning("JWT token expired")
         return None
     except jwt.InvalidTokenError as e:
-        logger.warning(f"Token JWT invalido: {e}")
+        logger.warning(f"Invalid JWT token: {e}")
         return None
 
 
 def verify_token(token: str) -> Optional[Dict]:
     """
-    Verifica token e ritorna i dati utente
+    Verify token and return user data
 
     Returns:
-        Dict con user_id, username, role se valido, None altrimenti
+        Dict with user_id, username, role if valid, None otherwise
     """
     payload = decode_access_token(token)
 
     if not payload:
         return None
 
-    # Verifica che ci siano i campi necessari
+    # Verify that necessary fields are present
     if "user_id" not in payload or "username" not in payload or "role" not in payload:
         return None
 
@@ -86,13 +86,13 @@ def verify_token(token: str) -> Optional[Dict]:
 
 def create_user_token(user: Dict) -> str:
     """
-    Crea token per un utente
+    Create token for a user
 
     Args:
-        user: Dict con dati utente (id, username, role)
+        user: Dict with user data (id, username, role)
 
     Returns:
-        Token JWT
+        JWT token
     """
     token_data = {
         "user_id": user["id"],

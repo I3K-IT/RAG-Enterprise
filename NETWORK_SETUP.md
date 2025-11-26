@@ -1,37 +1,37 @@
-# 🌐 RAG Enterprise - Configurazione Accesso Network
+# 🌐 RAG Enterprise - Network Access Configuration
 
-Guida completa per configurare RAG Enterprise per l'accesso da **rete locale (LAN)** o da **internet**.
-
----
-
-## 📋 Prerequisiti
-
-- Docker e Docker Compose installati
-- RAG Enterprise già funzionante su localhost
-- Accesso al router (solo per configurazione internet)
+Complete guide to configure RAG Enterprise for access from **local area network (LAN)** or **internet**.
 
 ---
 
-## 🏠 Scenario 1: Accesso LOCALHOST (Default)
+## 📋 Prerequisites
 
-**Quando usarlo:** Sviluppo locale, test sul singolo computer.
+- Docker and Docker Compose installed
+- RAG Enterprise already working on localhost
+- Router access (only for internet configuration)
 
-**Configurazione:** Già attiva di default, nessuna modifica richiesta.
+---
+
+## 🏠 Scenario 1: LOCALHOST Access (Default)
+
+**When to use:** Local development, testing on single computer.
+
+**Configuration:** Already active by default, no changes required.
 
 ```bash
-# Il sistema è accessibile solo da:
+# System is accessible only from:
 http://localhost:3000
 ```
 
 ---
 
-## 🏢 Scenario 2: Accesso RETE LOCALE (LAN)
+## 🏢 Scenario 2: LOCAL NETWORK Access (LAN)
 
-**Quando usarlo:** Accesso da altri dispositivi nella stessa rete (es: ufficio, casa).
+**When to use:** Access from other devices on the same network (e.g., office, home).
 
-### 📝 Step 1: Trova l'IP del server
+### 📝 Step 1: Find the server IP
 
-Sul server dove gira Docker, esegui:
+On the server where Docker is running, execute:
 
 ```bash
 # Linux/Mac
@@ -41,54 +41,54 @@ ip addr show | grep "inet " | grep -v 127.0.0.1
 ipconfig | findstr IPv4
 ```
 
-**Esempio output:** `192.168.1.100`
+**Example output:** `192.168.1.100`
 
-### 📝 Step 2: Modifica il file `.env`
+### 📝 Step 2: Modify the `.env` file
 
-Apri il file `.env` nella root del progetto:
+Open the `.env` file in the project root:
 
 ```bash
 cd /path/to/rag-enterprise
 nano .env
 ```
 
-Modifica la riga `VITE_API_URL`:
+Modify the `VITE_API_URL` line:
 
 ```bash
-# Prima (localhost)
+# Before (localhost)
 VITE_API_URL=http://localhost:8000
 
-# Dopo (LAN) - sostituisci con il TUO IP
+# After (LAN) - replace with YOUR IP
 VITE_API_URL=http://192.168.1.100:8000
 ```
 
-### 📝 Step 3: Ricostruisci e riavvia i container
+### 📝 Step 3: Rebuild and restart the containers
 
 ```bash
 cd rag-enterprise-structure
 
-# Ricostruisci il frontend con la nuova configurazione
+# Rebuild the frontend with the new configuration
 docker compose build frontend
 
-# Riavvia tutti i servizi
+# Restart all services
 docker compose up -d
 ```
 
-### 📝 Step 4: Testa l'accesso
+### 📝 Step 4: Test access
 
-Da un altro dispositivo nella stessa rete, apri il browser e vai a:
+From another device on the same network, open the browser and go to:
 
 ```
 http://192.168.1.100:3000
 ```
 
-**✅ Fatto!** Ora puoi accedere da qualsiasi dispositivo nella tua rete locale.
+**✅ Done!** Now you can access from any device on your local network.
 
 ---
 
 ### ⚠️ Firewall
 
-Se non riesci ad accedere, potrebbe essere il firewall del server. Apri le porte necessarie:
+If you cannot access, it might be the server firewall. Open the necessary ports:
 
 ```bash
 # Ubuntu/Debian
@@ -103,18 +103,18 @@ sudo firewall-cmd --reload
 
 ---
 
-## 🌍 Scenario 3: Accesso da INTERNET (Avanzato)
+## 🌍 Scenario 3: INTERNET Access (Advanced)
 
-**Quando usarlo:** Accesso pubblico da qualsiasi luogo con connessione internet.
+**When to use:** Public access from anywhere with internet connection.
 
-### ⚠️ Requisiti
+### ⚠️ Requirements
 
-1. **Dominio** (es: tuodominio.com) o Dynamic DNS
-2. **IP pubblico statico** o Dynamic DNS service
-3. **Reverse proxy** (Nginx) con SSL
-4. **Port forwarding** sul router
+1. **Domain** (e.g., yourdomain.com) or Dynamic DNS
+2. **Static public IP** or Dynamic DNS service
+3. **Reverse proxy** (Nginx) with SSL
+4. **Port forwarding** on router
 
-### 🏗️ Architettura Consigliata
+### 🏗️ Recommended Architecture
 
 ```
 Internet
@@ -128,9 +128,9 @@ Docker Containers (Frontend:3000, Backend:8000)
 
 ---
 
-### 📝 Step 1: Configura Nginx Reverse Proxy
+### 📝 Step 1: Configure Nginx Reverse Proxy
 
-Installa Nginx sul server:
+Install Nginx on the server:
 
 ```bash
 # Ubuntu/Debian
@@ -141,19 +141,19 @@ sudo apt install nginx
 sudo yum install nginx
 ```
 
-Crea il file di configurazione:
+Create the configuration file:
 
 ```bash
 sudo nano /etc/nginx/sites-available/rag-enterprise
 ```
 
-Incolla questa configurazione (sostituisci `tuodominio.com` con il tuo dominio):
+Paste this configuration (replace `yourdomain.com` with your domain):
 
 ```nginx
 # HTTP (redirect to HTTPS)
 server {
     listen 80;
-    server_name tuodominio.com www.tuodominio.com;
+    server_name yourdomain.com www.yourdomain.com;
 
     # Redirect to HTTPS
     return 301 https://$server_name$request_uri;
@@ -162,11 +162,11 @@ server {
 # HTTPS
 server {
     listen 443 ssl http2;
-    server_name tuodominio.com www.tuodominio.com;
+    server_name yourdomain.com www.yourdomain.com;
 
-    # SSL Certificate (usa Certbot per ottenerli gratuitamente)
-    ssl_certificate /etc/letsencrypt/live/tuodominio.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/tuodominio.com/privkey.pem;
+    # SSL Certificate (use Certbot to get them for free)
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
 
     # SSL Configuration
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -195,7 +195,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # Timeout per LLM queries (può richiedere tempo)
+        # Timeout for LLM queries (can take time)
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
@@ -208,7 +208,7 @@ server {
         proxy_set_header Host $host;
     }
 
-    # Upload files (timeout maggiore)
+    # Upload files (longer timeout)
     location /api/documents/upload {
         proxy_pass http://localhost:8000/api/documents/upload;
         proxy_http_version 1.1;
@@ -219,7 +219,7 @@ server {
 }
 ```
 
-Abilita il sito:
+Enable the site:
 
 ```bash
 # Ubuntu/Debian
@@ -234,21 +234,21 @@ sudo systemctl restart nginx
 
 ---
 
-### 📝 Step 2: Ottieni Certificato SSL con Let's Encrypt
+### 📝 Step 2: Obtain SSL Certificate with Let's Encrypt
 
 ```bash
-# Installa Certbot
+# Install Certbot
 sudo apt install certbot python3-certbot-nginx  # Ubuntu/Debian
-# oppure
+# or
 sudo yum install certbot python3-certbot-nginx  # CentOS/RHEL
 
-# Ottieni certificato SSL gratuito
-sudo certbot --nginx -d tuodominio.com -d www.tuodominio.com
+# Obtain free SSL certificate
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
 
-# Certbot configurerà automaticamente Nginx con HTTPS
+# Certbot will automatically configure Nginx with HTTPS
 ```
 
-Il certificato si rinnoverà automaticamente. Verifica con:
+The certificate will renew automatically. Verify with:
 
 ```bash
 sudo certbot renew --dry-run
@@ -256,34 +256,34 @@ sudo certbot renew --dry-run
 
 ---
 
-### 📝 Step 3: Configura Port Forwarding sul Router
+### 📝 Step 3: Configure Port Forwarding on Router
 
-Accedi al pannello del tuo router (es: 192.168.1.1) e crea queste regole:
+Access your router panel (e.g., 192.168.1.1) and create these rules:
 
-| Porta Esterna | Porta Interna | IP Interno       | Protocollo |
-|---------------|---------------|------------------|------------|
-| 80            | 80            | 192.168.1.100    | TCP        |
-| 443           | 443           | 192.168.1.100    | TCP        |
+| External Port | Internal Port | Internal IP      | Protocol |
+|---------------|---------------|------------------|----------|
+| 80            | 80            | 192.168.1.100    | TCP      |
+| 443           | 443           | 192.168.1.100    | TCP      |
 
-*(Sostituisci 192.168.1.100 con l'IP del tuo server)*
+*(Replace 192.168.1.100 with your server IP)*
 
 ---
 
-### 📝 Step 4: Aggiorna `.env` per Internet
+### 📝 Step 4: Update `.env` for Internet
 
 ```bash
 cd /path/to/rag-enterprise
 nano .env
 ```
 
-Modifica:
+Modify:
 
 ```bash
-# Internet con SSL
-VITE_API_URL=https://tuodominio.com/api
+# Internet with SSL
+VITE_API_URL=https://yourdomain.com/api
 ```
 
-Ricostruisci:
+Rebuild:
 
 ```bash
 cd rag-enterprise-structure
@@ -293,77 +293,77 @@ docker compose up -d
 
 ---
 
-### 📝 Step 5: Verifica Accesso
+### 📝 Step 5: Verify Access
 
-Da qualsiasi dispositivo connesso a internet, apri:
+From any device connected to internet, open:
 
 ```
-https://tuodominio.com
+https://yourdomain.com
 ```
 
-**✅ Fatto!** Il tuo sistema è accessibile da internet con SSL.
+**✅ Done!** Your system is accessible from internet with SSL.
 
 ---
 
-## 🔒 Sicurezza - Best Practices
+## 🔒 Security - Best Practices
 
-### 1. **Cambia Password di Default**
+### 1. **Change Default Password**
 
-Dopo il primo accesso, **cambia immediatamente** la password di default:
+After first access, **immediately change** the default password:
 
 - Username: `admin`
 - Password: `admin123`
 
-Vai su: **🔑 Cambia Password** nell'interfaccia.
+Go to: **🔑 Change Password** in the interface.
 
-### 2. **Usa Password Forti**
+### 2. **Use Strong Passwords**
 
-- Minimo 12 caratteri
-- Lettere maiuscole e minuscole
-- Numeri e simboli
+- Minimum 12 characters
+- Upper and lowercase letters
+- Numbers and symbols
 
-### 3. **Limita Accesso Admin**
+### 3. **Limit Admin Access**
 
-Crea utenti con ruolo `user` o `super_user` per operazioni quotidiane.
+Create users with `user` or `super_user` role for daily operations.
 
-### 4. **Backup Database**
+### 4. **Database Backup**
 
-Il database utenti è in:
+The user database is in:
 
 ```bash
 rag-enterprise-structure/backend/data/rag_users.db
 ```
 
-Fai backup regolari:
+Make regular backups:
 
 ```bash
 # Backup
 cp rag-enterprise-structure/backend/data/rag_users.db ~/backup/rag_users_$(date +%Y%m%d).db
 
-# Restore (se necessario)
+# Restore (if needed)
 cp ~/backup/rag_users_YYYYMMDD.db rag-enterprise-structure/backend/data/rag_users.db
 docker compose restart backend
 ```
 
-### 5. **Firewall Restrittivo**
+### 5. **Restrictive Firewall**
 
-Se usi LAN, blocca l'accesso da internet:
+If using LAN, block internet access:
 
 ```bash
-# Permetti solo dalla LAN
+# Allow only from LAN
 sudo ufw allow from 192.168.1.0/24 to any port 3000
 sudo ufw allow from 192.168.1.0/24 to any port 8000
 ```
 
-### 6. **Monitora Accessi**
+### 6. **Monitor Access**
 
-Controlla i log:
+Check the logs:
 
 ```bash
-# Log backend
+# Backend log
 docker compose logs backend --tail 100
 
-# Log Nginx (se usato)
+# Nginx log (if used)
 sudo tail -f /var/log/nginx/access.log
 ```
 
@@ -371,67 +371,67 @@ sudo tail -f /var/log/nginx/access.log
 
 ## 🐛 Troubleshooting
 
-### Problema: "net::ERR_CONNECTION_REFUSED"
+### Problem: "net::ERR_CONNECTION_REFUSED"
 
-**Causa:** Frontend non riesce a contattare il backend.
+**Cause:** Frontend cannot contact the backend.
 
-**Soluzione:**
-1. Verifica che `VITE_API_URL` nel `.env` sia corretto
-2. Ricostruisci il frontend: `docker compose build frontend`
-3. Verifica che il backend sia attivo: `docker compose ps`
+**Solution:**
+1. Verify that `VITE_API_URL` in `.env` is correct
+2. Rebuild the frontend: `docker compose build frontend`
+3. Verify that backend is active: `docker compose ps`
 
-### Problema: "401 Unauthorized" su tutte le richieste
+### Problem: "401 Unauthorized" on all requests
 
-**Causa:** Token JWT scaduto o non valido.
+**Cause:** JWT token expired or invalid.
 
-**Soluzione:**
-1. Fai logout e login
-2. Verifica che l'ora del server sia corretta: `date`
+**Solution:**
+1. Logout and login
+2. Verify that server time is correct: `date`
 
-### Problema: CORS errors
+### Problem: CORS errors
 
-**Causa:** Il backend blocca richieste da origini diverse.
+**Cause:** Backend blocks requests from different origins.
 
-**Soluzione:**
-Il backend ha `allow_origins=["*"]` di default (vedi `app.py:161`). Se necessario, modifica:
+**Solution:**
+Backend has `allow_origins=["*"]` by default (see `app.py:161`). If needed, modify:
 
 ```python
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://tuodominio.com", "https://tuodominio.com"],
+    allow_origins=["http://yourdomain.com", "https://yourdomain.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 ```
 
-### Problema: Upload file fallisce
+### Problem: File upload fails
 
-**Causa:** Timeout troppo breve o file troppo grande.
+**Cause:** Timeout too short or file too large.
 
-**Soluzione:**
-1. Aumenta timeout Nginx (vedi configurazione sopra)
-2. Aumenta `client_max_body_size` in Nginx
-
----
-
-## 📞 Supporto
-
-Per problemi o domande:
-- Controlla i log: `docker compose logs backend --tail 100`
-- Verifica health: `curl http://localhost:8000/health`
-- GitHub Issues: (link al tuo repository)
+**Solution:**
+1. Increase Nginx timeout (see configuration above)
+2. Increase `client_max_body_size` in Nginx
 
 ---
 
-## 🎯 Riepilogo Configurazioni
+## 📞 Support
 
-| Scenario | `.env` VITE_API_URL | Accessibile Da |
+For problems or questions:
+- Check logs: `docker compose logs backend --tail 100`
+- Verify health: `curl http://localhost:8000/health`
+- GitHub Issues: (link to your repository)
+
+---
+
+## 🎯 Configuration Summary
+
+| Scenario | `.env` VITE_API_URL | Accessible From |
 |----------|--------------------------|----------------|
-| **Localhost** | `http://localhost:8000` | Solo questo computer |
-| **LAN** | `http://192.168.1.100:8000` | Dispositivi nella rete locale |
-| **Internet** | `https://tuodominio.com/api` | Ovunque con internet |
+| **Localhost** | `http://localhost:8000` | This computer only |
+| **LAN** | `http://192.168.1.100:8000` | Devices on local network |
+| **Internet** | `https://yourdomain.com/api` | Anywhere with internet |
 
 ---
 
-**Fatto!** 🎉 Il tuo sistema RAG Enterprise è configurato per l'accesso network.
+**Done!** 🎉 Your RAG Enterprise system is configured for network access.

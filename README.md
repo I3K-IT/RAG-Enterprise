@@ -1,6 +1,6 @@
-# RAG Enterprise - Sistema RAG Locale Production-Ready
+# RAG Enterprise - Production-Ready Local RAG System
 
-**Sistema completo di Retrieval-Augmented Generation (RAG) 100% locale** per aziende che necessitano di privacy e controllo totale sui propri dati.
+**Complete 100% local Retrieval-Augmented Generation (RAG) system** for businesses requiring privacy and total control over their data.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -8,26 +8,26 @@
 
 ---
 
-## 🎯 Caratteristiche Principali
+## 🎯 Main Features
 
-- ✅ **100% Locale**: Nessun dato esce dalla tua infrastruttura
-- 🚀 **Production-Ready**: Testato con database di 10.000+ documenti
-- 🤖 **Modelli SOTA 2025**: Qwen2.5, Mistral, Llama3.1 (quantizzati Q4)
-- 🌍 **Multilingue**: Supporto italiano nativo + 28 altre lingue
-- 🎨 **UI ChatGPT-like**: Interfaccia familiare con Open WebUI
-- 📊 **Vector Database**: Qdrant per ricerca semantica ultra-veloce
-- 🔧 **Gestione Documenti**: Upload PDF, DOCX, TXT, MD e altri formati
-- 🎯 **Gap Filtering Intelligente**: Riduce "noise dilution" in scenari multi-documento
+- ✅ **100% Local**: No data leaves your infrastructure
+- 🚀 **Production-Ready**: Tested with 10,000+ document databases
+- 🤖 **SOTA 2025 Models**: Qwen2.5, Mistral, Llama3.1 (Q4 quantized)
+- 🌍 **Multilingual**: Native Italian support + 28 other languages
+- 🎨 **ChatGPT-like UI**: Familiar interface with Open WebUI
+- 📊 **Vector Database**: Qdrant for ultra-fast semantic search
+- 🔧 **Document Management**: Upload PDF, DOCX, TXT, MD and other formats
+- 🎯 **Intelligent Gap Filtering**: Reduces "noise dilution" in multi-document scenarios
 
 ---
 
-## 📋 Architettura
+## 📋 Architecture
 
 ```
 ┌─────────────────────────────────────────┐
 │  Open WebUI Frontend (Port 3000)       │
-│  - Interfaccia ChatGPT-like             │
-│  - Upload documenti drag&drop           │
+│  - ChatGPT-like interface               │
+│  - Drag&drop document upload            │
 └─────────────────┬───────────────────────┘
                   │ REST API
                   ↓
@@ -51,153 +51,153 @@
 
 ---
 
-## 🚀 Installazione Rapida
+## 🚀 Quick Installation
 
-### Prerequisiti
+### Prerequisites
 
-- **OS**: Ubuntu 20.04+ (consigliato 22.04)
-- **GPU**: NVIDIA con 8-16GB VRAM (driver installati)
-- **RAM**: 16GB minimo, 32GB consigliato
+- **OS**: Ubuntu 20.04+ (22.04 recommended)
+- **GPU**: NVIDIA with 8-16GB VRAM (drivers installed)
+- **RAM**: 16GB minimum, 32GB recommended
 - **Storage**: 50GB+ SSD
 - **Software**: Docker + Docker Compose, NVIDIA Container Toolkit
 
-### Setup con Script Automatico
+### Setup with Automated Script
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/your-org/rag-enterprise.git
 cd rag-enterprise/rag-enterprise-structure
 
-# 2. Esegui setup (scegli profilo in base alla tua GPU)
-./setup.sh standard    # Per 12-16GB VRAM (RTX 4070, RTX 4060 Ti 16GB)
-# oppure
-./setup.sh minimal     # Per 8-12GB VRAM (RTX 4060, RTX 3060)
-# oppure
-./setup.sh advanced    # Per 16-24GB VRAM (RTX 4080, RTX 4090)
+# 2. Run setup (choose profile based on your GPU)
+./setup.sh standard    # For 12-16GB VRAM (RTX 4070, RTX 4060 Ti 16GB)
+# or
+./setup.sh minimal     # For 8-12GB VRAM (RTX 4060, RTX 3060)
+# or
+./setup.sh advanced    # For 16-24GB VRAM (RTX 4080, RTX 4090)
 
-# 3. Attendi completamento (15-20 minuti primo avvio)
-# 4. Accedi a http://localhost:3000
+# 3. Wait for completion (15-20 minutes first run)
+# 4. Access http://localhost:3000
 ```
 
 ---
 
-## 🖥️ Profili Hardware e Modelli
+## 🖥️ Hardware Profiles and Models
 
-### 📊 Tabella Comparativa
+### 📊 Comparison Table
 
-| Profilo | GPU VRAM | RAM | LLM | Embedding | Threshold | Use Case |
+| Profile | GPU VRAM | RAM | LLM | Embedding | Threshold | Use Case |
 |---------|----------|-----|-----|-----------|-----------|----------|
-| **MINIMAL** | 8-12GB | 16GB | mistral:7b-q4 (4GB) | mpnet-base (430MB) | 0.40 | Sviluppo, piccoli dataset |
-| **STANDARD** ⭐ | 12-16GB | 32GB | **qwen2.5:14b-q4 (8GB)** | **bge-m3 (2.3GB)** | **0.35** | **Production, uso reale** |
-| **ADVANCED** | 16-24GB | 64GB+ | qwen2.5:32b-q4 (12GB) | instructor-large (1.3GB) | 0.30 | Massima qualità |
+| **MINIMAL** | 8-12GB | 16GB | mistral:7b-q4 (4GB) | mpnet-base (430MB) | 0.40 | Development, small datasets |
+| **STANDARD** ⭐ | 12-16GB | 32GB | **qwen2.5:14b-q4 (8GB)** | **bge-m3 (2.3GB)** | **0.35** | **Production, real-world use** |
+| **ADVANCED** | 16-24GB | 64GB+ | qwen2.5:32b-q4 (12GB) | instructor-large (1.3GB) | 0.30 | Maximum quality |
 
-### 🎮 GPU Consigliate per Profilo
+### 🎮 Recommended GPUs by Profile
 
 #### MINIMAL (8-12GB VRAM)
 - ✅ **RTX 4060** (8GB) - €300-350
 - ✅ **RTX 3060** (12GB) - €250-300
 - ✅ **RTX 3060 Ti** (8GB) - €300-350
-- ⚠️ **RTX 4060 Ti 8GB** - Stretto ma funziona
+- ⚠️ **RTX 4060 Ti 8GB** - Tight but works
 
-#### STANDARD (12-16GB VRAM) ⭐ RACCOMANDATO
+#### STANDARD (12-16GB VRAM) ⭐ RECOMMENDED
 - ✅ **RTX 4070** (12GB) - €550-650
 - ✅ **RTX 4060 Ti 16GB** (16GB) - €500-550
 - ✅ **RTX 4070 Ti** (12GB) - €750-850
-- ✅ **RTX 3090** (24GB) - €800-1000 (usata)
+- ✅ **RTX 3090** (24GB) - €800-1000 (used)
 
 #### ADVANCED (16-24GB VRAM)
 - ✅ **RTX 4080** (16GB) - €1100-1300
 - ✅ **RTX 4090** (24GB) - €1800-2200
-- ✅ **RTX 3090 Ti** (24GB) - €1000-1200 (usata)
+- ✅ **RTX 3090 Ti** (24GB) - €1000-1200 (used)
 - ✅ **A4000** (16GB) - Workstation
 
 ---
 
-## 🤖 Modelli LLM Disponibili
+## 🤖 Available LLM Models
 
-### Modelli SOTA 2025 (Quantizzati Q4_K_M)
+### SOTA 2025 Models (Q4_K_M Quantized)
 
-| Modello | Dimensioni | VRAM | Parametri | Qualità | Velocità | Raccomandato |
+| Model | Size | VRAM | Parameters | Quality | Speed | Recommended |
 |---------|------------|------|-----------|---------|----------|--------------|
 | **mistral:7b-instruct-q4** | 4.1GB | 8GB | 7B | ⭐⭐⭐⭐ | ~120 t/s | MINIMAL |
 | **qwen2.5:14b-instruct-q4** ⭐ | 8.0GB | 12GB | 14B | ⭐⭐⭐⭐⭐ | ~110 t/s | **STANDARD** |
 | **qwen2.5:32b-instruct-q4** | 12GB | 16GB | 32B | ⭐⭐⭐⭐⭐⭐ | ~80 t/s | ADVANCED |
 
-### Perché Qwen2.5?
+### Why Qwen2.5?
 
-- ✅ **SOTA 2025**: Training su 18 trilioni di token
-- ✅ **Eccellente su RAG**: Ottimizzato per retrieval tasks
-- ✅ **Multilingue**: 29 lingue (italiano perfetto)
-- ✅ **Meno allucinazioni**: Context window grande + training migliore
-- ✅ **Supera GPT-3.5**: Su benchmark RAG standard
+- ✅ **SOTA 2025**: Trained on 18 trillion tokens
+- ✅ **Excellent on RAG**: Optimized for retrieval tasks
+- ✅ **Multilingual**: 29 languages (perfect Italian)
+- ✅ **Fewer hallucinations**: Large context window + better training
+- ✅ **Surpasses GPT-3.5**: On standard RAG benchmarks
 
-### Quantizzazione Q4_K_M
+### Q4_K_M Quantization
 
-- **Q4_K_M**: Quantizzazione "smart" a 4-bit
-- **Qualità**: 95% vs modelli FP16 (perdita minima)
-- **VRAM**: 60% risparmio rispetto a non quantizzati
-- **Velocità**: Più veloce grazie a dimensioni ridotte
-- **K-quant**: Metodo superiore rispetto a legacy quantization
+- **Q4_K_M**: "Smart" 4-bit quantization
+- **Quality**: 95% vs FP16 models (minimal loss)
+- **VRAM**: 60% savings compared to non-quantized
+- **Speed**: Faster thanks to reduced size
+- **K-quant**: Superior method compared to legacy quantization
 
 ---
 
-## 🧠 Modelli Embedding
+## 🧠 Embedding Models
 
-| Modello | Dimensioni | Lingue | Dimensioni Vector | Qualità | Uso |
+| Model | Size | Languages | Vector Dimensions | Quality | Usage |
 |---------|------------|--------|-------------------|---------|-----|
 | **all-mpnet-base-v2** | 430MB | EN | 768 | ⭐⭐⭐ | MINIMAL |
 | **BAAI/bge-m3** ⭐ | 2.3GB | Multilingual | 1024 | ⭐⭐⭐⭐⭐ | **STANDARD** |
 | **instructor-large** | 1.3GB | Multilingual | 768 | ⭐⭐⭐⭐ | ADVANCED |
 
-**BGE-M3 è il default consigliato**: supporta retrieval denso, sparso e ColBERT simultaneamente.
+**BGE-M3 is the recommended default**: supports dense, sparse, and ColBERT retrieval simultaneously.
 
 ---
 
-## 🎛️ Configurazione Avanzata
+## 🎛️ Advanced Configuration
 
-### Variabili Ambiente (docker-compose.yml)
+### Environment Variables (docker-compose.yml)
 
 ```yaml
 environment:
-  # Modello LLM (cambia in base al profilo)
+  # LLM Model (change based on profile)
   LLM_MODEL: qwen2.5:14b-instruct-q4_K_M
 
-  # Modello embedding
+  # Embedding model
   EMBEDDING_MODEL: BAAI/bge-m3
 
-  # Threshold similarità (0.0-1.0)
-  # Più alto = più restrittivo
-  # 0.30 = permissivo, 0.40 = bilanciato, 0.50 = restrittivo
+  # Similarity threshold (0.0-1.0)
+  # Higher = more restrictive
+  # 0.30 = permissive, 0.40 = balanced, 0.50 = restrictive
   RELEVANCE_THRESHOLD: "0.35"
 
-  # GPU device (0 = prima GPU, 1 = seconda, etc.)
+  # GPU device (0 = first GPU, 1 = second, etc.)
   CUDA_VISIBLE_DEVICES: 0
 ```
 
 ### Gap-Based Filtering
 
-Il sistema implementa un **gap filtering intelligente** per ridurre "noise dilution":
+The system implements **intelligent gap filtering** to reduce "noise dilution":
 
 ```python
-# Se il documento migliore ha:
+# If the best document has:
 # - Score >= 50%
-# - Gap > 8% rispetto al secondo
-# → Filtra documenti con score < 45%
+# - Gap > 8% compared to the second
+# → Filter documents with score < 45%
 
-Esempio:
-Documento A: 62%  ← Rilevante
-Documento B: 44%  ← Rumore
+Example:
+Document A: 62%  ← Relevant
+Document B: 44%  ← Noise
 Gap: 18% (> 8%)
-→ Passa solo Documento A all'LLM
+→ Pass only Document A to LLM
 ```
 
-Questo previene che documenti irrilevanti "diluiscano" il contesto e confondano l'LLM.
+This prevents irrelevant documents from "diluting" the context and confusing the LLM.
 
 ---
 
-## 📚 Formati Supportati
+## 📚 Supported Formats
 
-### Upload Documenti
+### Document Upload
 
 - ✅ **PDF** (via Apache Tika + OCR)
 - ✅ **DOCX/DOC** (Microsoft Word)
@@ -207,55 +207,55 @@ Questo previene che documenti irrilevanti "diluiscano" il contesto e confondano 
 - ✅ **ODT** (OpenDocument)
 - ✅ **RTF, HTML, XML**
 
-### OCR Automatico
+### Automatic OCR
 
-- **Primary**: Apache Tika (veloce, preciso)
-- **Fallback**: Tesseract (se Tika fallisce)
-- **Encoding**: UTF-8 forzato per caratteri accentati italiani
+- **Primary**: Apache Tika (fast, accurate)
+- **Fallback**: Tesseract (if Tika fails)
+- **Encoding**: UTF-8 forced for Italian accented characters
 
 ---
 
-## 🔧 Comandi Utili
+## 🔧 Useful Commands
 
-### Gestione Sistema
+### System Management
 
 ```bash
-# Visualizza log
-docker compose logs -f              # Tutti i servizi
-docker compose logs -f backend      # Solo backend
-docker compose logs -f ollama       # Solo LLM
+# View logs
+docker compose logs -f              # All services
+docker compose logs -f backend      # Backend only
+docker compose logs -f ollama       # LLM only
 
-# Controllo servizi
-docker compose ps                   # Status containers
-docker compose restart backend      # Riavvia backend
-docker compose down                 # Ferma tutto
-docker compose up -d                # Riavvia tutto
+# Service control
+docker compose ps                   # Container status
+docker compose restart backend      # Restart backend
+docker compose down                 # Stop all
+docker compose up -d                # Restart all
 
-# Verifica salute
+# Health check
 curl http://localhost:8000/health   # Backend health
 curl http://localhost:6333/         # Qdrant status
 ```
 
-### Gestione Memoria Conversazionale
+### Conversational Memory Management
 
 ```bash
-# Visualizza memoria utenti
+# View user memory
 curl http://localhost:8000/api/admin/memory
 
-# Cancella memoria utente specifico
+# Delete specific user memory
 curl -X DELETE http://localhost:8000/api/admin/memory/default
 
-# Cancella TUTTA la memoria
+# Delete ALL memory
 curl -X DELETE http://localhost:8000/api/admin/memory
 ```
 
-### Cambio Modello LLM
+### LLM Model Change
 
 ```bash
-# 1. Pull nuovo modello
+# 1. Pull new model
 docker exec rag-ollama ollama pull qwen2.5:32b-instruct-q4_K_M
 
-# 2. Modifica docker-compose.yml
+# 2. Modify docker-compose.yml
 sed -i 's/LLM_MODEL: .*/LLM_MODEL: qwen2.5:32b-instruct-q4_K_M/' docker-compose.yml
 
 # 3. Restart
@@ -266,119 +266,119 @@ docker compose down && docker compose up -d
 
 ## 🐛 Troubleshooting
 
-### Backend non risponde
+### Backend not responding
 
 ```bash
-# Controlla log errori
+# Check error logs
 docker logs rag-backend --tail 100
 
-# Verifica GPU disponibile
+# Verify GPU available
 docker exec rag-backend nvidia-smi
 
-# Riavvio completo
+# Complete restart
 docker compose down
 docker compose up -d
 ```
 
-### Modello LLM non caricato
+### LLM model not loaded
 
 ```bash
-# Verifica modelli disponibili in Ollama
+# Check available models in Ollama
 docker exec rag-ollama ollama list
 
-# Pull modello manualmente
+# Pull model manually
 docker exec rag-ollama ollama pull qwen2.5:14b-instruct-q4_K_M
 ```
 
-### 0 risultati nelle query
+### 0 results in queries
 
 ```bash
-# Verifica documenti in Qdrant
+# Check documents in Qdrant
 curl http://localhost:6333/collections/rag_documents
 
-# Se count = 0, i documenti non sono stati indicizzati
-# Controlla log upload:
+# If count = 0, documents were not indexed
+# Check upload logs:
 docker logs rag-backend | grep "Upload"
 
-# Abbassa threshold se troppo alto:
+# Lower threshold if too high:
 # docker-compose.yml → RELEVANCE_THRESHOLD: "0.30"
 ```
 
-### Caratteri accentati corrotti
+### Corrupted accented characters
 
 ```bash
-# Fix già applicato in versione corrente
-# Per documenti vecchi: elimina e ricarica
+# Fix already applied in current version
+# For old documents: delete and reload
 
-# Elimina collection Qdrant
+# Delete Qdrant collection
 docker compose down
 docker volume rm rag-enterprise-structure_qdrant-data
 docker compose up -d
 
-# Ricarica documenti via frontend
+# Reload documents via frontend
 ```
 
 ---
 
-## 🔐 Note sulla Privacy
+## 🔐 Privacy Notes
 
-- ✅ **Zero chiamate esterne**: Nessun dato esce dal tuo server
-- ✅ **Nessun analytics**: Nessun tracking o telemetria
-- ✅ **Modelli locali**: LLM e embeddings girano on-premise
-- ✅ **Database locale**: Qdrant non comunica con l'esterno
-- ✅ **Logs locali**: Tutto rimane nel tuo filesystem
+- ✅ **Zero external calls**: No data leaves your server
+- ✅ **No analytics**: No tracking or telemetry
+- ✅ **Local models**: LLM and embeddings run on-premise
+- ✅ **Local database**: Qdrant does not communicate externally
+- ✅ **Local logs**: Everything stays in your filesystem
 
-**Ideale per**: studi legali, sanità, finanza, pubblica amministrazione, aziende con dati sensibili.
+**Ideal for**: law firms, healthcare, finance, public administration, companies with sensitive data.
 
 ---
 
-## 📊 Performance Attese
+## 📊 Expected Performance
 
-### Con Profilo STANDARD (RTX 4070, 12GB)
+### With STANDARD Profile (RTX 4070, 12GB)
 
-| Metrica | Valore |
+| Metric | Value |
 |---------|--------|
-| **Velocità generazione** | 100-130 token/s |
-| **Latenza query** | 1-3 secondi |
-| **Documenti supportati** | 10.000+ |
-| **Chunks per documento** | ~10-20 (PDF medio) |
+| **Generation speed** | 100-130 token/s |
+| **Query latency** | 1-3 seconds |
+| **Supported documents** | 10,000+ |
+| **Chunks per document** | ~10-20 (average PDF) |
 | **Similarity search** | <100ms (Qdrant) |
-| **Throughput upload** | 1-2 doc/minuto |
+| **Upload throughput** | 1-2 doc/minute |
 
 ### Scaling
 
-- **10 documenti**: Instant retrieval (<100ms)
-- **100 documenti**: Veloce (<200ms)
-- **1.000 documenti**: Buono (<500ms)
-- **10.000+ documenti**: Gap filtering essenziale
+- **10 documents**: Instant retrieval (<100ms)
+- **100 documents**: Fast (<200ms)
+- **1,000 documents**: Good (<500ms)
+- **10,000+ documents**: Gap filtering essential
 
 ---
 
 ## 🛣️ Roadmap
 
-### ✅ Completato (v1.0)
-- [x] RAG pipeline con LangChain
-- [x] Modelli quantizzati Q4
+### ✅ Completed (v1.0)
+- [x] RAG pipeline with LangChain
+- [x] Q4 quantized models
 - [x] Gap-based filtering
 - [x] UTF-8 encoding fix
-- [x] Temperature 0.0 (deterministico)
-- [x] Memoria conversazionale
-- [x] API REST completa
+- [x] Temperature 0.0 (deterministic)
+- [x] Conversational memory
+- [x] Complete REST API
 
-### 🚧 In Sviluppo (v1.1)
-- [ ] Frontend riprogettato con gestione documenti
-- [ ] Visualizzazione documenti indicizzati
-- [ ] Cancellazione documenti via UI
-- [ ] Persistenza conversazioni
-- [ ] Multi-utente con isolamento
+### 🚧 In Development (v1.1)
+- [ ] Redesigned frontend with document management
+- [ ] Indexed document visualization
+- [ ] Document deletion via UI
+- [ ] Conversation persistence
+- [ ] Multi-user with isolation
 
-### 🔮 Futuro (v2.0)
+### 🔮 Future (v2.0)
 - [ ] Hybrid search (dense + sparse)
-- [ ] Re-ranking con cross-encoder
-- [ ] Chunk optimization dinamico
-- [ ] Support per tabelle/grafici
-- [ ] API streaming per risposte
-- [ ] Integrazione Slack/Teams
+- [ ] Re-ranking with cross-encoder
+- [ ] Dynamic chunk optimization
+- [ ] Support for tables/charts
+- [ ] Streaming API for responses
+- [ ] Slack/Teams integration
 
 ---
 
@@ -390,13 +390,13 @@ MIT License - vedi [LICENSE](LICENSE)
 
 ## 🤝 Contributing
 
-Contributions are welcome! Per favore:
+Contributions are welcome! Please:
 
-1. Fork il repository
-2. Crea feature branch (`git checkout -b feature/AmazingFeature`)
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/AmazingFeature`)
 3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push al branch (`git push origin feature/AmazingFeature`)
-5. Apri Pull Request
+4. Push to branch (`git push origin feature/AmazingFeature`)
+5. Open Pull Request
 
 ---
 
@@ -420,4 +420,4 @@ Contributions are welcome! Per favore:
 
 ---
 
-**Buon RAG! 🚀**
+**Happy RAG! 🚀**

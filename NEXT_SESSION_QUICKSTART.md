@@ -115,9 +115,9 @@ git log --oneline -5  # Verify
 ### During Test
 - [ ] Upload each document and verify in logs
 - [ ] For each document, run queries:
-  - [ ] **Identity Card**: "Qual è il codice fiscale?" (if CI available)
-  - [ ] **Any doc**: "Riassumi il documento in 3 punti"
-  - [ ] **Multi-doc**: "Confronta le due versioni"
+  - [ ] **Identity Card**: "What is the tax code?" (if CI available)
+  - [ ] **Any doc**: "Summarize the document in 3 points"
+  - [ ] **Multi-doc**: "Compare the two versions"
   - [ ] **Memory test**: Ask name → ask another question using "who is that person?"
   
 - [ ] Check for:
@@ -269,8 +269,8 @@ Once v1.0-beta is committed:
 ### Week 1: Phase 1 (Stabilization)
 - [ ] Implement Universal Document Schema System
   - [ ] Define schema for IDENTITY_CARD
-  - [ ] Extract CF via LLM (not regex)
-  - [ ] Validate CF format (16 chars)
+  - [ ] Extract tax code via LLM (not regex)
+  - [ ] Validate tax code format (16 chars)
   - [ ] Add fallback to manual entry
   
 - [ ] Add reranker (bge-reranker-base)
@@ -366,7 +366,7 @@ sudo docker compose down && sudo docker compose up -d && sleep 30
 If new to the project:
 
 1. **Architecture** (10 min)
-   - Read "Architettura Completa" section in STATUS doc
+   - Read "Complete Architecture" section in STATUS doc
    - Look at diagram
 
 2. **Components** (20 min)

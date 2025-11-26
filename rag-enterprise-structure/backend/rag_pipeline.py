@@ -1,6 +1,6 @@
 """
 RAG Pipeline - LangChain + Qdrant Integration
-Orestra: Retrieval + LLM Generation con Source Attribution
+Orchestrates: Retrieval + LLM Generation with Source Attribution
 """
 
 import logging
@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 class RAGPipeline:
     """
-    RAG Pipeline principale con Source Attribution
-    - Gestisce retrieval da Qdrant
-    - Genera risposte con LLM
-    - Ritorna sources con relevance scoring
-    - Orchestra tutto con LangChain
+    Main RAG Pipeline with Source Attribution
+    - Manages retrieval from Qdrant
+    - Generates responses with LLM
+    - Returns sources with relevance scoring
+    - Orchestrates everything with LangChain
     """
     
     def __init__(
@@ -30,7 +30,7 @@ class RAGPipeline:
         llm_model: str = "mistral",
         chunk_size: int = 1000,
         chunk_overlap: int = 100,
-        relevance_threshold: float = 0.5  # Filtro relevance
+        relevance_threshold: float = 0.5  # Relevance filter
     ):
         self.qdrant_connector = qdrant_connector
         self.embeddings_service = embeddings_service
@@ -45,9 +45,9 @@ class RAGPipeline:
         )
         
         # LLM (via Ollama)
-        # Temperature 0.0 = completamente deterministico per garantire risposte consistenti
+        # Temperature 0.0 = completely deterministic to ensure consistent responses
         self.llm = Ollama(
-            model=self.llm_model,  # Usa il modello passato dal docker-compose.yml
+            model=self.llm_model,  # Use the model passed from docker-compose.yml
             base_url="http://ollama:11434",
             temperature=0.0
         )
@@ -58,46 +58,46 @@ class RAGPipeline:
             input_variables=["context", "question"]
         )
         
-        logger.info(f"✅ RAG Pipeline inizializzato (LLM: {llm_model}, threshold: {relevance_threshold})")
+        logger.info(f"✅ RAG Pipeline initialized (LLM: {llm_model}, threshold: {relevance_threshold})")
     
     
     def _get_prompt_template(self) -> str:
-        """Template semplificato per ridurre allucinazioni"""
-        return """Sei un assistente che risponde SOLO usando le informazioni presenti nei documenti forniti.
+        """Simplified template to reduce hallucinations"""
+        return """You are an assistant that answers ONLY using information present in the provided documents.
 
-REGOLE CRITICHE:
-1. Usa SOLO informazioni presenti nel CONTESTO sottostante
-2. Se l'informazione NON è nel contesto → rispondi "Non ho questa informazione nei documenti"
-3. NON inventare, NON ipotizzare, NON generare dati
-4. Se ci sono più documenti, usa quello con rilevanza più alta
-5. Il CODICE FISCALE italiano ha esattamente 16 caratteri (es: MRCFNC69E20E329H)
-6. Verifica che il nome nel documento corrisponda al nome nella domanda
+CRITICAL RULES:
+1. Use ONLY information present in the CONTEXT below
+2. If the information is NOT in the context → answer "I don't have this information in the documents"
+3. Do NOT invent, do NOT assume, do NOT generate data
+4. If there are multiple documents, use the one with the highest relevance
+5. The Italian TAX CODE has exactly 16 characters (e.g., MRCFNC69E20E329H)
+6. Verify that the name in the document matches the name in the question
 
 {history_section}
 
-CONTESTO:
+CONTEXT:
 {context}
 
-DOMANDA: {question}
+QUESTION: {question}
 
-RISPOSTA (usa SOLO info dal contesto):"""
+ANSWER (use ONLY info from context):"""
     
     
     def _format_history(self, history: List[Dict] = None) -> str:
         """
-        Formatta la cronologia conversazionale - SOLO DOMANDE
+        Format conversational history - ONLY QUESTIONS
 
-        Fix anti-hallucination: Include solo le domande dell'utente,
-        NON le risposte dell'assistant (che potrebbero essere sbagliate
-        e creare loop di allucinazione)
+        Anti-hallucination fix: Include only user questions,
+        NOT assistant responses (which could be wrong
+        and create hallucination loops)
         """
         if not history or len(history) == 0:
             return ""
 
-        history_text = "DOMANDE PRECEDENTI DELL'UTENTE (per contesto):\n"
-        for i, msg in enumerate(history[-3:], 1):  # Ultimi 3 scambi (ridotto da 5)
+        history_text = "USER'S PREVIOUS QUESTIONS (for context):\n"
+        for i, msg in enumerate(history[-3:], 1):  # Last 3 exchanges (reduced from 5)
             user_msg = msg.get("user", "")
-            if user_msg:  # Solo se c'è effettivamente una domanda
+            if user_msg:  # Only if there's actually a question
                 history_text += f"{i}. {user_msg}\n"
 
         return history_text + "\n"
@@ -110,22 +110,22 @@ RISPOSTA (usa SOLO info dal contesto):"""
         overlap: int = 100
     ) -> List[str]:
         """
-        Divide il testo in chunks
-        
+        Split text into chunks
+
         Args:
-            text: Testo da dividere
-            chunk_size: Dimensione massima chunk
-            overlap: Sovrapposizione tra chunks
-            
+            text: Text to split
+            chunk_size: Maximum chunk size
+            overlap: Overlap between chunks
+
         Returns:
-            Lista di chunks
+            List of chunks
         """
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=overlap
         )
         chunks = splitter.split_text(text)
-        logger.info(f"📊 Text suddiviso in {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
+        logger.info(f"📊 Text split into {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
         return chunks
     
     
@@ -139,35 +139,35 @@ RISPOSTA (usa SOLO info dal contesto):"""
     ):
         if structured_fields is None:
             structured_fields = {}
-            
+
         """
-        Indicizza chunks su Qdrant
-        1. Genera embeddings per ogni chunk
-        2. Salva su Qdrant con metadata completi
-        
+        Index chunks on Qdrant
+        1. Generate embeddings for each chunk
+        2. Save on Qdrant with complete metadata
+
         Args:
-            chunks: Lista di chunks di testo
-            document_id: ID documento unico
-            filename: Nome file originale
+            chunks: List of text chunks
+            document_id: Unique document ID
+            filename: Original file name
         """
         try:
             if not chunks:
-                logger.warning(f"⚠️  Nessun chunk da indicizzare per {filename}")
+                logger.warning(f"⚠️  No chunks to index for {filename}")
                 return
+
+            logger.info(f"📇 Indexing {len(chunks)} chunks for '{filename}'")
             
-            logger.info(f"📇 Indicizzando {len(chunks)} chunks per '{filename}'")
-            
-            # 1. Genera embeddings
-            logger.debug(f"  1/2 Generando embeddings...")
+            # 1. Generate embeddings
+            logger.debug(f"  1/2 Generating embeddings...")
             embeddings = self.embeddings_service.embed_texts(chunks)
-            
+
             if not embeddings:
-                logger.error(f"❌ Embedding service ha ritornato lista vuota!")
+                logger.error(f"❌ Embedding service returned empty list!")
                 return
-            
-            logger.info(f"      ✅ {len(embeddings)} embeddings generati")
-            
-            # 2. Prepara metadati
+
+            logger.info(f"      ✅ {len(embeddings)} embeddings generated")
+
+            # 2. Prepare metadata
             metadatas = [
                 {
                     "document_id": document_id,
@@ -180,19 +180,19 @@ RISPOSTA (usa SOLO info dal contesto):"""
                 }
                 for i, chunk in enumerate(chunks)
             ]
-            
-            logger.debug(f"  2/2 Salvando su Qdrant...")
-            
-            # 3. Salva su Qdrant
+
+            logger.debug(f"  2/2 Saving on Qdrant...")
+
+            # 3. Save on Qdrant
             self.qdrant_connector.insert_vectors(
                 vectors=embeddings,
                 metadatas=metadatas
             )
-            
-            logger.info(f"✅ Indexing completato per '{filename}' ({len(chunks)} chunks)")
-            
+
+            logger.info(f"✅ Indexing completed for '{filename}' ({len(chunks)} chunks)")
+
         except Exception as e:
-            logger.error(f"❌ Errore indexing: {str(e)}")
+            logger.error(f"❌ Indexing error: {str(e)}")
             raise
     
     
@@ -204,37 +204,37 @@ RISPOSTA (usa SOLO info dal contesto):"""
         history: List[Dict] = None
     ) -> Tuple[str, List[Dict]]:
         """
-        Esegue query RAG completa
-        1. Retrieval da Qdrant con relevance scoring
+        Execute complete RAG query
+        1. Retrieval from Qdrant with relevance scoring
         2. LLM generation
-        3. Return answer + sources filtrati
-        
+        3. Return answer + filtered sources
+
         Args:
-            query: Testo della query
-            top_k: Numero massimo di documenti da recuperare
-            temperature: Temperatura LLM (0.0-1.0)
-            
+            query: Query text
+            top_k: Maximum number of documents to retrieve
+            temperature: LLM temperature (0.0-1.0)
+
         Returns:
-            Tupla (answer_text, list_of_sources)
+            Tuple (answer_text, list_of_sources)
         """
         try:
             logger.info(f"❓ RAG Query: '{query}' (top_k={top_k}, threshold={self.relevance_threshold})")
             
-            # 1. Retrieval da Qdrant
-            logger.debug("  1/3 Retrieval da Qdrant...")
+            # 1. Retrieval from Qdrant
+            logger.debug("  1/3 Retrieval from Qdrant...")
             query_embedding = self.embeddings_service.embed_text(query)
-            
+
             if query_embedding is None:
-                logger.error("❌ Embedding della query è None!")
-                return "Errore durante l'elaborazione della query", []
-            
+                logger.error("❌ Query embedding is None!")
+                return "Error during query processing", []
+
             retrieved_docs = self.qdrant_connector.search(
                 query_vector=query_embedding,
                 top_k=top_k,
-                score_threshold=self.relevance_threshold  # ✅ FIX: Filtra a monte in Qdrant
+                score_threshold=self.relevance_threshold  # ✅ FIX: Filter upstream in Qdrant
             )
 
-            logger.info(f"      ✅ Recuperati {len(retrieved_docs)} documenti (già filtrati da Qdrant con threshold={self.relevance_threshold})")
+            logger.info(f"      ✅ Retrieved {len(retrieved_docs)} documents (already filtered by Qdrant with threshold={self.relevance_threshold})")
 
             # Log dettagliato dei documenti recuperati
             if retrieved_docs:
@@ -245,78 +245,78 @@ RISPOSTA (usa SOLO info dal contesto):"""
                     logger.info(f"         {i}. {filename}: {similarity:.3f} ({similarity:.1%})")
             
             if not retrieved_docs:
-                logger.warning("⚠️  Qdrant non ha ritornato risultati sopra threshold!")
-                logger.warning(f"⚠️  Possibili cause: threshold troppo alto ({self.relevance_threshold}) o documenti non rilevanti")
-                return "Non ho trovato documenti rilevanti per rispondere a questa domanda.", []
+                logger.warning("⚠️  Qdrant returned no results above threshold!")
+                logger.warning(f"⚠️  Possible causes: threshold too high ({self.relevance_threshold}) or non-relevant documents")
+                return "I haven't found relevant documents to answer this question.", []
 
-            # 🎯 Gap-based filtering intelligente per ridurre il "noise dilution"
+            # 🎯 Intelligent gap-based filtering to reduce "noise dilution"
             if len(retrieved_docs) > 1:
                 first_score = retrieved_docs[0].get("similarity", 0)
                 second_score = retrieved_docs[1].get("similarity", 0)
                 gap = first_score - second_score
 
-                # Se c'è un documento CHIARAMENTE più rilevante (score alto + gap significativo)
-                # filtra via i documenti con score medio-basso per evitare confusione nell'LLM
-                # Soglie abbassate per essere più aggressivi: 0.60→0.50, 0.12→0.08
+                # If there's a CLEARLY more relevant document (high score + significant gap)
+                # filter out documents with medium-low scores to avoid confusion in the LLM
+                # Lowered thresholds to be more aggressive: 0.60→0.50, 0.12→0.08
                 if first_score >= 0.50 and gap > 0.08:
-                    logger.info(f"      🎯 Gap filtering attivato: top_score={first_score:.3f}, gap={gap:.3f}")
+                    logger.info(f"      🎯 Gap filtering activated: top_score={first_score:.3f}, gap={gap:.3f}")
                     relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.45]
-                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documenti (filtrati < 0.45)")
+                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documents (filtered < 0.45)")
 
-                    # Safety check: mantieni almeno il primo documento
+                    # Safety check: keep at least the first document
                     if not relevant_docs:
-                        logger.warning("⚠️  Gap filtering ha rimosso TUTTI i documenti, mantengo il primo")
+                        logger.warning("⚠️  Gap filtering removed ALL documents, keeping the first one")
                         relevant_docs = [retrieved_docs[0]]
                 else:
                     relevant_docs = retrieved_docs
-                    logger.info(f"      ✅ {len(relevant_docs)} documenti rilevanti (gap={gap:.3f}, sotto soglia 0.08)")
+                    logger.info(f"      ✅ {len(relevant_docs)} relevant documents (gap={gap:.3f}, below threshold 0.08)")
             else:
                 relevant_docs = retrieved_docs
-                logger.info(f"      ✅ {len(relevant_docs)} documento rilevante")
+                logger.info(f"      ✅ {len(relevant_docs)} relevant document")
             
-            # 3. Build context dalla ricerca
-            logger.debug("  2/3 Creando contesto...")
+            # 3. Build context from search
+            logger.debug("  2/3 Creating context...")
             context_parts = []
             for i, doc in enumerate(relevant_docs, 1):
                 text = doc["metadata"].get("text", "")
                 filename = doc["metadata"].get("filename", "unknown")
                 similarity = doc.get("similarity", 0)
-                
+
                 context_parts.append(
-                    f"[{i}] ({filename} - rilevanza: {similarity:.2%})\n{text}"
+                    f"[{i}] ({filename} - relevance: {similarity:.2%})\n{text}"
                 )
-            
+
             context = "\n\n---\n\n".join(context_parts)
             logger.debug(f"      Context length: {len(context)} chars")
-            
+
             # 4. LLM Generation
             logger.debug("  3/3 LLM Generation...")
-            
-            # Formatta la storia conversazionale
+
+            # Format conversational history
             history_section = self._format_history(history)
-            
+
             prompt = self.qa_prompt.format(
                 history_section=history_section,
                 context=context,
                 question=query
             )
-            
+
             logger.debug(f"      Prompt length: {len(prompt)} chars")
-            
-            # Chiama LLM
+
+            # Call LLM
             answer = self.llm(prompt)
-            logger.info(f"      ✅ Risposta generata ({len(answer)} caratteri)")
-            
-            # 5. Format sources - DEDUPLICATO per document
-            logger.debug("  Formattando sources...")
-            sources_dict = {}  # Usa dict per deduplica
-            
+            logger.info(f"      ✅ Response generated ({len(answer)} characters)")
+
+            # 5. Format sources - DEDUPLICATED per document
+            logger.debug("  Formatting sources...")
+            sources_dict = {}  # Use dict for deduplication
+
             for doc in relevant_docs:
                 doc_id = doc["metadata"].get("document_id", "unknown")
                 filename = doc["metadata"].get("filename", "unknown")
                 similarity = doc.get("similarity", 0)
-                
-                # Usa il documento con similarity più alta
+
+                # Use the document with highest similarity
                 if doc_id not in sources_dict or similarity > sources_dict[doc_id]["similarity_score"]:
                     sources_dict[doc_id] = {
                         "filename": filename,
@@ -325,27 +325,27 @@ RISPOSTA (usa SOLO info dal contesto):"""
                         "chunk_index": doc["metadata"].get("chunk_index", 0),
                         "text": doc["metadata"].get("text", "")
                     }
-            
+
             sources = list(sources_dict.values())
-            # Sort per similarity decrescente
+            # Sort by descending similarity
             sources.sort(key=lambda x: x["similarity_score"], reverse=True)
-            
-            logger.info(f"✅ Query completata - {len(sources)} sources uniche ritornate")
-            
+
+            logger.info(f"✅ Query completed - {len(sources)} unique sources returned")
+
             return answer, sources
             
         except Exception as e:
-            logger.error(f"❌ Errore query: {str(e)}", exc_info=True)
+            logger.error(f"❌ Query error: {str(e)}", exc_info=True)
             raise
-    
-    
+
+
     def reindex_all_documents(self):
-        """Reindicizza tutti i documenti (se necessario)"""
+        """Reindex all documents (if needed)"""
         try:
             logger.info("📄 Reindexing all documents...")
-            # Implementazione dipende da come salvi gli originali
-            # Questa è una skeleton per future implementazioni
-            logger.info("✅ Reindexing completato")
+            # Implementation depends on how you save the originals
+            # This is a skeleton for future implementations
+            logger.info("✅ Reindexing completed")
         except Exception as e:
-            logger.error(f"❌ Errore reindexing: {str(e)}")
+            logger.error(f"❌ Reindexing error: {str(e)}")
             raise

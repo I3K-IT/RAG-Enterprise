@@ -1,6 +1,6 @@
 """
 Qdrant Connector - Vector Database Operations
-Gestisce: insert, search, delete, collections
+Manages: insert, search, delete, collections
 """
 
 import logging
@@ -25,8 +25,8 @@ class QdrantConnector:
     
     def __init__(self, host: str = "localhost", port: int = 6333):
         """
-        Inizializza connector
-        
+        Initialize connector
+
         Args:
             host: Qdrant host
             port: Qdrant port
@@ -38,7 +38,7 @@ class QdrantConnector:
     
     
     def connect(self):
-        """Connessione a Qdrant"""
+        """Connection to Qdrant"""
         try:
             logger.info(f"Connecting to Qdrant: {self.host}:{self.port}...")
             
@@ -52,8 +52,8 @@ class QdrantConnector:
             self.client.get_collections()
             self.connected = True
             logger.info("✓ Qdrant connected")
-            
-            # Crea o ottieni collection
+
+            # Create or get collection
             self._initialize_collection()
             
         except Exception as e:
@@ -77,7 +77,7 @@ class QdrantConnector:
     
     
     def _initialize_collection(self):
-        """Crea collection se non esiste"""
+        """Create collection if it doesn't exist"""
         try:
             collections = self.client.get_collections()
             collection_names = [c.name for c in collections.collections]
@@ -105,7 +105,7 @@ class QdrantConnector:
         vectors: List[List[float]],
         metadatas: List[Dict]
     ) -> List[str]:
-        """Inserisci vettori in collection con batching"""
+        """Insert vectors into collection with batching"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
@@ -116,8 +116,8 @@ class QdrantConnector:
             logger.info(f"Inserting {len(vectors)} vectors...")
         
             inserted_ids = []
-            BATCH_SIZE = 1000  # ← AGGIUNGI BATCH
-        
+            BATCH_SIZE = 1000  # ← ADD BATCH
+
             # Insert in batch
             for batch_idx in range(0, len(vectors), BATCH_SIZE):
                 batch_end = min(batch_idx + BATCH_SIZE, len(vectors))
@@ -160,15 +160,15 @@ class QdrantConnector:
         score_threshold: Optional[float] = None
     ) -> List[Dict]:
         """
-        Ricerca vettoriale
-        
+        Vector search
+
         Args:
             query_vector: Query embedding
-            top_k: Numero risultati
-            score_threshold: Soglia di similarità
-            
+            top_k: Number of results
+            score_threshold: Similarity threshold
+
         Returns:
-            Lista di risultati con metadata
+            List of results with metadata
         """
         try:
             if not self.client:
@@ -201,7 +201,7 @@ class QdrantConnector:
     
     
     def delete_document(self, document_id: str):
-        """Elimina documento da collection"""
+        """Delete document from collection"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
@@ -229,7 +229,7 @@ class QdrantConnector:
     
     
     def get_indexed_documents(self) -> List[Dict]:
-        """Ottieni lista documenti indicizzati - con pagination completa"""
+        """Get list of indexed documents - with full pagination"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
@@ -249,7 +249,7 @@ class QdrantConnector:
                 all_points.extend(points)
                 logger.info(f"📊 Fetched batch: {len(points)} points (total so far: {len(all_points)})")
 
-                # Se non c'è next_offset o è None, abbiamo finito
+                # If there's no next_offset or it's None, we're done
                 if next_offset is None:
                     break
 
@@ -257,7 +257,7 @@ class QdrantConnector:
 
             logger.info(f"✅ Retrieved {len(all_points)} total points from Qdrant")
 
-            # Deduplicaci per document_id e conta chunks
+            # Deduplicate by document_id and count chunks
             docs = {}
             for point in all_points:
                 doc_id = point.payload.get("document_id")
@@ -271,7 +271,7 @@ class QdrantConnector:
                         "num_chunks": 0,
                         "status": "indexed"
                     }
-                # Incrementa conteggio chunks per questo documento
+                # Increment chunk count for this document
                 docs[doc_id]["num_chunks"] += 1
 
             result = list(docs.values())
@@ -287,7 +287,7 @@ class QdrantConnector:
     
     
     def get_stats(self) -> Dict:
-        """Statistiche collection"""
+        """Collection statistics"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")

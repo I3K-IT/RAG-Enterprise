@@ -1,6 +1,6 @@
 """
 Embeddings Service - Sentence-Transformers
-Genera embeddings per testi (query e documenti)
+Generates embeddings for texts (queries and documents)
 """
 
 import logging
@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingsService:
     """
-    Servizio Embeddings con Sentence-Transformers
-    - Modelli open-source
-    - Multilingue
+    Embeddings Service with Sentence-Transformers
+    - Open-source models
+    - Multilingual
     - GPU-accelerated
     """
-    
-    # Modelli disponibili
+
+    # Available models
     MODELS = {
         "all-MiniLM-L6-v2": {
             "description": "English, 22MB, veloce",
@@ -76,11 +76,11 @@ class EmbeddingsService:
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ):
         """
-        Inizializza Embeddings Service
-        
+        Initialize Embeddings Service
+
         Args:
-            model_name: Nome del modello Sentence-Transformers
-            device: 'cuda' o 'cpu'
+            model_name: Sentence-Transformers model name
+            device: 'cuda' or 'cpu'
         """
         self.model_name = model_name
         self.device = device
@@ -101,13 +101,13 @@ class EmbeddingsService:
     
     def embed_text(self, text: str) -> List[float]:
         """
-        Genera embedding per singolo testo
-        
+        Generate embedding for single text
+
         Args:
-            text: Testo
-            
+            text: Text
+
         Returns:
-            Embedding vector (lista)
+            Embedding vector (list)
         """
         try:
             embedding = self.model.encode(
@@ -123,14 +123,14 @@ class EmbeddingsService:
     
     def embed_texts(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         """
-        Genera embeddings per multipli testi
-        
+        Generate embeddings for multiple texts
+
         Args:
-            texts: Lista di testi
-            batch_size: Batch size per processing
-            
+            texts: List of texts
+            batch_size: Batch size for processing
+
         Returns:
-            Lista di embeddings
+            List of embeddings
         """
         try:
             embeddings = self.model.encode(
@@ -140,8 +140,8 @@ class EmbeddingsService:
                 normalize_embeddings=True,
                 show_progress_bar=True
             )
-            
-            # Converti a lista di liste
+
+            # Convert to list of lists
             return embeddings.tolist()
             
         except Exception as e:
@@ -151,10 +151,10 @@ class EmbeddingsService:
     
     def similarity(self, text1: str, text2: str) -> float:
         """
-        Calcola similarità coseno tra due testi
-        
+        Calculate cosine similarity between two texts
+
         Returns:
-            Valore tra 0 e 1
+            Value between 0 and 1
         """
         try:
             embeddings = self.model.encode([text1, text2])
@@ -171,11 +171,11 @@ class EmbeddingsService:
     
     
     def get_embedding_dimension(self) -> int:
-        """Dimensionalità degli embeddings"""
+        """Embedding dimensionality"""
         return self.embedding_dim
-    
-    
+
+
     @staticmethod
     def list_available_models() -> dict:
-        """Lista modelli disponibili"""
+        """List available models"""
         return EmbeddingsService.MODELS

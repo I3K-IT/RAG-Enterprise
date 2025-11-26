@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import './App.css'
 
-// Configurazione logo e branding (personalizzabile per ogni cliente)
+// Logo and branding configuration (customizable for each client)
 const BRANDING = {
-  clientLogo: '/logo.png', // URL del logo cliente, null = usa nome testuale
+  clientLogo: '/logo.png', // Client logo URL, null = use text name
   clientName: 'RAG Enterprise',
   primaryColor: '#3b82f6', // blue-500
   poweredBy: 'I3K Technologies',
@@ -12,7 +12,7 @@ const BRANDING = {
   version: 'v1.1'
 }
 
-// API Configuration - usa variabile d'ambiente o fallback a localhost
+// API Configuration - use environment variable or fallback to localhost
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function App() {
@@ -163,7 +163,7 @@ function App() {
       console.log('✅ Login successful:', userData.username, 'role:', userData.role)
     } catch (error) {
       console.error('Login error:', error)
-      setLoginError(error.response?.data?.detail || 'Errore login')
+      setLoginError(error.response?.data?.detail || 'Login error')
     } finally {
       setLoggingIn(false)
     }
@@ -192,7 +192,7 @@ function App() {
       setAllUsers(response.data.users || [])
     } catch (error) {
       console.error('Error fetching users:', error)
-      alert('Errore caricamento utenti')
+      alert('Error loading users')
     } finally {
       setLoadingUsers(false)
     }
@@ -204,40 +204,40 @@ function App() {
 
     try {
       await axios.post(`${API_URL}/api/auth/users`, newUserForm)
-      alert(`✅ Utente "${newUserForm.username}" creato con successo!`)
+      alert(`✅ User "${newUserForm.username}" created successfully!`)
       setNewUserForm({ username: '', email: '', password: '', role: 'user' })
       fetchAllUsers()
     } catch (error) {
       console.error('Error creating user:', error)
-      alert(`❌ Errore: ${error.response?.data?.detail || error.message}`)
+      alert(`❌ Error: ${error.response?.data?.detail || error.message}`)
     } finally {
       setCreatingUser(false)
     }
   }
 
   const handleDeleteUser = async (userId, username) => {
-    if (!window.confirm(`Sei sicuro di voler eliminare l'utente "${username}"?`)) {
+    if (!window.confirm(`Are you sure you want to delete user "${username}"?`)) {
       return
     }
 
     try {
       await axios.delete(`${API_URL}/api/auth/users/${userId}`)
-      alert('✅ Utente eliminato')
+      alert('✅ User deleted')
       fetchAllUsers()
     } catch (error) {
       console.error('Error deleting user:', error)
-      alert(`❌ Errore: ${error.response?.data?.detail || error.message}`)
+      alert(`❌ Error: ${error.response?.data?.detail || error.message}`)
     }
   }
 
   const handleChangeUserRole = async (userId, newRole, username) => {
     try {
       await axios.put(`${API_URL}/api/auth/users/${userId}`, { role: newRole })
-      alert(`✅ Ruolo di "${username}" aggiornato a "${newRole}"`)
+      alert(`✅ Role of "${username}" updated to "${newRole}"`)
       fetchAllUsers()
     } catch (error) {
       console.error('Error updating role:', error)
-      alert(`❌ Errore: ${error.response?.data?.detail || error.message}`)
+      alert(`❌ Error: ${error.response?.data?.detail || error.message}`)
     }
   }
 
@@ -259,13 +259,13 @@ function App() {
 
     // Validate new password matches confirmation
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setPasswordError('Le nuove password non corrispondono')
+      setPasswordError('New passwords do not match')
       return
     }
 
     // Validate password length
     if (passwordForm.newPassword.length < 6) {
-      setPasswordError('La nuova password deve essere di almeno 6 caratteri')
+      setPasswordError('New password must be at least 6 characters')
       return
     }
 
@@ -277,12 +277,12 @@ function App() {
         new_password: passwordForm.newPassword
       })
 
-      alert('✅ Password cambiata con successo!')
+      alert('✅ Password changed successfully!')
       setShowChangePasswordModal(false)
       setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' })
     } catch (error) {
       console.error('Error changing password:', error)
-      setPasswordError(error.response?.data?.detail || 'Errore cambio password')
+      setPasswordError(error.response?.data?.detail || 'Error changing password')
     } finally {
       setChangingPassword(false)
     }
@@ -315,7 +315,7 @@ function App() {
         createNewConversation()
       }
     } catch (error) {
-      console.error('Errore caricamento conversazioni:', error)
+      console.error('Error loading conversations:', error)
       createNewConversation()
     }
   }
@@ -327,7 +327,7 @@ function App() {
   const createNewConversation = () => {
     const newConv = {
       id: Date.now().toString(),
-      title: 'Nuova Conversazione',
+      title: 'New Conversation',
       messages: [],
       createdAt: new Date().toISOString()
     }
@@ -349,7 +349,7 @@ function App() {
 
   const deleteConversation = (convId) => {
     if (conversations.length === 1) {
-      alert('Non puoi eliminare l\'ultima conversazione')
+      alert('You cannot delete the last conversation')
       return
     }
 
@@ -364,7 +364,7 @@ function App() {
 
   const updateConversationTitle = (convId, firstMessage) => {
     const updated = conversations.map(c => {
-      if (c.id === convId && c.title === 'Nuova Conversazione') {
+      if (c.id === convId && c.title === 'New Conversation') {
         return {
           ...c,
           title: firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '')
@@ -417,7 +417,7 @@ function App() {
   }
 
   const pollDocumentsUntilReady = async (initialCount, maxAttempts = 15) => {
-    setUploadPhase('⏳ Attesa completamento elaborazione...')
+    setUploadPhase('⏳ Waiting for processing to complete...')
 
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(resolve => setTimeout(resolve, 2000))
@@ -430,7 +430,7 @@ function App() {
           return currentDocs
         }
 
-        setUploadPhase(`⏳ Elaborazione in corso... (${i * 2}s)`)
+        setUploadPhase(`⏳ Processing... (${i * 2}s)`)
       } catch (error) {
         console.error('Poll error:', error)
       }
@@ -445,7 +445,7 @@ function App() {
 
     if (checkDuplicateDocument(file.name)) {
       const confirm = window.confirm(
-        `⚠️ Il documento "${file.name}" è già presente.\n\nVuoi caricarlo comunque?`
+        `⚠️ The document "${file.name}" already exists.\n\nDo you want to upload it anyway?`
       )
       if (!confirm) {
         e.target.value = ''
@@ -457,7 +457,7 @@ function App() {
 
     setUploading(true)
     setUploadProgress(0)
-    setUploadPhase('📤 Caricamento file...')
+    setUploadPhase('📤 Uploading file...')
 
     const formData = new FormData()
     formData.append('file', file)
@@ -472,28 +472,28 @@ function App() {
         }
       }
 
-      setUploadPhase('📤 Invio al server...')
+      setUploadPhase('📤 Sending to server...')
       const response = await axios.post(`${API_URL}/api/documents/upload`, formData, config)
 
       setUploadProgress(100)
-      setUploadPhase('🔄 Elaborazione documento (OCR → Chunking → Embedding)...')
+      setUploadPhase('🔄 Processing document (OCR → Chunking → Embedding)...')
 
       const updatedDocs = await pollDocumentsUntilReady(initialDocCount)
 
       if (updatedDocs) {
         setDocuments(updatedDocs)
-        setUploadPhase('✅ Completato!')
+        setUploadPhase('✅ Completed!')
         await new Promise(resolve => setTimeout(resolve, 1000))
-        alert(`✅ File caricato con successo: ${response.data.filename}\n\nIl documento è ora disponibile per le ricerche.`)
+        alert(`✅ File uploaded successfully: ${response.data.filename}\n\nThe document is now available for searches.`)
       } else {
-        setUploadPhase('⚠️ Elaborazione in corso (continua in background)')
+        setUploadPhase('⚠️ Processing (continues in background)')
         await fetchDocuments()
-        alert(`⚠️ File caricato: ${response.data.filename}\n\nL'elaborazione sta richiedendo più tempo del previsto.\nControlla la lista documenti tra qualche secondo.`)
+        alert(`⚠️ File uploaded: ${response.data.filename}\n\nProcessing is taking longer than expected.\nCheck the documents list in a few seconds.`)
       }
 
     } catch (error) {
       console.error('❌ Upload error:', error)
-      alert(`❌ Errore upload: ${error.response?.data?.detail || error.message}`)
+      alert(`❌ Upload error: ${error.response?.data?.detail || error.message}`)
     } finally {
       setUploading(false)
       setUploadProgress(0)
@@ -571,17 +571,17 @@ function App() {
   }
 
   const handleDeleteDocument = async (documentId) => {
-    if (!window.confirm('Sei sicuro di voler eliminare questo documento?')) {
+    if (!window.confirm('Are you sure you want to delete this document?')) {
       return
     }
 
     try {
       await axios.delete(`${API_URL}/api/documents/${documentId}`)
-      alert('✅ Documento eliminato')
+      alert('✅ Document deleted')
       fetchDocuments()
     } catch (error) {
       console.error('Delete error:', error)
-      alert(`❌ Errore eliminazione: ${error.response?.data?.detail || error.message}`)
+      alert(`❌ Deletion error: ${error.response?.data?.detail || error.message}`)
     }
   }
 
@@ -599,7 +599,7 @@ function App() {
             ) : (
               <h1 className="text-3xl font-bold text-white mb-2">{BRANDING.clientName}</h1>
             )}
-            <p className="text-slate-400">Accedi per continuare</p>
+            <p className="text-slate-400">Sign in to continue</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
@@ -642,12 +642,12 @@ function App() {
               disabled={loggingIn}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold rounded-lg transition"
             >
-              {loggingIn ? 'Accesso in corso...' : 'Accedi'}
+              {loggingIn ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
 
           <div className="mt-6 pt-6 border-t border-slate-700 text-center text-xs text-slate-400">
-            <p>Credenziali di default:</p>
+            <p>Default credentials:</p>
             <p className="mt-1">Username: <span className="text-white font-mono">admin</span></p>
             <p>Password: <span className="text-white font-mono">admin123</span></p>
           </div>
@@ -672,7 +672,7 @@ function App() {
           <div className="bg-slate-800 rounded-lg shadow-2xl border border-slate-700 w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
             {/* Header */}
             <div className="p-6 border-b border-slate-700 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-white">👥 Gestione Utenti</h2>
+              <h2 className="text-2xl font-bold text-white">👥 User Management</h2>
               <button
                 onClick={toggleAdminPanel}
                 className="text-slate-400 hover:text-white text-2xl"
@@ -685,7 +685,7 @@ function App() {
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {/* Create User Form */}
               <div className="bg-slate-700 rounded-lg p-4">
-                <h3 className="text-lg font-semibold text-white mb-4">➕ Crea Nuovo Utente</h3>
+                <h3 className="text-lg font-semibold text-white mb-4">➕ Create New User</h3>
                 <form onSubmit={handleCreateUser} className="grid grid-cols-2 gap-4">
                   <input
                     type="text"
@@ -716,16 +716,16 @@ function App() {
                     onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value })}
                     className="px-3 py-2 bg-slate-600 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="user">User (solo consultazione)</option>
+                    <option value="user">User (read-only)</option>
                     <option value="super_user">Super User (upload/delete)</option>
-                    <option value="admin">Admin (gestione utenti)</option>
+                    <option value="admin">Admin (user management)</option>
                   </select>
                   <button
                     type="submit"
                     disabled={creatingUser}
                     className="col-span-2 py-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold rounded transition"
                   >
-                    {creatingUser ? 'Creazione...' : 'Crea Utente'}
+                    {creatingUser ? 'Creating...' : 'Create User'}
                   </button>
                 </form>
               </div>
@@ -733,19 +733,19 @@ function App() {
               {/* Users List */}
               <div>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-white">📋 Utenti Registrati ({allUsers.length})</h3>
+                  <h3 className="text-lg font-semibold text-white">📋 Registered Users ({allUsers.length})</h3>
                   <button
                     onClick={fetchAllUsers}
                     className="text-sm text-blue-400 hover:text-blue-300"
                   >
-                    🔄 Aggiorna
+                    🔄 Refresh
                   </button>
                 </div>
 
                 {loadingUsers ? (
-                  <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                  <p className="text-center text-slate-400 py-8">Loading...</p>
                 ) : allUsers.length === 0 ? (
-                  <p className="text-center text-slate-400 py-8">Nessun utente trovato</p>
+                  <p className="text-center text-slate-400 py-8">No users found</p>
                 ) : (
                   <div className="space-y-2">
                     {allUsers.map(u => (
@@ -780,12 +780,12 @@ function App() {
                                 onClick={() => handleDeleteUser(u.id, u.username)}
                                 className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition"
                               >
-                                🗑️ Elimina
+                                🗑️ Delete
                               </button>
                             </>
                           )}
                           {u.id === user.id && (
-                            <span className="text-sm text-slate-400 italic">(Tu)</span>
+                            <span className="text-sm text-slate-400 italic">(You)</span>
                           )}
                         </div>
                       </div>
@@ -804,7 +804,7 @@ function App() {
           <div className="bg-slate-800 rounded-lg shadow-2xl border border-slate-700 w-full max-w-md">
             {/* Header */}
             <div className="p-6 border-b border-slate-700 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-white">🔑 Cambia Password</h2>
+              <h2 className="text-2xl font-bold text-white">🔑 Change Password</h2>
               <button
                 onClick={toggleChangePasswordModal}
                 className="text-slate-400 hover:text-white text-2xl"
@@ -818,7 +818,7 @@ function App() {
               <form onSubmit={handleChangePassword} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Password Attuale
+                    Current Password
                   </label>
                   <input
                     type="password"
@@ -832,7 +832,7 @@ function App() {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Nuova Password
+                    New Password
                   </label>
                   <input
                     type="password"
@@ -843,12 +843,12 @@ function App() {
                     required
                     minLength={6}
                   />
-                  <p className="text-xs text-slate-400 mt-1">Minimo 6 caratteri</p>
+                  <p className="text-xs text-slate-400 mt-1">Minimum 6 characters</p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Conferma Nuova Password
+                    Confirm New Password
                   </label>
                   <input
                     type="password"
@@ -873,14 +873,14 @@ function App() {
                     onClick={toggleChangePasswordModal}
                     className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition"
                   >
-                    Annulla
+                    Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={changingPassword}
                     className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold rounded-lg transition"
                   >
-                    {changingPassword ? 'Aggiornamento...' : 'Cambia Password'}
+                    {changingPassword ? 'Updating...' : 'Change Password'}
                   </button>
                 </div>
               </form>
@@ -934,7 +934,7 @@ function App() {
               <button
                 onClick={toggleAdminPanel}
                 className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition"
-                title="Gestione utenti"
+                title="User management"
               >
                 👥
               </button>
@@ -943,7 +943,7 @@ function App() {
             <button
               onClick={toggleChangePasswordModal}
               className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition"
-              title="Cambia password"
+              title="Change password"
             >
               🔑
             </button>
@@ -969,7 +969,7 @@ function App() {
                 onClick={createNewConversation}
                 className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
               >
-                + Nuova Chat
+                + New Chat
               </button>
             </div>
 
@@ -1005,7 +1005,7 @@ function App() {
                 onClick={() => setShowConversationsSidebar(false)}
                 className="w-full py-1 text-xs text-slate-400 hover:text-white"
               >
-                ◀ Chiudi
+                ◀ Close
               </button>
             </div>
           </aside>
@@ -1028,8 +1028,8 @@ function App() {
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-slate-400">
-                  <h2 className="text-2xl font-bold mb-2">👋 Ciao, {user.username}!</h2>
-                  <p>Inizia una conversazione{canUploadDelete ? ' oppure carica dei documenti per iniziare' : ''}.</p>
+                  <h2 className="text-2xl font-bold mb-2">👋 Hello, {user.username}!</h2>
+                  <p>Start a conversation{canUploadDelete ? ' or upload documents to get started' : ''}.</p>
                 </div>
               </div>
             ) : (
@@ -1052,7 +1052,7 @@ function App() {
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
                         <p className="text-sm font-semibold text-slate-300">
-                          📚 Fonti ({msg.sources.length}):
+                          📚 Sources ({msg.sources.length}):
                         </p>
                         {msg.sources.map((source, sidx) => (
                           <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
@@ -1075,7 +1075,7 @@ function App() {
                     )}
 
                     <p className="text-xs text-slate-400 mt-2">
-                      {new Date(msg.timestamp).toLocaleTimeString('it-IT')}
+                      {new Date(msg.timestamp).toLocaleTimeString('en-US')}
                     </p>
                   </div>
                 </div>
@@ -1090,13 +1090,13 @@ function App() {
                       <div className="animate-spin">⏳</div>
                       <span>
                         {isModelLoading
-                          ? '🧠 Il modello LLM si sta caricando in memoria...'
-                          : 'Ricerca in corso...'}
+                          ? '🧠 The LLM model is loading into memory...'
+                          : 'Searching...'}
                       </span>
                     </div>
                     {isModelLoading && (
                       <p className="text-xs text-slate-400 ml-6">
-                        Può richiedere 10-20 secondi al primo avvio o dopo inattività
+                        May take 10-20 seconds on first start or after inactivity
                       </p>
                     )}
                   </div>
@@ -1114,7 +1114,7 @@ function App() {
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Scrivi la tua domanda..."
+                placeholder="Write your question..."
                 disabled={querying || status !== 'ready'}
                 className="flex-1 bg-slate-700 text-white placeholder-slate-400 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
@@ -1133,7 +1133,7 @@ function App() {
         {showDocumentsSidebar && (
           <aside className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col">
             <div className="p-4 border-b border-slate-700">
-              <h2 className="text-lg font-bold text-white mb-3">📁 Documenti</h2>
+              <h2 className="text-lg font-bold text-white mb-3">📁 Documents</h2>
 
               {canUploadDelete && (
                 <>
@@ -1151,7 +1151,7 @@ function App() {
                     disabled={uploading}
                     className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white rounded-lg font-semibold transition"
                   >
-                    {uploading ? `⏳ ${uploadProgress}%` : '+ Carica File'}
+                    {uploading ? `⏳ ${uploadProgress}%` : '+ Upload File'}
                   </button>
 
                   {uploading && (
@@ -1176,10 +1176,10 @@ function App() {
 
             <div className="flex-1 overflow-y-auto p-3">
               {loadingDocuments ? (
-                <p className="text-center text-slate-400 py-4">Caricamento...</p>
+                <p className="text-center text-slate-400 py-4">Loading...</p>
               ) : documents.length === 0 ? (
                 <p className="text-center text-slate-400 py-4 text-sm">
-                  Nessun documento caricato
+                  No documents uploaded
                 </p>
               ) : (
                 <div className="space-y-2">
@@ -1202,7 +1202,7 @@ function App() {
                           <button
                             onClick={() => handleDeleteDocument(doc.document_id)}
                             className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs transition"
-                            title="Elimina documento"
+                            title="Delete document"
                           >
                             🗑️
                           </button>
@@ -1219,13 +1219,13 @@ function App() {
                 onClick={fetchDocuments}
                 className="w-full py-2 text-sm text-slate-400 hover:text-white transition"
               >
-                🔄 Aggiorna Lista
+                🔄 Refresh List
               </button>
               <button
                 onClick={() => setShowDocumentsSidebar(false)}
                 className="w-full py-1 text-xs text-slate-400 hover:text-white mt-1"
               >
-                Chiudi ▶
+                Close ▶
               </button>
             </div>
           </aside>
@@ -1258,7 +1258,7 @@ function App() {
               className="hover:text-white transition"
               onClick={(e) => {
                 e.preventDefault()
-                alert('⚠️ Disclaimer:\n\nQuesto sistema utilizza intelligenza artificiale per analizzare documenti e fornire risposte. Le informazioni fornite devono essere verificate e non sostituiscono la consulenza professionale.\n\n© I3K Technologies - Tutti i diritti riservati.')
+                alert('⚠️ Disclaimer:\n\nThis system uses artificial intelligence to analyze documents and provide answers. The information provided should be verified and does not replace professional advice.\n\n© I3K Technologies - All rights reserved.')
               }}
             >
               Disclaimer

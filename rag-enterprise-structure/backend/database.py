@@ -1,5 +1,5 @@
 """
-Database setup e modelli per sistema autenticazione
+Database setup and models for authentication system
 """
 
 import sqlite3
@@ -11,12 +11,12 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Path database - usa /app/data in Docker, ./data in locale
+# Database path - use /app/data in Docker, ./data locally
 DB_PATH = os.getenv("DB_PATH", "/app/data/rag_users.db")
 
 
 class UserRole:
-    """Definizione ruoli utente"""
+    """User role definitions"""
     ADMIN = "admin"
     SUPER_USER = "super_user"
     USER = "user"
@@ -27,28 +27,28 @@ class UserRole:
 
 
 class UserDatabase:
-    """Gestione database utenti"""
+    """User database management"""
 
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
-        # Crea directory se non esiste
+        # Create directory if it doesn't exist
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
         self.init_db()
 
     def get_connection(self):
-        """Crea connessione al database"""
+        """Create database connection"""
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row  # Per accedere alle colonne per nome
+        conn.row_factory = sqlite3.Row  # To access columns by name
         return conn
 
     def init_db(self):
-        """Inizializza database e crea utente admin di default"""
+        """Initialize database and create default admin user"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # Crea tabella utenti
+        # Create users table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +64,7 @@ class UserDatabase:
 
         conn.commit()
 
-        # Crea utente admin di default se non esiste
+        # Create default admin user if it doesn't exist
         try:
             admin_exists = cursor.execute(
                 "SELECT id FROM users WHERE username = ?",
@@ -75,23 +75,23 @@ class UserDatabase:
                 self.create_user(
                     username="admin",
                     email="admin@rag-enterprise.local",
-                    password="admin123",  # Password di default - DA CAMBIARE!
+                    password="admin123",  # Default password - MUST BE CHANGED!
                     role=UserRole.ADMIN
                 )
-                logger.info("✅ Utente admin creato (username: admin, password: admin123)")
-                logger.warning("⚠️  CAMBIA LA PASSWORD ADMIN!")
+                logger.info("✅ Admin user created (username: admin, password: admin123)")
+                logger.warning("⚠️  CHANGE THE ADMIN PASSWORD!")
         except Exception as e:
-            logger.error(f"Errore creazione admin: {e}")
+            logger.error(f"Error creating admin: {e}")
 
         conn.close()
 
     def hash_password(self, password: str) -> str:
-        """Hash della password con bcrypt"""
+        """Hash password with bcrypt"""
         salt = bcrypt.gensalt()
         return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
     def verify_password(self, password: str, password_hash: str) -> bool:
-        """Verifica password contro hash"""
+        """Verify password against hash"""
         return bcrypt.checkpw(
             password.encode('utf-8'),
             password_hash.encode('utf-8')
@@ -104,9 +104,9 @@ class UserDatabase:
         password: str,
         role: str
     ) -> Optional[int]:
-        """Crea nuovo utente"""
+        """Create new user"""
         if role not in UserRole.all_roles():
-            raise ValueError(f"Ruolo non valido: {role}")
+            raise ValueError(f"Invalid role: {role}")
 
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -121,16 +121,16 @@ class UserDatabase:
             )
             conn.commit()
             user_id = cursor.lastrowid
-            logger.info(f"✅ Utente creato: {username} (role: {role})")
+            logger.info(f"✅ User created: {username} (role: {role})")
             return user_id
         except sqlite3.IntegrityError as e:
-            logger.error(f"❌ Errore creazione utente: {e}")
+            logger.error(f"❌ User creation error: {e}")
             return None
         finally:
             conn.close()
 
     def get_user_by_username(self, username: str) -> Optional[Dict]:
-        """Recupera utente per username"""
+        """Retrieve user by username"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -146,7 +146,7 @@ class UserDatabase:
         return None
 
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
-        """Recupera utente per ID"""
+        """Retrieve user by ID"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -162,7 +162,7 @@ class UserDatabase:
         return None
 
     def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
-        """Autentica utente"""
+        """Authenticate user"""
         user = self.get_user_by_username(username)
 
         if not user:
@@ -171,13 +171,13 @@ class UserDatabase:
         if not self.verify_password(password, user['password_hash']):
             return None
 
-        # Aggiorna last_login
+        # Update last_login
         self.update_last_login(user['id'])
 
         return user
 
     def update_last_login(self, user_id: int):
-        """Aggiorna timestamp ultimo login"""
+        """Update last login timestamp"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -189,7 +189,7 @@ class UserDatabase:
         conn.close()
 
     def list_users(self) -> List[Dict]:
-        """Lista tutti gli utenti attivi"""
+        """List all active users"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -202,9 +202,9 @@ class UserDatabase:
         return [dict(row) for row in rows]
 
     def update_user_role(self, user_id: int, new_role: str) -> bool:
-        """Aggiorna ruolo utente"""
+        """Update user role"""
         if new_role not in UserRole.all_roles():
-            raise ValueError(f"Ruolo non valido: {new_role}")
+            raise ValueError(f"Invalid role: {new_role}")
 
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -220,7 +220,7 @@ class UserDatabase:
         return affected > 0
 
     def delete_user(self, user_id: int) -> bool:
-        """Disabilita utente (soft delete)"""
+        """Disable user (soft delete)"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -235,7 +235,7 @@ class UserDatabase:
         return affected > 0
 
     def change_password(self, user_id: int, new_password: str) -> bool:
-        """Cambia password utente"""
+        """Change user password"""
         password_hash = self.hash_password(new_password)
 
         conn = self.get_connection()
@@ -252,5 +252,5 @@ class UserDatabase:
         return affected > 0
 
 
-# Istanza globale
+# Global instance
 db = UserDatabase()

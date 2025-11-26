@@ -1,6 +1,6 @@
 """
 RAG Enterprise Backend - FastAPI Application
-Gestisce: OCR, Embedding, RAG Pipeline, Qdrant Integration
+Manages: OCR, Embedding, RAG Pipeline, Qdrant Integration
 """
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Depends
@@ -33,12 +33,12 @@ from middleware import (
 )
 
 def detect_document_type(text: str) -> str:
-    """Riconosce il tipo di documento - con check più rigorosi"""
+    """Detects document type - with stricter checks"""
     text_upper = text.upper()
-    
-    # Ordine: più specifico → meno specifico
-    
-    # 1. IDENTITY CARD (molto specifico)
+
+    # Order: more specific → less specific
+
+    # 1. IDENTITY CARD (very specific)
     if 'CARTA DI IDENTITA' in text_upper or 'IDENTITY CARD' in text_upper:
         if 'REPUBBLICA ITALIANA' in text_upper:  # Extra check
             return 'IDENTITY_CARD'
@@ -61,7 +61,7 @@ def detect_document_type(text: str) -> str:
 
 
 def extract_id_fields(text: str) -> Dict[str, Optional[str]]:
-    """Estrae campi da Carta d'Identità - layout verticale"""
+    """Extracts fields from Identity Card - vertical layout"""
     fields = {}
     
     # Codice Fiscale: dopo "CODICE FISCALE" o "FISCAL CODE", sulla riga successiva
@@ -89,7 +89,7 @@ def extract_id_fields(text: str) -> Dict[str, Optional[str]]:
 
 
 def extract_passport_fields(text: str) -> Dict[str, Optional[str]]:
-    """Estrae campi da Passaporto"""
+    """Extracts fields from Passport"""
     fields = {}
     
     # Numero passaporto (di solito 9 caratteri)
@@ -102,15 +102,15 @@ def extract_passport_fields(text: str) -> Dict[str, Optional[str]]:
 
 
 def extract_license_fields(text: str) -> Dict[str, Optional[str]]:
-    """Estrae campi da Patente - CON check rigorosi"""
+    """Extracts fields from Driving License - WITH strict checks"""
     fields = {}
-    
-    # Check 1: deve contenere "PATENTE DI GUIDA"
+
+    # Check 1: must contain "PATENTE DI GUIDA"
     if 'PATENTE DI GUIDA' not in text.upper() and 'DRIVING LICENSE' not in text.upper():
         return fields
-    
-    # Check 2: pattern numero patente italiano (10 caratteri alphanumerici)
-    # Ma SOLO se preceduto da specifiche keywords
+
+    # Check 2: Italian license number pattern (10 alphanumeric characters)
+    # But ONLY if preceded by specific keywords
     license_pattern = r'(?:Numero|Number|N\.|Nr\.)\s*[:\s]*([A-Z0-9]{10})'
     license_match = re.search(license_pattern, text)
     if license_match:
@@ -120,8 +120,8 @@ def extract_license_fields(text: str) -> Dict[str, Optional[str]]:
 
 
 def extract_structured_fields(text: str, doc_type: str) -> Dict[str, Optional[str]]:
-    """Estrae campi strutturati in base al tipo di documento"""
-    
+    """Extracts structured fields based on document type"""
+
     if doc_type == 'IDENTITY_CARD':
         return extract_id_fields(text)
     elif doc_type == 'PASSPORT':
@@ -131,7 +131,7 @@ def extract_structured_fields(text: str, doc_type: str) -> Dict[str, Optional[st
     else:
         return {}
 
-# Logging setup - PIU' DETTAGLIATO
+# Logging setup - MORE DETAILED
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -147,13 +147,13 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
 CUDA_VISIBLE_DEVICES = os.getenv("CUDA_VISIBLE_DEVICES", "0")
 RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "0.3"))
 
-# Crea cartella upload se non esiste
+# Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # FastAPI App
 app = FastAPI(
     title="RAG Enterprise Backend",
-    description="API per RAG Pipeline Distribuito",
+    description="API for Distributed RAG Pipeline",
     version="1.0.0"
 )
 
@@ -166,13 +166,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Servizi globali
+# Global services
 ocr_service: Optional[OCRService] = None
 embeddings_service: Optional[EmbeddingsService] = None
 rag_pipeline: Optional[RAGPipeline] = None
 qdrant_connector: Optional[QdrantConnector] = None
 
-# Memoria conversazionale per utenti
+# Conversational memory for users
 user_conversations: dict = {}  # {user_id: [{"user": "...", "assistant": "..."}]}
 
 
@@ -182,13 +182,13 @@ user_conversations: dict = {}  # {user_id: [{"user": "...", "assistant": "..."}]
 
 @app.on_event("startup")
 async def startup_event():
-    """Inizializza i servizi al startup"""
+    """Initialize services at startup"""
     global ocr_service, embeddings_service, rag_pipeline, qdrant_connector
-    
+
     logger.info("=" * 80)
-    logger.info("🚀 AVVIO RAG BACKEND")
+    logger.info("🚀 STARTING RAG BACKEND")
     logger.info("=" * 80)
-    logger.info(f"Configurazione:")
+    logger.info(f"Configuration:")
     logger.info(f"  - QDRANT: {QDRANT_HOST}:{QDRANT_PORT}")
     logger.info(f"  - LLM: {LLM_MODEL}")
     logger.info(f"  - Embedding: {EMBEDDING_MODEL}")
@@ -198,47 +198,47 @@ async def startup_event():
     logger.info("=" * 80)
     
     try:
-        # 1. Connessione Qdrant
-        logger.info("🔗 [1/4] Connessione a Qdrant...")
+        # 1. Qdrant Connection
+        logger.info("🔗 [1/4] Connecting to Qdrant...")
         qdrant_connector = QdrantConnector(
             host="qdrant",
             port=6333
         )
         qdrant_connector.connect()
-        logger.info("✅ Qdrant connesso")
-        
-        # 2. Servizio OCR
-        logger.info("🔗 [2/4] Caricamento OCR Service...")
+        logger.info("✅ Qdrant connected")
+
+        # 2. OCR Service
+        logger.info("🔗 [2/4] Loading OCR Service...")
         try:
             ocr_service = OCRService()
-            logger.info("✅ OCR Service pronto")
+            logger.info("✅ OCR Service ready")
         except Exception as e:
-            logger.warning(f"⚠️  OCR Service fallito: {e}")
-            logger.warning("    → Sistema continuerà senza OCR")
+            logger.warning(f"⚠️  OCR Service failed: {e}")
+            logger.warning("    → System will continue without OCR")
             ocr_service = None
 
-        # 3. Servizio Embedding
-        logger.info(f"🔗 [3/4] Caricamento Embedding Service ({EMBEDDING_MODEL})...")
+        # 3. Embedding Service
+        logger.info(f"🔗 [3/4] Loading Embedding Service ({EMBEDDING_MODEL})...")
         embeddings_service = EmbeddingsService(model_name=EMBEDDING_MODEL)
-        logger.info("✅ Embedding Service pronto")
-        
-        # 4. Pipeline RAG
-        logger.info(f"🔗 [4/4] Inizializzazione RAG Pipeline (LLM: {LLM_MODEL})...")
+        logger.info("✅ Embedding Service ready")
+
+        # 4. RAG Pipeline
+        logger.info(f"🔗 [4/4] Initializing RAG Pipeline (LLM: {LLM_MODEL})...")
         rag_pipeline = RAGPipeline(
             qdrant_connector=qdrant_connector,
             embeddings_service=embeddings_service,
             llm_model=LLM_MODEL,
             relevance_threshold=RELEVANCE_THRESHOLD
         )
-        logger.info("✅ RAG Pipeline pronto")
-        
+        logger.info("✅ RAG Pipeline ready")
+
         logger.info("=" * 80)
-        logger.info("🎉 BACKEND COMPLETAMENTE INIZIALIZZATO")
+        logger.info("🎉 BACKEND FULLY INITIALIZED")
         logger.info("=" * 80)
-        
+
     except Exception as e:
         logger.error("=" * 80)
-        logger.error(f"❌ ERRORE DURANTE STARTUP: {str(e)}")
+        logger.error(f"❌ ERROR DURING STARTUP: {str(e)}")
         logger.error(traceback.format_exc())
         logger.error("=" * 80)
         raise
@@ -246,11 +246,11 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup al shutdown"""
-    logger.info("🛑 Shutdown RAG Backend...")
+    """Cleanup at shutdown"""
+    logger.info("🛑 Shutting down RAG Backend...")
     if qdrant_connector:
         qdrant_connector.disconnect()
-    logger.info("✅ Cleanup completato")
+    logger.info("✅ Cleanup completed")
 
 
 # ============================================================================
@@ -260,7 +260,7 @@ async def shutdown_event():
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
-    temperature: float = 0.0  # 0.0 = completamente deterministico, elimina variabilità nelle risposte
+    temperature: float = 0.0  # 0.0 = completely deterministic, eliminates variability in responses
 
 
 class SourceInfo(BaseModel):
@@ -328,7 +328,7 @@ async def health_check():
 
 @app.get("/info")
 async def get_info():
-    """Informazioni configurazione"""
+    """Configuration information"""
     return {
         "backend": "RAG Enterprise v1.0.0",
         "qdrant": f"{QDRANT_HOST}:{QDRANT_PORT}",
@@ -346,9 +346,9 @@ async def get_info():
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     """
-    Login utente - ritorna JWT token
+    User login - returns JWT token
 
-    Credenziali di default:
+    Default credentials:
     - Admin: username=admin, password=admin123
     """
     user = db.authenticate_user(request.username, request.password)
@@ -356,13 +356,13 @@ async def login(request: LoginRequest):
     if not user:
         raise HTTPException(
             status_code=401,
-            detail="Username o password non corretti"
+            detail="Incorrect username or password"
         )
 
-    # Crea token JWT
+    # Create JWT token
     token = create_user_token(user)
 
-    logger.info(f"✅ Login effettuato: {user['username']} (role: {user['role']})")
+    logger.info(f"✅ Login successful: {user['username']} (role: {user['role']})")
 
     return LoginResponse(
         access_token=token,
@@ -380,7 +380,7 @@ async def login(request: LoginRequest):
 
 @app.get("/api/auth/me", response_model=UserInfo)
 async def get_current_user_info(current_user: CurrentUser = Depends(get_current_user)):
-    """Ottieni informazioni utente corrente"""
+    """Get current user information"""
     user = db.get_user_by_id(current_user.user_id)
 
     return UserInfo(
@@ -395,7 +395,7 @@ async def get_current_user_info(current_user: CurrentUser = Depends(get_current_
 
 @app.get("/api/auth/users", response_model=UserListResponse)
 async def list_users(current_user: CurrentUser = Depends(require_admin)):
-    """Lista tutti gli utenti (solo ADMIN)"""
+    """List all users (ADMIN only)"""
     users = db.list_users()
 
     return UserListResponse(
@@ -419,7 +419,7 @@ async def create_user(
     user_data: UserCreate,
     current_user: CurrentUser = Depends(require_admin)
 ):
-    """Crea nuovo utente (solo ADMIN)"""
+    """Create new user (ADMIN only)"""
     user_id = db.create_user(
         username=user_data.username,
         email=user_data.email,
@@ -430,7 +430,7 @@ async def create_user(
     if not user_id:
         raise HTTPException(
             status_code=400,
-            detail="Errore creazione utente (username o email già esistenti)"
+            detail="User creation error (username or email already exists)"
         )
 
     user = db.get_user_by_id(user_id)
@@ -451,13 +451,13 @@ async def update_user(
     user_data: UserUpdate,
     current_user: CurrentUser = Depends(require_admin)
 ):
-    """Aggiorna utente (solo ADMIN)"""
+    """Update user (ADMIN only)"""
     if user_data.role:
         success = db.update_user_role(user_id, user_data.role)
         if not success:
-            raise HTTPException(status_code=404, detail="Utente non trovato")
+            raise HTTPException(status_code=404, detail="User not found")
 
-    return MessageResponse(message=f"Utente {user_id} aggiornato")
+    return MessageResponse(message=f"User {user_id} updated")
 
 
 @app.delete("/api/auth/users/{user_id}", response_model=MessageResponse)
@@ -465,19 +465,19 @@ async def delete_user(
     user_id: int,
     current_user: CurrentUser = Depends(require_admin)
 ):
-    """Elimina utente (solo ADMIN)"""
-    # Non permettere di cancellare se stesso
+    """Delete user (ADMIN only)"""
+    # Don't allow self-deletion
     if user_id == current_user.user_id:
         raise HTTPException(
             status_code=400,
-            detail="Non puoi eliminare il tuo stesso account"
+            detail="You cannot delete your own account"
         )
 
     success = db.delete_user(user_id)
     if not success:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
+        raise HTTPException(status_code=404, detail="User not found")
 
-    return MessageResponse(message=f"Utente {user_id} eliminato")
+    return MessageResponse(message=f"User {user_id} deleted")
 
 
 @app.post("/api/auth/change-password", response_model=MessageResponse)
@@ -485,34 +485,34 @@ async def change_password(
     request: PasswordChange,
     current_user: CurrentUser = Depends(get_current_user)
 ):
-    """Cambia password dell'utente corrente"""
+    """Change current user's password"""
     user = db.get_user_by_id(current_user.user_id)
 
-    # Verifica vecchia password
+    # Verify old password
     if not db.verify_password(request.old_password, user["password_hash"]):
         raise HTTPException(
             status_code=400,
-            detail="Password attuale non corretta"
+            detail="Current password is incorrect"
         )
 
-    # Cambia password
+    # Change password
     success = db.change_password(current_user.user_id, request.new_password)
 
     if not success:
-        raise HTTPException(status_code=500, detail="Errore cambio password")
+        raise HTTPException(status_code=500, detail="Password change error")
 
-    logger.info(f"✅ Password cambiata per utente: {current_user.username}")
+    logger.info(f"✅ Password changed for user: {current_user.username}")
 
-    return MessageResponse(message="Password cambiata con successo")
+    return MessageResponse(message="Password changed successfully")
 
 
 # ============================================================================
 # DOCUMENT MANAGEMENT
 # ============================================================================
 
-# Formati supportati
+# Supported formats
 ALLOWED_EXTENSIONS = {
-    '.pdf', '.txt', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', 
+    '.pdf', '.txt', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
     '.odt', '.rtf', '.html', '.xml', '.json', '.csv', '.md',
     '.jpg', '.jpeg', '.png', '.gif', '.bmp'
 }
@@ -524,83 +524,83 @@ async def upload_document(
     current_user: CurrentUser = Depends(require_upload_permission)
 ):
     """
-    Carica un documento (qualsiasi formato) e lo processa in background
-    Formati supportati: PDF, DOCX, PPTX, XLSX, ODT, RTF, HTML, XML, JSON, CSV, Immagini
+    Upload a document (any format) and process it in the background
+    Supported formats: PDF, DOCX, PPTX, XLSX, ODT, RTF, HTML, XML, JSON, CSV, Images
 
-    Richiede: Ruolo SUPER_USER o ADMIN
+    Requires: SUPER_USER or ADMIN role
     """
-    
+
     if not ocr_service or not embeddings_service or not rag_pipeline:
         raise HTTPException(
-            status_code=503, 
-            detail="Servizi non inizializzati. Controlla /health"
+            status_code=503,
+            detail="Services not initialized. Check /health"
         )
-    
-    # Controlla estensione file
+
+    # Check file extension
     from pathlib import Path
     file_ext = Path(file.filename).suffix.lower()
-    
+
     if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Formato '{file_ext}' non supportato. Supportati: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            status_code=400,
+            detail=f"Format '{file_ext}' not supported. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
     
     try:
-        # Crea document_id con timestamp PRIMA
+        # Create document_id with timestamp FIRST
         document_id = f"{datetime.now().timestamp()}_{file.filename}"
         file_path = os.path.join(UPLOAD_DIR, document_id)
         content = await file.read()
-        
-        # Salva file con il document_id (con timestamp)
+
+        # Save file with the document_id (with timestamp)
         with open(file_path, "wb") as f:
             f.write(content)
-        
-        logger.info(f"📄 File ricevuto: '{file.filename}' ({len(content)} bytes)")
+
+        logger.info(f"📄 File received: '{file.filename}' ({len(content)} bytes)")
         logger.info(f"   Document ID: {document_id}")
         logger.info(f"   File path: {file_path}")
-        
-        # Aggiungi background task
+
+        # Add background task
         background_tasks.add_task(
             process_document_background,
             file_path,
             document_id,
             file.filename
         )
-        
+
         return JSONResponse(
             status_code=202,
             content={
-                "message": "Documento ricevuto, elaborazione in corso",
+                "message": "Document received, processing in progress",
                 "document_id": document_id,
                 "filename": file.filename,
                 "size_bytes": len(content)
             }
         )
-        
+
     except Exception as e:
-        logger.error(f"❌ Errore upload: {str(e)}")
+        logger.error(f"❌ Upload error: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
 async def process_document_background(file_path: str, document_id: str, filename: str):
-    """Background task per processare documento - LOGGING DETTAGLIATO"""
+    """Background task to process document - DETAILED LOGGING"""
     try:
         logger.info("=" * 80)
-        logger.info(f"📇 INIZIO PROCESSING: {filename}")
+        logger.info(f"📇 PROCESSING START: {filename}")
         logger.info(f"   Document ID: {document_id}")
         logger.info(f"   File path: {file_path}")
         logger.info("=" * 80)
-        
+
         # STEP 1: OCR Extraction
         logger.info(f"  [1/3] OCR Extraction...")
         start_ocr = datetime.now()
-        
+
         try:
             text = ocr_service.extract_text(file_path)
 
-            # NUOVO: Detect document type e estrai campi strutturati
+            # NEW: Detect document type and extract structured fields
             doc_type = detect_document_type(text)
             structured_fields = extract_structured_fields(text, doc_type)
 
@@ -609,75 +609,75 @@ async def process_document_background(file_path: str, document_id: str, filename
         except Exception as e:
             logger.error(f"      ❌ OCR FAILED: {str(e)}", exc_info=True)
             text = ""
-        
+
         ocr_time = (datetime.now() - start_ocr).total_seconds()
-        logger.info(f"        ✅ Estratti {len(text)} caratteri in {ocr_time:.2f}s")
-        
+        logger.info(f"        ✅ Extracted {len(text)} characters in {ocr_time:.2f}s")
+
         if not text or len(text.strip()) == 0:
-            logger.warning(f"⚠️  ATTENZIONE: OCR ha ritornato testo vuoto!")
+            logger.warning(f"⚠️  WARNING: OCR returned empty text!")
             return
         
         # STEP 2: Chunking
         logger.info(f"  [2/3] Document Chunking...")
         start_chunk = datetime.now()
-        
+
         try:
             chunks = rag_pipeline.chunk_text(text, chunk_size=1000, overlap=100)
         except Exception as e:
             logger.error(f"      ❌ CHUNKING FAILED: {str(e)}", exc_info=True)
             return
-        
+
         chunk_time = (datetime.now() - start_chunk).total_seconds()
-        logger.info(f"        ✅ {len(chunks)} chunks creati in {chunk_time:.2f}s")
-        
+        logger.info(f"        ✅ {len(chunks)} chunks created in {chunk_time:.2f}s")
+
         if not chunks:
-            logger.error(f"❌ ERRORE: Nessun chunk creato!")
+            logger.error(f"❌ ERROR: No chunks created!")
             return
         
         # STEP 3: Embedding & Indexing
         logger.info(f"  [3/3] Embedding & Indexing...")
         start_index = datetime.now()
-        
+
         try:
             rag_pipeline.index_chunks(
                 chunks=chunks,
                 document_id=document_id,
                 filename=filename,
                 document_type=doc_type,
-                structured_fields=structured_fields                
+                structured_fields=structured_fields
             )
         except Exception as e:
             logger.error(f"      ❌ INDEXING FAILED: {str(e)}", exc_info=True)
             return
-        
+
         index_time = (datetime.now() - start_index).total_seconds()
-        logger.info(f"        ✅ Indicizzato su Qdrant in {index_time:.2f}s")
-        
+        logger.info(f"        ✅ Indexed on Qdrant in {index_time:.2f}s")
+
         # SUMMARY
         total_time = (datetime.now() - start_ocr).total_seconds()
         logger.info("=" * 80)
-        logger.info(f"✅ PROCESSING COMPLETATO: {filename}")
-        logger.info(f"   Tempo totale: {total_time:.2f}s")
+        logger.info(f"✅ PROCESSING COMPLETED: {filename}")
+        logger.info(f"   Total time: {total_time:.2f}s")
         logger.info(f"   - OCR: {ocr_time:.2f}s")
         logger.info(f"   - Chunking: {chunk_time:.2f}s")
         logger.info(f"   - Indexing: {index_time:.2f}s")
         logger.info(f"   Chunks: {len(chunks)}")
-        logger.info(f"   Caratteri: {len(text)}")
+        logger.info(f"   Characters: {len(text)}")
         logger.info("=" * 80)
-        
+
     except Exception as e:
         logger.error("=" * 80)
-        logger.error(f"❌ ERRORE CRITICO PROCESSING {filename}: {str(e)}")
+        logger.error(f"❌ CRITICAL PROCESSING ERROR {filename}: {str(e)}")
         logger.error(traceback.format_exc())
         logger.error("=" * 80)
 
 
 @app.get("/api/documents", response_model=DocumentsListResponse)
 async def list_documents():
-    """Lista documenti indicizzati"""
+    """List indexed documents"""
     if not qdrant_connector:
-        raise HTTPException(status_code=503, detail="Qdrant non connesso")
-    
+        raise HTTPException(status_code=503, detail="Qdrant not connected")
+
     try:
         docs = qdrant_connector.get_indexed_documents()
         return DocumentsListResponse(
@@ -685,52 +685,52 @@ async def list_documents():
             total=len(docs)
         )
     except Exception as e:
-        logger.error(f"Errore lista documenti: {str(e)}")
+        logger.error(f"Error listing documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/documents/{document_id}/download")
 async def download_document(document_id: str):
-    """Scarica il documento originale caricato"""
+    """Download the original uploaded document"""
     from fastapi.responses import FileResponse
     import glob
-    
+
     try:
-        # Cerca il file nella cartella upload
-        # Il document_id ha formato: timestamp_nomefile.ext
+        # Search for the file in the upload folder
+        # The document_id has format: timestamp_filename.ext
         search_pattern = os.path.join(UPLOAD_DIR, f"{document_id}")
-        
-        # Verifica se il file esiste esattamente
+
+        # Check if the file exists exactly
         if os.path.exists(search_pattern):
             file_path = search_pattern
         else:
-            # Altrimenti cerca con wildcard (nel caso il path sia leggermente diverso)
+            # Otherwise search with wildcard (in case the path is slightly different)
             files = glob.glob(search_pattern)
             if not files:
-                raise HTTPException(status_code=404, detail=f"Documento non trovato: {document_id}")
+                raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
             file_path = files[0]
-        
-        logger.info(f"📥 Download documento: {document_id}")
+
+        logger.info(f"📥 Download document: {document_id}")
         logger.info(f"   Path: {file_path}")
-        
+
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="File non trovato")
-        
-        # Estrai il nome del file originale (senza timestamp)
-        # Formato: 1762533561.231156_TU-81-08-Ed.-Gennaio-2025-1.pdf
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Extract the original file name (without timestamp)
+        # Format: 1762533561.231156_TU-81-08-Ed.-Gennaio-2025-1.pdf
         filename = os.path.basename(file_path)
         original_filename = filename.split('_', 1)[1] if '_' in filename else filename
-        
+
         return FileResponse(
             path=file_path,
             media_type='application/octet-stream',
             filename=original_filename
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Errore download: {str(e)}")
+        logger.error(f"❌ Download error: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -741,20 +741,20 @@ async def delete_document(
     current_user: CurrentUser = Depends(require_delete_permission)
 ):
     """
-    Elimina documento da indice
+    Delete document from index
 
-    Richiede: Ruolo SUPER_USER o ADMIN
+    Requires: SUPER_USER or ADMIN role
     """
     if not qdrant_connector:
-        raise HTTPException(status_code=503, detail="Qdrant non connesso")
-    
+        raise HTTPException(status_code=503, detail="Qdrant not connected")
+
     try:
-        logger.info(f"🗑️  Eliminando documento: {document_id}")
+        logger.info(f"🗑️  Deleting document: {document_id}")
         qdrant_connector.delete_document(document_id)
-        logger.info(f"✅ Documento eliminato: {document_id}")
-        return {"message": f"Documento {document_id} eliminato"}
+        logger.info(f"✅ Document deleted: {document_id}")
+        return {"message": f"Document {document_id} deleted"}
     except Exception as e:
-        logger.error(f"Errore eliminazione: {str(e)}")
+        logger.error(f"Deletion error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -768,67 +768,67 @@ async def query_rag(
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """
-    Query principale - RAG Pipeline completo CON MEMORIA CONVERSAZIONALE
+    Main query - Complete RAG Pipeline WITH CONVERSATIONAL MEMORY
 
-    Richiede: Autenticazione (tutti i ruoli possono fare query)
+    Requires: Authentication (all roles can make queries)
 
-    Processa:
-    1. Retrieval storia conversazione per l'utente
-    2. Embedding della query
-    3. Retrieval da Qdrant
-    4. LLM generation con contesto storico
-    5. Salva risposta in memoria
-    6. Ritorna answer + sources
+    Processes:
+    1. Retrieve conversation history for the user
+    2. Query embedding
+    3. Retrieval from Qdrant
+    4. LLM generation with historical context
+    5. Save response in memory
+    6. Return answer + sources
     """
 
-    # Usa l'ID utente reale invece di "default"
+    # Use real user ID instead of "default"
     user_id = str(current_user.user_id)
     if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline non inizializzato")
+        raise HTTPException(status_code=503, detail="RAG Pipeline not initialized")
     
     try:
         start_time = datetime.now()
-        
-        # Inizializza conversazione per questo utente se non esiste
+
+        # Initialize conversation for this user if it doesn't exist
         if user_id not in user_conversations:
             user_conversations[user_id] = []
-        
+
         conversation_history = user_conversations[user_id]
-        
+
         logger.info("=" * 80)
         logger.info(f"❓ QUERY (user: {user_id}): '{request.query}'")
         logger.info(f"   top_k: {request.top_k}")
         logger.info(f"   temperature: {request.temperature}")
-        logger.info(f"   History length: {len(conversation_history)} scambi")
+        logger.info(f"   History length: {len(conversation_history)} exchanges")
         logger.info("=" * 80)
-        
-        # Passa la storia al pipeline
+
+        # Pass history to the pipeline
         answer, sources = rag_pipeline.query(
             query=request.query,
             top_k=request.top_k,
             temperature=request.temperature,
-            history=conversation_history  # ← MEMORIA CONVERSAZIONALE
+            history=conversation_history  # ← CONVERSATIONAL MEMORY
         )
-        
-        # Salva il nuovo scambio nella memoria
+
+        # Save the new exchange in memory
         conversation_history.append({
             "user": request.query,
             "assistant": answer
         })
-        
-        # Limita a ultimi 20 scambi per non consumare memoria
+
+        # Limit to last 20 exchanges to not consume too much memory
         if len(conversation_history) > 20:
             user_conversations[user_id] = conversation_history[-20:]
-        
+
         processing_time = (datetime.now() - start_time).total_seconds()
-        
+
         logger.info("=" * 80)
-        logger.info(f"✅ QUERY COMPLETATA in {processing_time:.2f}s")
+        logger.info(f"✅ QUERY COMPLETED in {processing_time:.2f}s")
         logger.info(f"   Answer length: {len(answer)} chars")
         logger.info(f"   Sources: {len(sources)}")
         for src in sources:
             logger.info(f"     - {src['filename']} (relevance: {src['similarity_score']:.2%})")
-        logger.info(f"   Conversazione salvata ({len(user_conversations[user_id])} scambi)")
+        logger.info(f"   Conversation saved ({len(user_conversations[user_id])} exchanges)")
         logger.info("=" * 80)
         
         return QueryResponse(
@@ -840,7 +840,7 @@ async def query_rag(
         
     except Exception as e:
         logger.error("=" * 80)
-        logger.error(f"❌ ERRORE QUERY: {str(e)}")
+        logger.error(f"❌ QUERY ERROR: {str(e)}")
         logger.error(traceback.format_exc())
         logger.error("=" * 80)
         raise HTTPException(status_code=500, detail=str(e))
@@ -852,42 +852,42 @@ async def query_rag(
 
 @app.post("/api/admin/reindex-all")
 async def reindex_all(background_tasks: BackgroundTasks):
-    """Reindicizza tutti i documenti"""
+    """Reindex all documents"""
     if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline non inizializzato")
-    
-    logger.info("🔄 Avvio reindexing di tutti i documenti...")
+        raise HTTPException(status_code=503, detail="RAG Pipeline not initialized")
+
+    logger.info("🔄 Starting reindexing of all documents...")
     background_tasks.add_task(rag_pipeline.reindex_all_documents)
-    return {"message": "Reindexing in corso..."}
+    return {"message": "Reindexing in progress..."}
 
 
 @app.delete("/api/admin/memory/{user_id}")
 async def clear_user_memory(user_id: str):
-    """Pulisce la memoria conversazionale di un utente specifico"""
+    """Clear conversational memory for a specific user"""
     if user_id in user_conversations:
         num_exchanges = len(user_conversations[user_id])
         del user_conversations[user_id]
-        logger.info(f"🧹 Memoria cancellata per user '{user_id}' ({num_exchanges} scambi rimossi)")
+        logger.info(f"🧹 Memory cleared for user '{user_id}' ({num_exchanges} exchanges removed)")
         return {
-            "message": f"Memoria cancellata per user '{user_id}'",
+            "message": f"Memory cleared for user '{user_id}'",
             "exchanges_removed": num_exchanges
         }
     else:
         return {
-            "message": f"Nessuna memoria trovata per user '{user_id}'",
+            "message": f"No memory found for user '{user_id}'",
             "exchanges_removed": 0
         }
 
 
 @app.delete("/api/admin/memory")
 async def clear_all_memory():
-    """Pulisce TUTTA la memoria conversazionale di tutti gli utenti"""
+    """Clear ALL conversational memory for all users"""
     total_users = len(user_conversations)
     total_exchanges = sum(len(conv) for conv in user_conversations.values())
     user_conversations.clear()
-    logger.info(f"🧹 Memoria globale cancellata: {total_users} utenti, {total_exchanges} scambi totali")
+    logger.info(f"🧹 Global memory cleared: {total_users} users, {total_exchanges} total exchanges")
     return {
-        "message": "Memoria globale cancellata",
+        "message": "Global memory cleared",
         "users_removed": total_users,
         "exchanges_removed": total_exchanges
     }
@@ -895,7 +895,7 @@ async def clear_all_memory():
 
 @app.get("/api/admin/memory")
 async def get_memory_stats():
-    """Statistiche memoria conversazionale"""
+    """Conversational memory statistics"""
     stats = {
         "total_users": len(user_conversations),
         "users": {}
@@ -910,14 +910,14 @@ async def get_memory_stats():
 
 @app.get("/api/admin/stats")
 async def get_stats():
-    """Statistiche del sistema"""
+    """System statistics"""
     if not qdrant_connector:
-        raise HTTPException(status_code=503, detail="Qdrant non connesso")
-    
+        raise HTTPException(status_code=503, detail="Qdrant not connected")
+
     try:
         return qdrant_connector.get_stats()
     except Exception as e:
-        logger.error(f"Errore statistiche: {str(e)}")
+        logger.error(f"Statistics error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
