@@ -8,10 +8,30 @@ const BRANDING = {
   clientName: 'RAG Enterprise',
   primaryColor: '#3b82f6', // blue-500
   poweredBy: 'I3K Technologies',
-  version: 'v1.0'
+  version: 'v1.1'
 }
 
 function App() {
+  // Authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [user, setUser] = useState(null)
+  const [token, setToken] = useState(null)
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' })
+  const [loggingIn, setLoggingIn] = useState(false)
+  const [loginError, setLoginError] = useState('')
+
+  // Admin panel state
+  const [showAdminPanel, setShowAdminPanel] = useState(false)
+  const [allUsers, setAllUsers] = useState([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
+  const [newUserForm, setNewUserForm] = useState({
+    username: '',
+    email: '',
+    password: '',
+    role: 'user'
+  })
+  const [creatingUser, setCreatingUser] = useState(false)
+
   // Backend status
   const [status, setStatus] = useState('checking')
   const [backendHealth, setBackendHealth] = useState(null)
@@ -30,7 +50,7 @@ function App() {
   const [loadingDocuments, setLoadingDocuments] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploading, setUploading] = useState(false)
-  const [uploadPhase, setUploadPhase] = useState('') // Fase corrente dell'upload
+  const [uploadPhase, setUploadPhase] = useState('')
 
   // UI state
   const [showConversationsSidebar, setShowConversationsSidebar] = useState(true)
@@ -46,17 +66,177 @@ function App() {
 
   useEffect(scrollToBottom, [messages])
 
-  // Initialize: load conversations and check backend
+  // Initialize: check token and load data
   useEffect(() => {
-    loadConversationsFromStorage()
-    checkBackendHealth()
-    fetchDocuments()
+    const savedToken = localStorage.getItem('rag_auth_token')
+    const savedUser = localStorage.getItem('rag_auth_user')
 
-    const interval = setInterval(checkBackendHealth, 30000)
-    return () => clearInterval(interval)
+    if (savedToken && savedUser) {
+      setToken(savedToken)
+      setUser(JSON.parse(savedUser))
+      setIsAuthenticated(true)
+    }
   }, [])
 
-  // Load conversations from localStorage
+  // When authenticated, load conversations and check backend
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadConversationsFromStorage()
+      checkBackendHealth()
+      fetchDocuments()
+
+      const interval = setInterval(checkBackendHealth, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [isAuthenticated])
+
+  // Axios interceptor to add Authorization header
+  useEffect(() => {
+    const requestInterceptor = axios.interceptors.request.use(
+      (config) => {
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`
+        }
+        return config
+      },
+      (error) => Promise.reject(error)
+    )
+
+    const responseInterceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        // Logout if 401 Unauthorized
+        if (error.response?.status === 401) {
+          handleLogout()
+        }
+        return Promise.reject(error)
+      }
+    )
+
+    return () => {
+      axios.interceptors.request.eject(requestInterceptor)
+      axios.interceptors.response.eject(responseInterceptor)
+    }
+  }, [token])
+
+  // ============================================================================
+  // AUTHENTICATION FUNCTIONS
+  // ============================================================================
+
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setLoggingIn(true)
+    setLoginError('')
+
+    try {
+      const response = await axios.post('http://localhost:8000/api/auth/login', {
+        username: loginForm.username,
+        password: loginForm.password
+      })
+
+      const { access_token, user: userData } = response.data
+
+      setToken(access_token)
+      setUser(userData)
+      setIsAuthenticated(true)
+
+      // Save to localStorage
+      localStorage.setItem('rag_auth_token', access_token)
+      localStorage.setItem('rag_auth_user', JSON.stringify(userData))
+
+      console.log('✅ Login successful:', userData.username, 'role:', userData.role)
+    } catch (error) {
+      console.error('Login error:', error)
+      setLoginError(error.response?.data?.detail || 'Errore login')
+    } finally {
+      setLoggingIn(false)
+    }
+  }
+
+  const handleLogout = () => {
+    setToken(null)
+    setUser(null)
+    setIsAuthenticated(false)
+    localStorage.removeItem('rag_auth_token')
+    localStorage.removeItem('rag_auth_user')
+    setLoginForm({ username: '', password: '' })
+    setShowAdminPanel(false)
+  }
+
+  // ============================================================================
+  // ADMIN FUNCTIONS
+  // ============================================================================
+
+  const fetchAllUsers = async () => {
+    if (!user || user.role !== 'admin') return
+
+    setLoadingUsers(true)
+    try {
+      const response = await axios.get('http://localhost:8000/api/auth/users')
+      setAllUsers(response.data.users || [])
+    } catch (error) {
+      console.error('Error fetching users:', error)
+      alert('Errore caricamento utenti')
+    } finally {
+      setLoadingUsers(false)
+    }
+  }
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault()
+    setCreatingUser(true)
+
+    try {
+      await axios.post('http://localhost:8000/api/auth/users', newUserForm)
+      alert(`✅ Utente "${newUserForm.username}" creato con successo!`)
+      setNewUserForm({ username: '', email: '', password: '', role: 'user' })
+      fetchAllUsers()
+    } catch (error) {
+      console.error('Error creating user:', error)
+      alert(`❌ Errore: ${error.response?.data?.detail || error.message}`)
+    } finally {
+      setCreatingUser(false)
+    }
+  }
+
+  const handleDeleteUser = async (userId, username) => {
+    if (!window.confirm(`Sei sicuro di voler eliminare l'utente "${username}"?`)) {
+      return
+    }
+
+    try {
+      await axios.delete(`http://localhost:8000/api/auth/users/${userId}`)
+      alert('✅ Utente eliminato')
+      fetchAllUsers()
+    } catch (error) {
+      console.error('Error deleting user:', error)
+      alert(`❌ Errore: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const handleChangeUserRole = async (userId, newRole, username) => {
+    try {
+      await axios.put(`http://localhost:8000/api/auth/users/${userId}`, { role: newRole })
+      alert(`✅ Ruolo di "${username}" aggiornato a "${newRole}"`)
+      fetchAllUsers()
+    } catch (error) {
+      console.error('Error updating role:', error)
+      alert(`❌ Errore: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const toggleAdminPanel = () => {
+    const newState = !showAdminPanel
+    setShowAdminPanel(newState)
+    if (newState) {
+      fetchAllUsers()
+    }
+  }
+
+  // ============================================================================
+  // CONVERSATIONS FUNCTIONS
+  // ============================================================================
+
   const loadConversationsFromStorage = () => {
     try {
       const stored = localStorage.getItem('rag_conversations')
@@ -64,7 +244,6 @@ function App() {
         const parsed = JSON.parse(stored)
         setConversations(parsed)
 
-        // Ripristina l'ultima conversazione attiva
         const lastActiveId = localStorage.getItem('rag_current_conversation')
         if (lastActiveId && parsed.find(c => c.id === lastActiveId)) {
           loadConversation(lastActiveId)
@@ -72,7 +251,6 @@ function App() {
           loadConversation(parsed[0].id)
         }
       } else {
-        // Crea conversazione iniziale
         createNewConversation()
       }
     } catch (error) {
@@ -81,12 +259,10 @@ function App() {
     }
   }
 
-  // Save conversations to localStorage
   const saveConversationsToStorage = (convs) => {
     localStorage.setItem('rag_conversations', JSON.stringify(convs))
   }
 
-  // Create new conversation
   const createNewConversation = () => {
     const newConv = {
       id: Date.now().toString(),
@@ -101,7 +277,6 @@ function App() {
     loadConversation(newConv.id)
   }
 
-  // Load conversation
   const loadConversation = (convId) => {
     const conv = conversations.find(c => c.id === convId)
     if (conv) {
@@ -111,7 +286,6 @@ function App() {
     }
   }
 
-  // Delete conversation
   const deleteConversation = (convId) => {
     if (conversations.length === 1) {
       alert('Non puoi eliminare l\'ultima conversazione')
@@ -127,7 +301,6 @@ function App() {
     }
   }
 
-  // Update conversation title (first message preview)
   const updateConversationTitle = (convId, firstMessage) => {
     const updated = conversations.map(c => {
       if (c.id === convId && c.title === 'Nuova Conversazione') {
@@ -142,7 +315,6 @@ function App() {
     saveConversationsToStorage(updated)
   }
 
-  // Update conversation messages
   const updateConversationMessages = (convId, newMessages) => {
     const updated = conversations.map(c =>
       c.id === convId ? { ...c, messages: newMessages } : c
@@ -151,7 +323,10 @@ function App() {
     saveConversationsToStorage(updated)
   }
 
-  // Check backend health
+  // ============================================================================
+  // BACKEND FUNCTIONS
+  // ============================================================================
+
   const checkBackendHealth = async () => {
     try {
       const response = await axios.get('http://localhost:8000/health')
@@ -163,46 +338,34 @@ function App() {
     }
   }
 
-  // Fetch documents from backend
   const fetchDocuments = async () => {
     setLoadingDocuments(true)
     try {
       const response = await axios.get('http://localhost:8000/api/documents')
-      console.log('📊 Response from /api/documents:', response.data)
-      console.log('📄 Documents array:', response.data.documents)
-
       const docs = response.data.documents || []
-      console.log(`✅ Fetched ${docs.length} documents:`, docs)
-
       setDocuments(docs)
     } catch (error) {
       console.error('❌ Errore fetch documenti:', error)
-      console.error('Error details:', error.response?.data)
     } finally {
       setLoadingDocuments(false)
     }
   }
 
-  // Check if document already exists
   const checkDuplicateDocument = (filename) => {
     return documents.some(doc => doc.filename === filename)
   }
 
-  // Poll documents until count increases (max 30 secondi)
   const pollDocumentsUntilReady = async (initialCount, maxAttempts = 15) => {
     setUploadPhase('⏳ Attesa completamento elaborazione...')
 
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(resolve => setTimeout(resolve, 2000)) // Check ogni 2 secondi
+      await new Promise(resolve => setTimeout(resolve, 2000))
 
       try {
         const response = await axios.get('http://localhost:8000/api/documents')
         const currentDocs = response.data.documents || []
 
-        console.log(`🔍 Poll attempt ${i + 1}: ${currentDocs.length} docs (was ${initialCount})`)
-
         if (currentDocs.length > initialCount) {
-          console.log('✅ Nuovo documento rilevato!')
           return currentDocs
         }
 
@@ -212,16 +375,13 @@ function App() {
       }
     }
 
-    console.warn('⚠️ Timeout polling - documento potrebbe non essere pronto')
     return null
   }
 
-  // Handle file upload
   const handleFileUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
 
-    // Controllo duplicati
     if (checkDuplicateDocument(file.name)) {
       const confirm = window.confirm(
         `⚠️ Il documento "${file.name}" è già presente.\n\nVuoi caricarlo comunque?`
@@ -254,28 +414,19 @@ function App() {
       setUploadPhase('📤 Invio al server...')
       const response = await axios.post('http://localhost:8000/api/documents/upload', formData, config)
 
-      console.log('📤 Upload response:', response.data)
-
-      // Backend ritorna 202 (Accepted) con elaborazione in background
       setUploadProgress(100)
       setUploadPhase('🔄 Elaborazione documento (OCR → Chunking → Embedding)...')
 
-      // Poll finché il documento non appare nella lista
       const updatedDocs = await pollDocumentsUntilReady(initialDocCount)
 
       if (updatedDocs) {
         setDocuments(updatedDocs)
         setUploadPhase('✅ Completato!')
-
         await new Promise(resolve => setTimeout(resolve, 1000))
-
         alert(`✅ File caricato con successo: ${response.data.filename}\n\nIl documento è ora disponibile per le ricerche.`)
       } else {
         setUploadPhase('⚠️ Elaborazione in corso (continua in background)')
-
-        // Refresh comunque
         await fetchDocuments()
-
         alert(`⚠️ File caricato: ${response.data.filename}\n\nL'elaborazione sta richiedendo più tempo del previsto.\nControlla la lista documenti tra qualche secondo.`)
       }
 
@@ -290,7 +441,6 @@ function App() {
     }
   }
 
-  // Handle query submit
   const handleQuery = async (e) => {
     e.preventDefault()
     if (!query.trim() || querying) return
@@ -301,12 +451,10 @@ function App() {
       timestamp: new Date().toISOString()
     }
 
-    // Add user message immediately
     const updatedMessages = [...messages, userMessage]
     setMessages(updatedMessages)
     updateConversationMessages(currentConversationId, updatedMessages)
 
-    // Update conversation title if first message
     if (updatedMessages.length === 1) {
       updateConversationTitle(currentConversationId, query)
     }
@@ -317,8 +465,7 @@ function App() {
     try {
       const response = await axios.post('http://localhost:8000/api/query', {
         query: userMessage.content,
-        top_k: 5,
-        user_id: currentConversationId
+        top_k: 5
       })
 
       const assistantMessage = {
@@ -350,7 +497,6 @@ function App() {
     }
   }
 
-  // Delete document
   const handleDeleteDocument = async (documentId) => {
     if (!window.confirm('Sei sicuro di voler eliminare questo documento?')) {
       return
@@ -366,8 +512,214 @@ function App() {
     }
   }
 
+  // ============================================================================
+  // RENDER: LOGIN SCREEN
+  // ============================================================================
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
+        <div className="w-full max-w-md p-8 bg-slate-800 rounded-lg shadow-2xl border border-slate-700">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-white mb-2">{BRANDING.clientName}</h1>
+            <p className="text-slate-400">Accedi per continuare</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Username
+              </label>
+              <input
+                type="text"
+                value={loginForm.username}
+                onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="admin"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Password
+              </label>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div className="p-3 bg-red-900/30 border border-red-500 rounded-lg text-red-200 text-sm">
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loggingIn}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold rounded-lg transition"
+            >
+              {loggingIn ? 'Accesso in corso...' : 'Accedi'}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-6 border-t border-slate-700 text-center text-xs text-slate-400">
+            <p>Credenziali di default:</p>
+            <p className="mt-1">Username: <span className="text-white font-mono">admin</span></p>
+            <p>Password: <span className="text-white font-mono">admin123</span></p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ============================================================================
+  // RENDER: ADMIN PANEL (MODAL)
+  // ============================================================================
+
+  const canUploadDelete = user && (user.role === 'admin' || user.role === 'super_user')
+  const isAdmin = user && user.role === 'admin'
+
   return (
     <div className="flex flex-col h-screen bg-gradient-to-br from-slate-900 to-slate-800">
+
+      {/* ADMIN PANEL MODAL */}
+      {showAdminPanel && isAdmin && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-lg shadow-2xl border border-slate-700 w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="p-6 border-b border-slate-700 flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-white">👥 Gestione Utenti</h2>
+              <button
+                onClick={toggleAdminPanel}
+                className="text-slate-400 hover:text-white text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Create User Form */}
+              <div className="bg-slate-700 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-white mb-4">➕ Crea Nuovo Utente</h3>
+                <form onSubmit={handleCreateUser} className="grid grid-cols-2 gap-4">
+                  <input
+                    type="text"
+                    placeholder="Username"
+                    value={newUserForm.username}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                    className="px-3 py-2 bg-slate-600 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={newUserForm.email}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                    className="px-3 py-2 bg-slate-600 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={newUserForm.password}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                    className="px-3 py-2 bg-slate-600 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                  <select
+                    value={newUserForm.role}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value })}
+                    className="px-3 py-2 bg-slate-600 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="user">User (solo consultazione)</option>
+                    <option value="super_user">Super User (upload/delete)</option>
+                    <option value="admin">Admin (gestione utenti)</option>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={creatingUser}
+                    className="col-span-2 py-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold rounded transition"
+                  >
+                    {creatingUser ? 'Creazione...' : 'Crea Utente'}
+                  </button>
+                </form>
+              </div>
+
+              {/* Users List */}
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-white">📋 Utenti Registrati ({allUsers.length})</h3>
+                  <button
+                    onClick={fetchAllUsers}
+                    className="text-sm text-blue-400 hover:text-blue-300"
+                  >
+                    🔄 Aggiorna
+                  </button>
+                </div>
+
+                {loadingUsers ? (
+                  <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                ) : allUsers.length === 0 ? (
+                  <p className="text-center text-slate-400 py-8">Nessun utente trovato</p>
+                ) : (
+                  <div className="space-y-2">
+                    {allUsers.map(u => (
+                      <div key={u.id} className="bg-slate-700 rounded-lg p-4 flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3">
+                            <p className="text-white font-semibold">{u.username}</p>
+                            <span className={`px-2 py-1 rounded text-xs font-bold ${
+                              u.role === 'admin' ? 'bg-red-600 text-white' :
+                              u.role === 'super_user' ? 'bg-purple-600 text-white' :
+                              'bg-blue-600 text-white'
+                            }`}>
+                              {u.role.toUpperCase()}
+                            </span>
+                          </div>
+                          <p className="text-sm text-slate-400 mt-1">{u.email}</p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {u.id !== user.id && (
+                            <>
+                              <select
+                                value={u.role}
+                                onChange={(e) => handleChangeUserRole(u.id, e.target.value, u.username)}
+                                className="px-2 py-1 bg-slate-600 text-white text-sm rounded"
+                              >
+                                <option value="user">User</option>
+                                <option value="super_user">Super User</option>
+                                <option value="admin">Admin</option>
+                              </select>
+                              <button
+                                onClick={() => handleDeleteUser(u.id, u.username)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition"
+                              >
+                                🗑️ Elimina
+                              </button>
+                            </>
+                          )}
+                          {u.id === user.id && (
+                            <span className="text-sm text-slate-400 italic">(Tu)</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* HEADER */}
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
@@ -379,8 +731,9 @@ function App() {
           )}
         </div>
 
-        {/* Status indicator */}
-        <div className="flex items-center gap-4">
+        {/* User info and status */}
+        <div className="flex items-center gap-6">
+          {/* Backend status */}
           <div className="flex items-center gap-2">
             <div className={`w-3 h-3 rounded-full ${
               status === 'ready' ? 'bg-green-500' :
@@ -394,15 +747,38 @@ function App() {
             </span>
           </div>
 
-          {backendHealth && (
+          {/* User info */}
+          <div className="flex items-center gap-3 border-l border-slate-700 pl-6">
+            <div className="text-right">
+              <p className="text-sm font-semibold text-white">{user.username}</p>
+              <p className={`text-xs ${
+                user.role === 'admin' ? 'text-red-400' :
+                user.role === 'super_user' ? 'text-purple-400' :
+                'text-blue-400'
+              }`}>
+                {user.role === 'admin' ? '👑 Admin' :
+                 user.role === 'super_user' ? '⭐ Super User' :
+                 '👤 User'}
+              </p>
+            </div>
+
+            {isAdmin && (
+              <button
+                onClick={toggleAdminPanel}
+                className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition"
+                title="Gestione utenti"
+              >
+                👥
+              </button>
+            )}
+
             <button
-              onClick={checkBackendHealth}
-              className="text-sm text-slate-400 hover:text-white transition"
-              title={`LLM: ${backendHealth.configuration?.llm_model || 'N/A'}`}
+              onClick={handleLogout}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition"
             >
-              🔄 Refresh
+              Logout
             </button>
-          )}
+          </div>
         </div>
       </header>
 
@@ -462,7 +838,6 @@ function App() {
         {/* CHAT AREA */}
         <main className="flex-1 flex flex-col">
 
-          {/* Toggle sidebar button (if hidden) */}
           {!showConversationsSidebar && (
             <button
               onClick={() => setShowConversationsSidebar(true)}
@@ -477,8 +852,13 @@ function App() {
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-slate-400">
-                  <h2 className="text-2xl font-bold mb-2">👋 Ciao!</h2>
+                  <h2 className="text-2xl font-bold mb-2">👋 Ciao, {user.username}!</h2>
                   <p>Inizia una conversazione oppure carica dei documenti per iniziare.</p>
+                  {!canUploadDelete && (
+                    <p className="mt-4 text-sm text-yellow-400">
+                      ⚠️ Hai permessi di sola consultazione
+                    </p>
+                  )}
                 </div>
               </div>
             ) : (
@@ -498,7 +878,6 @@ function App() {
                   >
                     <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
-                    {/* Sources */}
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
                         <p className="text-sm font-semibold text-slate-300">
@@ -574,39 +953,47 @@ function App() {
             <div className="p-4 border-b border-slate-700">
               <h2 className="text-lg font-bold text-white mb-3">📁 Documenti</h2>
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                onChange={handleFileUpload}
-                disabled={uploading}
-                className="hidden"
-                accept=".pdf,.docx,.txt,.doc,.pptx,.xlsx"
-              />
+              {canUploadDelete && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    onChange={handleFileUpload}
+                    disabled={uploading}
+                    className="hidden"
+                    accept=".pdf,.docx,.txt,.doc,.pptx,.xlsx"
+                  />
 
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white rounded-lg font-semibold transition"
-              >
-                {uploading ? `⏳ ${uploadProgress}%` : '+ Carica File'}
-              </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white rounded-lg font-semibold transition"
+                  >
+                    {uploading ? `⏳ ${uploadProgress}%` : '+ Carica File'}
+                  </button>
 
-              {uploading && (
-                <div className="mt-3 space-y-2">
-                  {/* Progress bar */}
-                  <div className="bg-slate-700 rounded-full h-2">
-                    <div
-                      className="bg-green-500 h-2 rounded-full transition-all"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
+                  {uploading && (
+                    <div className="mt-3 space-y-2">
+                      <div className="bg-slate-700 rounded-full h-2">
+                        <div
+                          className="bg-green-500 h-2 rounded-full transition-all"
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
 
-                  {/* Fase corrente */}
-                  {uploadPhase && (
-                    <p className="text-sm text-slate-300 text-center animate-pulse">
-                      {uploadPhase}
-                    </p>
+                      {uploadPhase && (
+                        <p className="text-sm text-slate-300 text-center animate-pulse">
+                          {uploadPhase}
+                        </p>
+                      )}
+                    </div>
                   )}
+                </>
+              )}
+
+              {!canUploadDelete && (
+                <div className="p-3 bg-yellow-900/30 border border-yellow-500 rounded text-yellow-200 text-xs text-center">
+                  ⚠️ Permessi di sola consultazione
                 </div>
               )}
             </div>
@@ -635,13 +1022,15 @@ function App() {
                           </p>
                         </div>
 
-                        <button
-                          onClick={() => handleDeleteDocument(doc.document_id)}
-                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs transition"
-                          title="Elimina documento"
-                        >
-                          🗑️
-                        </button>
+                        {canUploadDelete && (
+                          <button
+                            onClick={() => handleDeleteDocument(doc.document_id)}
+                            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs transition"
+                            title="Elimina documento"
+                          >
+                            🗑️
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -666,7 +1055,6 @@ function App() {
           </aside>
         )}
 
-        {/* Toggle documents sidebar button (if hidden) */}
         {!showDocumentsSidebar && (
           <button
             onClick={() => setShowDocumentsSidebar(true)}
