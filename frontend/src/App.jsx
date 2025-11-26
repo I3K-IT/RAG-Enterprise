@@ -4,10 +4,11 @@ import './App.css'
 
 // Configurazione logo e branding (personalizzabile per ogni cliente)
 const BRANDING = {
-  clientLogo: null, // URL del logo cliente, null = usa nome testuale
+  clientLogo: '/logo.png', // URL del logo cliente, null = usa nome testuale
   clientName: 'RAG Enterprise',
   primaryColor: '#3b82f6', // blue-500
   poweredBy: 'I3K Technologies',
+  poweredBySubtitle: 'Ltd.',
   version: 'v1.1'
 }
 
@@ -593,7 +594,11 @@ function App() {
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
         <div className="w-full max-w-md p-8 bg-slate-800 rounded-lg shadow-2xl border border-slate-700">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-white mb-2">{BRANDING.clientName}</h1>
+            {BRANDING.clientLogo ? (
+              <img src={BRANDING.clientLogo} alt="Logo" className="h-16 mx-auto mb-4" />
+            ) : (
+              <h1 className="text-3xl font-bold text-white mb-2">{BRANDING.clientName}</h1>
+            )}
             <p className="text-slate-400">Accedi per continuare</p>
           </div>
 
@@ -1250,9 +1255,16 @@ function App() {
       {/* FOOTER */}
       <footer className="bg-slate-900 border-t border-slate-700 px-6 py-3">
         <div className="flex items-center justify-between text-xs text-slate-400">
-          <div>
-            <span>Powered by </span>
-            <span className="font-semibold text-blue-400">{BRANDING.poweredBy}</span>
+          <div className="flex items-center gap-2">
+            <div>
+              <div>
+                <span>Powered by </span>
+                <span className="font-semibold text-blue-400">{BRANDING.poweredBy}</span>
+              </div>
+              {BRANDING.poweredBySubtitle && (
+                <div className="text-slate-500 text-[10px] ml-16">{BRANDING.poweredBySubtitle}</div>
+              )}
+            </div>
             <span className="mx-2">•</span>
             <span>{BRANDING.version}</span>
           </div>
