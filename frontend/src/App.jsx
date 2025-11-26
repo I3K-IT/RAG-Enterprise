@@ -1029,12 +1029,7 @@ function App() {
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-slate-400">
                   <h2 className="text-2xl font-bold mb-2">👋 Ciao, {user.username}!</h2>
-                  <p>Inizia una conversazione oppure carica dei documenti per iniziare.</p>
-                  {!canUploadDelete && (
-                    <p className="mt-4 text-sm text-yellow-400">
-                      ⚠️ Hai permessi di sola consultazione
-                    </p>
-                  )}
+                  <p>Inizia una conversazione{canUploadDelete ? ' oppure carica dei documenti per iniziare' : ''}.</p>
                 </div>
               </div>
             ) : (
@@ -1176,12 +1171,6 @@ function App() {
                     </div>
                   )}
                 </>
-              )}
-
-              {!canUploadDelete && (
-                <div className="p-3 bg-yellow-900/30 border border-yellow-500 rounded text-yellow-200 text-xs text-center">
-                  ⚠️ Permessi di sola consultazione
-                </div>
               )}
             </div>
 
