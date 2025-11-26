@@ -3,7 +3,7 @@ RAG Enterprise Backend - FastAPI Application
 Gestisce: OCR, Embedding, RAG Pipeline, Qdrant Integration
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -19,6 +19,18 @@ from embeddings_service import EmbeddingsService
 from qdrant_connector import QdrantConnector
 import re
 from typing import Dict, Optional
+
+# Authentication imports
+from auth import create_user_token
+from database import db, UserRole
+from auth_models import (
+    LoginRequest, LoginResponse, UserInfo, UserCreate, UserUpdate,
+    PasswordChange, UserListResponse, MessageResponse
+)
+from middleware import (
+    get_current_user, require_admin, require_upload_permission,
+    require_delete_permission, CurrentUser
+)
 
 def detect_document_type(text: str) -> str:
     """Riconosce il tipo di documento - con check più rigorosi"""
@@ -328,6 +340,173 @@ async def get_info():
 
 
 # ============================================================================
+# AUTHENTICATION ENDPOINTS
+# ============================================================================
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """
+    Login utente - ritorna JWT token
+
+    Credenziali di default:
+    - Admin: username=admin, password=admin123
+    """
+    user = db.authenticate_user(request.username, request.password)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Username o password non corretti"
+        )
+
+    # Crea token JWT
+    token = create_user_token(user)
+
+    logger.info(f"✅ Login effettuato: {user['username']} (role: {user['role']})")
+
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserInfo(
+            id=user["id"],
+            username=user["username"],
+            email=user["email"],
+            role=user["role"],
+            created_at=user["created_at"],
+            last_login=user.get("last_login")
+        )
+    )
+
+
+@app.get("/api/auth/me", response_model=UserInfo)
+async def get_current_user_info(current_user: CurrentUser = Depends(get_current_user)):
+    """Ottieni informazioni utente corrente"""
+    user = db.get_user_by_id(current_user.user_id)
+
+    return UserInfo(
+        id=user["id"],
+        username=user["username"],
+        email=user["email"],
+        role=user["role"],
+        created_at=user["created_at"],
+        last_login=user.get("last_login")
+    )
+
+
+@app.get("/api/auth/users", response_model=UserListResponse)
+async def list_users(current_user: CurrentUser = Depends(require_admin)):
+    """Lista tutti gli utenti (solo ADMIN)"""
+    users = db.list_users()
+
+    return UserListResponse(
+        users=[
+            UserInfo(
+                id=u["id"],
+                username=u["username"],
+                email=u["email"],
+                role=u["role"],
+                created_at=u["created_at"],
+                last_login=u.get("last_login")
+            )
+            for u in users
+        ],
+        total=len(users)
+    )
+
+
+@app.post("/api/auth/users", response_model=UserInfo)
+async def create_user(
+    user_data: UserCreate,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Crea nuovo utente (solo ADMIN)"""
+    user_id = db.create_user(
+        username=user_data.username,
+        email=user_data.email,
+        password=user_data.password,
+        role=user_data.role
+    )
+
+    if not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Errore creazione utente (username o email già esistenti)"
+        )
+
+    user = db.get_user_by_id(user_id)
+
+    return UserInfo(
+        id=user["id"],
+        username=user["username"],
+        email=user["email"],
+        role=user["role"],
+        created_at=user["created_at"],
+        last_login=user.get("last_login")
+    )
+
+
+@app.put("/api/auth/users/{user_id}", response_model=MessageResponse)
+async def update_user(
+    user_id: int,
+    user_data: UserUpdate,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Aggiorna utente (solo ADMIN)"""
+    if user_data.role:
+        success = db.update_user_role(user_id, user_data.role)
+        if not success:
+            raise HTTPException(status_code=404, detail="Utente non trovato")
+
+    return MessageResponse(message=f"Utente {user_id} aggiornato")
+
+
+@app.delete("/api/auth/users/{user_id}", response_model=MessageResponse)
+async def delete_user(
+    user_id: int,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Elimina utente (solo ADMIN)"""
+    # Non permettere di cancellare se stesso
+    if user_id == current_user.user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Non puoi eliminare il tuo stesso account"
+        )
+
+    success = db.delete_user(user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+
+    return MessageResponse(message=f"Utente {user_id} eliminato")
+
+
+@app.post("/api/auth/change-password", response_model=MessageResponse)
+async def change_password(
+    request: PasswordChange,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """Cambia password dell'utente corrente"""
+    user = db.get_user_by_id(current_user.user_id)
+
+    # Verifica vecchia password
+    if not db.verify_password(request.old_password, user["password_hash"]):
+        raise HTTPException(
+            status_code=400,
+            detail="Password attuale non corretta"
+        )
+
+    # Cambia password
+    success = db.change_password(current_user.user_id, request.new_password)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Errore cambio password")
+
+    logger.info(f"✅ Password cambiata per utente: {current_user.username}")
+
+    return MessageResponse(message="Password cambiata con successo")
+
+
+# ============================================================================
 # DOCUMENT MANAGEMENT
 # ============================================================================
 
@@ -341,11 +520,14 @@ ALLOWED_EXTENSIONS = {
 @app.post("/api/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None
+    background_tasks: BackgroundTasks = None,
+    current_user: CurrentUser = Depends(require_upload_permission)
 ):
     """
     Carica un documento (qualsiasi formato) e lo processa in background
     Formati supportati: PDF, DOCX, PPTX, XLSX, ODT, RTF, HTML, XML, JSON, CSV, Immagini
+
+    Richiede: Ruolo SUPER_USER o ADMIN
     """
     
     if not ocr_service or not embeddings_service or not rag_pipeline:
@@ -554,8 +736,15 @@ async def download_document(document_id: str):
 
 
 @app.delete("/api/documents/{document_id}")
-async def delete_document(document_id: str):
-    """Elimina documento da indice"""
+async def delete_document(
+    document_id: str,
+    current_user: CurrentUser = Depends(require_delete_permission)
+):
+    """
+    Elimina documento da indice
+
+    Richiede: Ruolo SUPER_USER o ADMIN
+    """
     if not qdrant_connector:
         raise HTTPException(status_code=503, detail="Qdrant non connesso")
     
@@ -574,10 +763,15 @@ async def delete_document(document_id: str):
 # ============================================================================
 
 @app.post("/api/query", response_model=QueryResponse)
-async def query_rag(request: QueryRequest, user_id: str = "default"):
+async def query_rag(
+    request: QueryRequest,
+    current_user: CurrentUser = Depends(get_current_user)
+):
     """
     Query principale - RAG Pipeline completo CON MEMORIA CONVERSAZIONALE
-    
+
+    Richiede: Autenticazione (tutti i ruoli possono fare query)
+
     Processa:
     1. Retrieval storia conversazione per l'utente
     2. Embedding della query
@@ -586,6 +780,9 @@ async def query_rag(request: QueryRequest, user_id: str = "default"):
     5. Salva risposta in memoria
     6. Ritorna answer + sources
     """
+
+    # Usa l'ID utente reale invece di "default"
+    user_id = str(current_user.user_id)
     if not rag_pipeline:
         raise HTTPException(status_code=503, detail="RAG Pipeline non inizializzato")
     

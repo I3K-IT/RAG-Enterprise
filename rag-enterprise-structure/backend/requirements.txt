@@ -26,6 +26,11 @@ qdrant-client==1.15.1
 # LLM
 ollama==0.1.0
 
+# Authentication
+PyJWT==2.8.0
+bcrypt==4.1.2
+email-validator==2.1.0
+
 # Utils
 numpy==1.24.3
 pyyaml==6.0.1
