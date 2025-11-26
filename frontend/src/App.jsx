@@ -12,7 +12,7 @@ const BRANDING = {
 }
 
 // API Configuration - usa variabile d'ambiente o fallback a localhost
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function App() {
   // Authentication state
