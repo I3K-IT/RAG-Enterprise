@@ -1244,16 +1244,11 @@ function App() {
       {/* FOOTER */}
       <footer className="bg-slate-900 border-t border-slate-700 px-6 py-3">
         <div className="flex items-center justify-between text-xs text-slate-400">
-          <div className="flex items-center gap-2">
-            <div>
-              <div>
-                <span>Powered by </span>
-                <span className="font-semibold text-blue-400">{BRANDING.poweredBy}</span>
-              </div>
-              {BRANDING.poweredBySubtitle && (
-                <div className="text-slate-500 text-[10px] ml-16">{BRANDING.poweredBySubtitle}</div>
-              )}
-            </div>
+          <div>
+            <span>Powered by </span>
+            <span className="font-semibold text-blue-400">
+              {BRANDING.poweredBy}{BRANDING.poweredBySubtitle ? ` ${BRANDING.poweredBySubtitle}` : ''}
+            </span>
             <span className="mx-2">•</span>
             <span>{BRANDING.version}</span>
           </div>
