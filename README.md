@@ -13,11 +13,13 @@
 - ✅ **100% Local**: No data leaves your infrastructure
 - 🚀 **Production-Ready**: Tested with 10,000+ document databases
 - 🤖 **SOTA 2025 Models**: Qwen2.5, Mistral, Llama3.1 (Q4 quantized)
-- 🌍 **Multilingual**: Native Italian support + 28 other languages
-- 🎨 **ChatGPT-like UI**: Familiar interface with Open WebUI
+- 🌍 **Multilingual**: Support for 29 languages including Italian
+- 🎨 **Modern React UI**: Clean, responsive interface with real-time updates
+- 🔐 **User Authentication**: JWT-based auth with role-based access control
+- 👥 **Multi-user Support**: User, Super User, and Admin roles
 - 📊 **Vector Database**: Qdrant for ultra-fast semantic search
 - 🔧 **Document Management**: Upload PDF, DOCX, TXT, MD and other formats
-- 🎯 **Intelligent Gap Filtering**: Reduces "noise dilution" in multi-document scenarios
+- 💬 **Conversational Memory**: Context-aware responses with chat history
 
 ---
 
@@ -25,18 +27,22 @@
 
 ```
 ┌─────────────────────────────────────────┐
-│  Open WebUI Frontend (Port 3000)       │
-│  - ChatGPT-like interface               │
-│  - Drag&drop document upload            │
+│  React + Vite Frontend (Port 3000)     │
+│  - Modern React UI                      │
+│  - JWT Authentication                   │
+│  - Document upload & management         │
+│  - Conversation history                 │
 └─────────────────┬───────────────────────┘
-                  │ REST API
+                  │ REST API (JWT)
                   ↓
 ┌─────────────────────────────────────────┐
 │  FastAPI Backend (Port 8000)           │
 │  - RAG Pipeline (LangChain)            │
+│  - User Authentication (JWT)           │
+│  - Role-based Access Control           │
 │  - OCR (Apache Tika + Tesseract)       │
-│  - Embeddings (BAAI/bge-m3)            │
-│  - Gap-based filtering                 │
+│  - Embeddings (all-MiniLM-L6-v2)       │
+│  - Document Management API             │
 └─────────────────┬───────────────────────┘
                   │
     ┌─────────────┴─────────────┐
@@ -44,10 +50,16 @@
 ┌─────────────────┐   ┌─────────────────┐
 │  Qdrant (6333) │   │  Ollama (11434) │
 │  Vector DB     │   │  LLM Server     │
-│  - 1024-dim    │   │  - Qwen2.5 14B  │
+│  - 384-dim     │   │  - Mistral 7B   │
 │  - Cosine sim  │   │  - Q4 quant     │
 └─────────────────┘   └─────────────────┘
 ```
+
+### User Roles
+
+- **User**: Read-only access, can query documents
+- **Super User**: Can upload and delete documents
+- **Admin**: Full access including user management
 
 ---
 
@@ -61,137 +73,60 @@
 - **Storage**: 50GB+ SSD
 - **Software**: Docker + Docker Compose, NVIDIA Container Toolkit
 
-### Setup with Automated Script
+### Setup with Docker Compose
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/your-org/rag-enterprise.git
 cd rag-enterprise/rag-enterprise-structure
 
-# 2. Run setup (choose profile based on your GPU)
-./setup.sh standard    # For 12-16GB VRAM (RTX 4070, RTX 4060 Ti 16GB)
-# or
-./setup.sh minimal     # For 8-12GB VRAM (RTX 4060, RTX 3060)
-# or
-./setup.sh advanced    # For 16-24GB VRAM (RTX 4080, RTX 4090)
+# 2. Start all services
+docker compose up -d
 
-# 3. Wait for completion (15-20 minutes first run)
-# 4. Access http://localhost:3000
+# 3. Wait for services to be ready (2-3 minutes first run)
+# Backend will download models automatically
+
+# 4. Access the application
+# Frontend: http://localhost:3000
+# Backend API: http://localhost:8000
+# Default credentials: admin / admin123
 ```
 
----
+### First Login
 
-## 🖥️ Hardware Profiles and Models
-
-### 📊 Comparison Table
-
-| Profile | GPU VRAM | RAM | LLM | Embedding | Threshold | Use Case |
-|---------|----------|-----|-----|-----------|-----------|----------|
-| **MINIMAL** | 8-12GB | 16GB | mistral:7b-q4 (4GB) | mpnet-base (430MB) | 0.40 | Development, small datasets |
-| **STANDARD** ⭐ | 12-16GB | 32GB | **qwen2.5:14b-q4 (8GB)** | **bge-m3 (2.3GB)** | **0.35** | **Production, real-world use** |
-| **ADVANCED** | 16-24GB | 64GB+ | qwen2.5:32b-q4 (12GB) | instructor-large (1.3GB) | 0.30 | Maximum quality |
-
-### 🎮 Recommended GPUs by Profile
-
-#### MINIMAL (8-12GB VRAM)
-- ✅ **RTX 4060** (8GB) - €300-350
-- ✅ **RTX 3060** (12GB) - €250-300
-- ✅ **RTX 3060 Ti** (8GB) - €300-350
-- ⚠️ **RTX 4060 Ti 8GB** - Tight but works
-
-#### STANDARD (12-16GB VRAM) ⭐ RECOMMENDED
-- ✅ **RTX 4070** (12GB) - €550-650
-- ✅ **RTX 4060 Ti 16GB** (16GB) - €500-550
-- ✅ **RTX 4070 Ti** (12GB) - €750-850
-- ✅ **RTX 3090** (24GB) - €800-1000 (used)
-
-#### ADVANCED (16-24GB VRAM)
-- ✅ **RTX 4080** (16GB) - €1100-1300
-- ✅ **RTX 4090** (24GB) - €1800-2200
-- ✅ **RTX 3090 Ti** (24GB) - €1000-1200 (used)
-- ✅ **A4000** (16GB) - Workstation
+1. Open http://localhost:3000
+2. Login with default credentials:
+   - Username: `admin`
+   - Password: `admin123`
+3. **Important**: Change the admin password immediately
+4. Create additional users via the Admin panel if needed
 
 ---
 
-## 🤖 Available LLM Models
+## 🔧 Configuration
 
-### SOTA 2025 Models (Q4_K_M Quantized)
+### Branding Customization
 
-| Model | Size | VRAM | Parameters | Quality | Speed | Recommended |
-|---------|------------|------|-----------|---------|----------|--------------|
-| **mistral:7b-instruct-q4** | 4.1GB | 8GB | 7B | ⭐⭐⭐⭐ | ~120 t/s | MINIMAL |
-| **qwen2.5:14b-instruct-q4** ⭐ | 8.0GB | 12GB | 14B | ⭐⭐⭐⭐⭐ | ~110 t/s | **STANDARD** |
-| **qwen2.5:32b-instruct-q4** | 12GB | 16GB | 32B | ⭐⭐⭐⭐⭐⭐ | ~80 t/s | ADVANCED |
+You can customize the application branding (logo and company name). See [LOGO_SETUP.md](LOGO_SETUP.md) for detailed instructions.
 
-### Why Qwen2.5?
+### Environment Variables
 
-- ✅ **SOTA 2025**: Trained on 18 trillion tokens
-- ✅ **Excellent on RAG**: Optimized for retrieval tasks
-- ✅ **Multilingual**: 29 languages (perfect Italian)
-- ✅ **Fewer hallucinations**: Large context window + better training
-- ✅ **Surpasses GPT-3.5**: On standard RAG benchmarks
-
-### Q4_K_M Quantization
-
-- **Q4_K_M**: "Smart" 4-bit quantization
-- **Quality**: 95% vs FP16 models (minimal loss)
-- **VRAM**: 60% savings compared to non-quantized
-- **Speed**: Faster thanks to reduced size
-- **K-quant**: Superior method compared to legacy quantization
-
----
-
-## 🧠 Embedding Models
-
-| Model | Size | Languages | Vector Dimensions | Quality | Usage |
-|---------|------------|--------|-------------------|---------|-----|
-| **all-mpnet-base-v2** | 430MB | EN | 768 | ⭐⭐⭐ | MINIMAL |
-| **BAAI/bge-m3** ⭐ | 2.3GB | Multilingual | 1024 | ⭐⭐⭐⭐⭐ | **STANDARD** |
-| **instructor-large** | 1.3GB | Multilingual | 768 | ⭐⭐⭐⭐ | ADVANCED |
-
-**BGE-M3 is the recommended default**: supports dense, sparse, and ColBERT retrieval simultaneously.
-
----
-
-## 🎛️ Advanced Configuration
-
-### Environment Variables (docker-compose.yml)
+Edit `docker-compose.yml` to configure:
 
 ```yaml
 environment:
-  # LLM Model (change based on profile)
-  LLM_MODEL: qwen2.5:14b-instruct-q4_K_M
+  # LLM Model
+  LLM_MODEL: mistral
 
   # Embedding model
-  EMBEDDING_MODEL: BAAI/bge-m3
+  EMBEDDING_MODEL: all-MiniLM-L6-v2
 
   # Similarity threshold (0.0-1.0)
-  # Higher = more restrictive
-  # 0.30 = permissive, 0.40 = balanced, 0.50 = restrictive
-  RELEVANCE_THRESHOLD: "0.35"
+  RELEVANCE_THRESHOLD: "0.3"
 
-  # GPU device (0 = first GPU, 1 = second, etc.)
+  # GPU device
   CUDA_VISIBLE_DEVICES: 0
 ```
-
-### Gap-Based Filtering
-
-The system implements **intelligent gap filtering** to reduce "noise dilution":
-
-```python
-# If the best document has:
-# - Score >= 50%
-# - Gap > 8% compared to the second
-# → Filter documents with score < 45%
-
-Example:
-Document A: 62%  ← Relevant
-Document B: 44%  ← Noise
-Gap: 18% (> 8%)
-→ Pass only Document A to LLM
-```
-
-This prevents irrelevant documents from "diluting" the context and confusing the LLM.
 
 ---
 
@@ -223,6 +158,7 @@ This prevents irrelevant documents from "diluting" the context and confusing the
 # View logs
 docker compose logs -f              # All services
 docker compose logs -f backend      # Backend only
+docker compose logs -f frontend     # Frontend only
 docker compose logs -f ollama       # LLM only
 
 # Service control
@@ -234,32 +170,33 @@ docker compose up -d                # Restart all
 # Health check
 curl http://localhost:8000/health   # Backend health
 curl http://localhost:6333/         # Qdrant status
+curl http://localhost:3000          # Frontend
 ```
 
-### Conversational Memory Management
+### User Management (via API)
 
 ```bash
-# View user memory
-curl http://localhost:8000/api/admin/memory
+# Login and get token
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}'
 
-# Delete specific user memory
-curl -X DELETE http://localhost:8000/api/admin/memory/default
-
-# Delete ALL memory
-curl -X DELETE http://localhost:8000/api/admin/memory
+# List all users (Admin only)
+curl http://localhost:8000/api/auth/users \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ### LLM Model Change
 
 ```bash
 # 1. Pull new model
-docker exec rag-ollama ollama pull qwen2.5:32b-instruct-q4_K_M
+docker exec ollama ollama pull qwen2.5:14b-instruct-q4_K_M
 
 # 2. Modify docker-compose.yml
-sed -i 's/LLM_MODEL: .*/LLM_MODEL: qwen2.5:32b-instruct-q4_K_M/' docker-compose.yml
+# Change LLM_MODEL environment variable
 
-# 3. Restart
-docker compose down && docker compose up -d
+# 3. Restart backend
+docker compose restart backend
 ```
 
 ---
@@ -334,13 +271,13 @@ docker compose up -d
 
 ## 📊 Expected Performance
 
-### With STANDARD Profile (RTX 4070, 12GB)
+### With STANDARD Setup (RTX 4070, 12GB)
 
 | Metric | Value |
 |---------|--------|
-| **Generation speed** | 100-130 token/s |
-| **Query latency** | 1-3 seconds |
-| **Supported documents** | 10,000+ |
+| **Generation speed** | 80-100 token/s |
+| **Query latency** | 2-4 seconds |
+| **Supported documents** | 1,000+ |
 | **Chunks per document** | ~10-20 (average PDF) |
 | **Similarity search** | <100ms (Qdrant) |
 | **Upload throughput** | 1-2 doc/minute |
@@ -350,27 +287,33 @@ docker compose up -d
 - **10 documents**: Instant retrieval (<100ms)
 - **100 documents**: Fast (<200ms)
 - **1,000 documents**: Good (<500ms)
-- **10,000+ documents**: Gap filtering essential
+- **10,000+ documents**: Requires larger models and more VRAM
 
 ---
 
 ## 🛣️ Roadmap
 
-### ✅ Completed (v1.0)
+### ✅ Completed (v1.1)
 - [x] RAG pipeline with LangChain
-- [x] Q4 quantized models
-- [x] Gap-based filtering
+- [x] Q4 quantized models support
+- [x] React + Vite modern frontend
+- [x] JWT authentication system
+- [x] Role-based access control (User/Super User/Admin)
+- [x] User management interface
+- [x] Document upload and management
+- [x] Document deletion via UI
+- [x] Conversation persistence
+- [x] Multi-user with isolation
 - [x] UTF-8 encoding fix
 - [x] Temperature 0.0 (deterministic)
-- [x] Conversational memory
 - [x] Complete REST API
 
-### 🚧 In Development (v1.1)
-- [ ] Redesigned frontend with document management
-- [ ] Indexed document visualization
-- [ ] Document deletion via UI
-- [ ] Conversation persistence
-- [ ] Multi-user with isolation
+### 🚧 In Development (v1.2)
+- [ ] Conversation history management
+- [ ] Document preview before upload
+- [ ] Batch document upload
+- [ ] Advanced search filters
+- [ ] Export conversation history
 
 ### 🔮 Future (v2.0)
 - [ ] Hybrid search (dense + sparse)
@@ -378,13 +321,15 @@ docker compose up -d
 - [ ] Dynamic chunk optimization
 - [ ] Support for tables/charts
 - [ ] Streaming API for responses
+- [ ] Mobile responsive improvements
+- [ ] Dark mode
 - [ ] Slack/Teams integration
 
 ---
 
-## 📄 Licenza
+## 📄 License
 
-MIT License - vedi [LICENSE](LICENSE)
+MIT License - see [LICENSE](LICENSE)
 
 ---
 
@@ -400,23 +345,23 @@ Contributions are welcome! Please:
 
 ---
 
-## 📧 Supporto
+## 📧 Support
 
 - **Issues**: [GitHub Issues](https://github.com/your-org/rag-enterprise/issues)
-- **Documentazione**: [Wiki](https://github.com/your-org/rag-enterprise/wiki)
-- **Discord**: [Community Server](https://discord.gg/your-server)
+- **Documentation**: See LOGO_SETUP.md for branding customization
 
 ---
 
 ## 🙏 Credits
 
-- **Qwen2.5**: Alibaba Cloud (modello LLM)
-- **BGE-M3**: BAAI (embedding model)
+- **Mistral AI**: LLM model
+- **Sentence Transformers**: Embedding models
 - **Qdrant**: Vector database
 - **Ollama**: Local LLM runtime
 - **LangChain**: RAG orchestration
 - **Apache Tika**: Document processing
-- **Open WebUI**: Frontend interface
+- **React + Vite**: Frontend framework
+- **FastAPI**: Backend framework
 
 ---
 
