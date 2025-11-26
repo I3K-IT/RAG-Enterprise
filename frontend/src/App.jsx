@@ -54,6 +54,7 @@ function App() {
   // Input query
   const [query, setQuery] = useState('')
   const [querying, setQuerying] = useState(false)
+  const [isModelLoading, setIsModelLoading] = useState(false)
 
   // Documenti
   const [documents, setDocuments] = useState([])
@@ -68,6 +69,7 @@ function App() {
 
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
+  const modelLoadingTimerRef = useRef(null)
 
   // Scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -516,6 +518,12 @@ function App() {
 
     setQuery('')
     setQuerying(true)
+    setIsModelLoading(false)
+
+    // Timer: dopo 5 secondi mostra messaggio caricamento modello
+    modelLoadingTimerRef.current = setTimeout(() => {
+      setIsModelLoading(true)
+    }, 5000)
 
     try {
       const response = await axios.post('http://localhost:8000/api/query', {
@@ -548,7 +556,13 @@ function App() {
       setMessages(finalMessages)
       updateConversationMessages(currentConversationId, finalMessages)
     } finally {
+      // Pulisci timer e reset stati
+      if (modelLoadingTimerRef.current) {
+        clearTimeout(modelLoadingTimerRef.current)
+        modelLoadingTimerRef.current = null
+      }
       setQuerying(false)
+      setIsModelLoading(false)
     }
   }
 
@@ -1068,9 +1082,20 @@ function App() {
             {querying && (
               <div className="flex justify-start">
                 <div className="bg-slate-700 rounded-lg p-4 text-slate-300">
-                  <div className="flex items-center gap-2">
-                    <div className="animate-spin">⏳</div>
-                    <span>Ricerca in corso...</span>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="animate-spin">⏳</div>
+                      <span>
+                        {isModelLoading
+                          ? '🧠 Il modello LLM si sta caricando in memoria...'
+                          : 'Ricerca in corso...'}
+                      </span>
+                    </div>
+                    {isModelLoading && (
+                      <p className="text-xs text-slate-400 ml-6">
+                        Può richiedere 10-20 secondi al primo avvio o dopo inattività
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
