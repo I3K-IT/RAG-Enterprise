@@ -13,13 +13,6 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=6)
 
 
-class LoginResponse(BaseModel):
-    """Response per login"""
-    access_token: str
-    token_type: str = "bearer"
-    user: 'UserInfo'
-
-
 class UserInfo(BaseModel):
     """Informazioni utente (senza password)"""
     id: int
@@ -28,6 +21,13 @@ class UserInfo(BaseModel):
     role: str
     created_at: str
     last_login: Optional[str] = None
+
+
+class LoginResponse(BaseModel):
+    """Response per login"""
+    access_token: str
+    token_type: str = "bearer"
+    user: UserInfo
 
 
 class UserCreate(BaseModel):
