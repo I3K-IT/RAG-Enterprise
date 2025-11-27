@@ -170,11 +170,26 @@ function App() {
   }
 
   const handleLogout = () => {
+    // Clear user-specific conversation data before logout
+    if (user) {
+      const storageKey = `rag_conversations_${user.id}`
+      const lastActiveKey = `rag_current_conversation_${user.id}`
+      // Note: We DON'T remove these - they should persist for next login
+      // But we clear the state to prevent cross-user data leakage
+    }
+
+    // Clear all state
     setToken(null)
     setUser(null)
     setIsAuthenticated(false)
+    setConversations([]) // Clear conversations from state
+    setMessages([]) // Clear messages from state
+    setCurrentConversationId(null)
+
+    // Remove auth data from localStorage
     localStorage.removeItem('rag_auth_token')
     localStorage.removeItem('rag_auth_user')
+
     setLoginForm({ username: '', password: '' })
     setShowAdminPanel(false)
   }
@@ -299,13 +314,19 @@ function App() {
   // ============================================================================
 
   const loadConversationsFromStorage = () => {
+    if (!user) return // Safety check - need authenticated user
+
     try {
-      const stored = localStorage.getItem('rag_conversations')
+      // Use user-specific key to isolate conversations per user
+      const storageKey = `rag_conversations_${user.id}`
+      const stored = localStorage.getItem(storageKey)
+
       if (stored) {
         const parsed = JSON.parse(stored)
         setConversations(parsed)
 
-        const lastActiveId = localStorage.getItem('rag_current_conversation')
+        const lastActiveKey = `rag_current_conversation_${user.id}`
+        const lastActiveId = localStorage.getItem(lastActiveKey)
         if (lastActiveId && parsed.find(c => c.id === lastActiveId)) {
           loadConversation(lastActiveId)
         } else if (parsed.length > 0) {
@@ -321,7 +342,11 @@ function App() {
   }
 
   const saveConversationsToStorage = (convs) => {
-    localStorage.setItem('rag_conversations', JSON.stringify(convs))
+    if (!user) return // Safety check - need authenticated user
+
+    // Use user-specific key to isolate conversations per user
+    const storageKey = `rag_conversations_${user.id}`
+    localStorage.setItem(storageKey, JSON.stringify(convs))
   }
 
   const createNewConversation = () => {
@@ -340,10 +365,12 @@ function App() {
 
   const loadConversation = (convId) => {
     const conv = conversations.find(c => c.id === convId)
-    if (conv) {
+    if (conv && user) {
       setCurrentConversationId(convId)
       setMessages(conv.messages || [])
-      localStorage.setItem('rag_current_conversation', convId)
+      // Use user-specific key for current conversation
+      const lastActiveKey = `rag_current_conversation_${user.id}`
+      localStorage.setItem(lastActiveKey, convId)
     }
   }
 
