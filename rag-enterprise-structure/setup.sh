@@ -604,6 +604,11 @@ step_10_final_setup() {
     fi
     
     echo -e "\n${GREEN}✓ All services verified and ready!${NC}"
+
+    echo -e "\n${YELLOW}⚠ FIRST STARTUP NOTE:${NC}"
+    echo -e "${YELLOW}The backend is downloading embedding model (BAAI/bge-m3 ~2.3GB)${NC}"
+    echo -e "${YELLOW}This happens on first startup and takes 3-5 minutes.${NC}"
+    echo -e "${YELLOW}Check backend status: docker compose logs backend -f${NC}"
 }
 
 # ============================================================================

@@ -1,48 +1,91 @@
-# RAG Enterprise - Production-Ready Local RAG System
+# RAG Enterprise - Local RAG System
 
-**Complete 100% local Retrieval-Augmented Generation (RAG) system** for businesses requiring privacy and total control over their data.
+**100% local Retrieval-Augmented Generation (RAG) system** for businesses that need complete data privacy and control.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 
 ---
 
-## 🎯 Main Features
+## Why RAG Enterprise?
 
 - ✅ **100% Local**: No data leaves your infrastructure
-- 🚀 **Production-Ready**: Tested with 10,000+ document databases
-- 🤖 **SOTA 2025 Models**: Qwen2.5, Mistral, Llama3.1 (Q4 quantized)
-- 🌍 **Multilingual**: Support for 29 languages including Italian
-- 🎨 **Modern React UI**: Clean, responsive interface with real-time updates
-- 🔐 **User Authentication**: JWT-based auth with role-based access control
-- 👥 **Multi-user Support**: User, Super User, and Admin roles
-- 📊 **Vector Database**: Qdrant for ultra-fast semantic search
-- 🔧 **Document Management**: Upload PDF, DOCX, TXT, MD and other formats
-- 💬 **Conversational Memory**: Context-aware responses with chat history
+- 🚀 **One-Command Setup**: Automated installation script (~9 minutes)
+- 🤖 **Modern LLMs**: Qwen2.5, Mistral 7B (Q4 quantized)
+- 🔐 **Multi-user Auth**: JWT-based with role-based access control
+- 📊 **Production-Ready**: Tested with 10,000+ documents
+- 🌍 **Multilingual**: Supports 29 languages
+- 🎨 **Clean UI**: Modern React interface
+- 📁 **Multiple Formats**: PDF, DOCX, TXT, MD, PPTX, XLSX, and more
 
 ---
 
-## 📋 Architecture
+## Quick Start
+
+### Prerequisites
+
+- **OS**: Ubuntu 20.04+ (22.04 recommended)
+- **GPU**: NVIDIA with 8-16GB VRAM (drivers pre-installed)
+- **RAM**: 16GB minimum, 32GB recommended
+- **Storage**: 50GB+ available
+- **Connection**: 80+ Mbit/s recommended
+
+### Automated Installation
+
+```bash
+# 1. Clone repository
+git clone https://github.com/your-org/rag-enterprise.git
+cd rag-enterprise/rag-enterprise-structure
+
+# 2. Run setup script (installs everything)
+./setup.sh standard
+
+# 3. Follow prompts - you'll need to logout/login once during setup
+# Total time: ~9 minutes (with 80 Mbit/s connection)
+
+# 4. Access the application
+# Frontend: http://localhost:3000
+# Default login: admin / admin123
+```
+
+### What Gets Installed
+
+The setup script automatically installs and configures:
+- Docker Engine + Docker Compose
+- NVIDIA Container Toolkit
+- All required Docker images
+- Ollama with LLM model (Mistral 7B or Qwen2.5:14b)
+- Qdrant vector database
+- Backend + Frontend services
+
+**First Startup**: After setup completes, the backend downloads the embedding model (~2.3GB) on first startup. This takes 3-5 minutes. Check status with:
+
+```bash
+docker compose logs backend -f
+```
+
+Once you see "Application startup complete", open http://localhost:3000 and login.
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────┐
 │  React + Vite Frontend (Port 3000)     │
-│  - Modern React UI                      │
 │  - JWT Authentication                   │
-│  - Document upload & management         │
-│  - Conversation history                 │
+│  - Document Management                  │
+│  - Conversation History                 │
 └─────────────────┬───────────────────────┘
-                  │ REST API (JWT)
+                  │ REST API
                   ↓
 ┌─────────────────────────────────────────┐
 │  FastAPI Backend (Port 8000)           │
 │  - RAG Pipeline (LangChain)            │
-│  - User Authentication (JWT)           │
-│  - Role-based Access Control           │
+│  - Role-Based Access Control           │
 │  - OCR (Apache Tika + Tesseract)       │
-│  - Embeddings (all-MiniLM-L6-v2)       │
-│  - Document Management API             │
+│  - Embeddings (BAAI/bge-m3)            │
 └─────────────────┬───────────────────────┘
                   │
     ┌─────────────┴─────────────┐
@@ -50,319 +93,224 @@
 ┌─────────────────┐   ┌─────────────────┐
 │  Qdrant (6333) │   │  Ollama (11434) │
 │  Vector DB     │   │  LLM Server     │
-│  - 384-dim     │   │  - Mistral 7B   │
-│  - Cosine sim  │   │  - Q4 quant     │
 └─────────────────┘   └─────────────────┘
 ```
 
 ### User Roles
 
-- **User**: Read-only access, can query documents
-- **Super User**: Can upload and delete documents
+- **User**: Query documents (read-only)
+- **Super User**: Upload and delete documents
 - **Admin**: Full access including user management
 
 ---
 
-## 🚀 Quick Installation
-
-### Prerequisites
-
-- **OS**: Ubuntu 20.04+ (22.04 recommended)
-- **GPU**: NVIDIA with 8-16GB VRAM (drivers installed)
-- **RAM**: 16GB minimum, 32GB recommended
-- **Storage**: 50GB+ SSD
-- **Software**: Docker + Docker Compose, NVIDIA Container Toolkit
-
-### Setup with Docker Compose
-
-```bash
-# 1. Clone repository
-git clone https://github.com/your-org/rag-enterprise.git
-cd rag-enterprise/rag-enterprise-structure
-
-# 2. Start all services
-docker compose up -d
-
-# 3. Wait for services to be ready (2-3 minutes first run)
-# Backend will download models automatically
-
-# 4. Access the application
-# Frontend: http://localhost:3000
-# Backend API: http://localhost:8000
-# Default credentials: admin / admin123
-```
+## Usage
 
 ### First Login
 
 1. Open http://localhost:3000
-2. Login with default credentials:
+2. Login with:
    - Username: `admin`
    - Password: `admin123`
-3. **Important**: Change the admin password immediately
-4. Create additional users via the Admin panel if needed
+3. **Important**: Change admin password immediately
+4. Create additional users in Admin panel
+
+### Upload Documents
+
+1. Login as Super User or Admin
+2. Click "Upload Document"
+3. Select files (PDF, DOCX, TXT, MD, etc.)
+4. Wait for processing (1-2 min per document)
+5. Start querying your documents
+
+### Supported Formats
+
+- ✅ PDF (with OCR)
+- ✅ DOCX/DOC
+- ✅ PPTX/PPT
+- ✅ XLSX/XLS
+- ✅ TXT, MD
+- ✅ ODT, RTF, HTML, XML
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
-### Branding Customization
+### Change LLM Model
 
-You can customize the application branding (logo and company name). See [LOGO_SETUP.md](LOGO_SETUP.md) for detailed instructions.
-
-### Environment Variables
-
-Edit `docker-compose.yml` to configure:
+Edit `docker-compose.yml`:
 
 ```yaml
 environment:
-  # LLM Model
-  LLM_MODEL: mistral
-
-  # Embedding model
-  EMBEDDING_MODEL: all-MiniLM-L6-v2
-
-  # Similarity threshold (0.0-1.0)
-  RELEVANCE_THRESHOLD: "0.3"
-
-  # GPU device
-  CUDA_VISIBLE_DEVICES: 0
+  LLM_MODEL: qwen2.5:14b-instruct-q4_K_M  # or mistral:7b-instruct-q4_K_M
+  EMBEDDING_MODEL: BAAI/bge-m3
+  RELEVANCE_THRESHOLD: "0.35"
 ```
 
----
+Then restart:
+```bash
+docker compose restart backend
+```
 
-## 📚 Supported Formats
+### Customize Branding
 
-### Document Upload
-
-- ✅ **PDF** (via Apache Tika + OCR)
-- ✅ **DOCX/DOC** (Microsoft Word)
-- ✅ **PPTX/PPT** (PowerPoint)
-- ✅ **XLSX/XLS** (Excel)
-- ✅ **TXT, MD** (Plain text, Markdown)
-- ✅ **ODT** (OpenDocument)
-- ✅ **RTF, HTML, XML**
-
-### Automatic OCR
-
-- **Primary**: Apache Tika (fast, accurate)
-- **Fallback**: Tesseract (if Tika fails)
-- **Encoding**: UTF-8 forced for Italian accented characters
+See [LOGO_SETUP.md](LOGO_SETUP.md) for logo and company name customization.
 
 ---
 
-## 🔧 Useful Commands
+## Useful Commands
 
 ### System Management
 
 ```bash
-# View logs
-docker compose logs -f              # All services
-docker compose logs -f backend      # Backend only
-docker compose logs -f frontend     # Frontend only
-docker compose logs -f ollama       # LLM only
+# View all logs
+docker compose logs -f
 
-# Service control
-docker compose ps                   # Container status
-docker compose restart backend      # Restart backend
-docker compose down                 # Stop all
-docker compose up -d                # Restart all
+# View backend logs only
+docker compose logs -f backend
 
-# Health check
-curl http://localhost:8000/health   # Backend health
-curl http://localhost:6333/         # Qdrant status
-curl http://localhost:3000          # Frontend
-```
+# Check service status
+docker compose ps
 
-### User Management (via API)
+# Restart services
+docker compose restart
 
-```bash
-# Login and get token
-curl -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
-
-# List all users (Admin only)
-curl http://localhost:8000/api/auth/users \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-### LLM Model Change
-
-```bash
-# 1. Pull new model
-docker exec ollama ollama pull qwen2.5:14b-instruct-q4_K_M
-
-# 2. Modify docker-compose.yml
-# Change LLM_MODEL environment variable
-
-# 3. Restart backend
-docker compose restart backend
-```
-
----
-
-## 🐛 Troubleshooting
-
-### Backend not responding
-
-```bash
-# Check error logs
-docker logs rag-backend --tail 100
-
-# Verify GPU available
-docker exec rag-backend nvidia-smi
-
-# Complete restart
+# Stop everything
 docker compose down
-docker compose up -d
-```
 
-### LLM model not loaded
-
-```bash
-# Check available models in Ollama
-docker exec rag-ollama ollama list
-
-# Pull model manually
-docker exec rag-ollama ollama pull qwen2.5:14b-instruct-q4_K_M
-```
-
-### 0 results in queries
-
-```bash
-# Check documents in Qdrant
-curl http://localhost:6333/collections/rag_documents
-
-# If count = 0, documents were not indexed
-# Check upload logs:
-docker logs rag-backend | grep "Upload"
-
-# Lower threshold if too high:
-# docker-compose.yml → RELEVANCE_THRESHOLD: "0.30"
-```
-
-### Corrupted accented characters
-
-```bash
-# Fix already applied in current version
-# For old documents: delete and reload
-
-# Delete Qdrant collection
-docker compose down
-docker volume rm rag-enterprise-structure_qdrant-data
+# Start everything
 docker compose up -d
 
-# Reload documents via frontend
+# Health checks
+curl http://localhost:8000/health
+curl http://localhost:3000
+```
+
+### Cleanup & Reinstall
+
+If you need to start fresh:
+
+```bash
+# Complete cleanup (removes everything)
+./cleanup.sh
+
+# Logout and login again
+
+# Run setup from scratch
+./setup.sh standard
 ```
 
 ---
 
-## 🔐 Privacy Notes
+## Troubleshooting
 
-- ✅ **Zero external calls**: No data leaves your server
-- ✅ **No analytics**: No tracking or telemetry
-- ✅ **Local models**: LLM and embeddings run on-premise
-- ✅ **Local database**: Qdrant does not communicate externally
-- ✅ **Local logs**: Everything stays in your filesystem
+### Backend shows "unhealthy"
 
-**Ideal for**: law firms, healthcare, finance, public administration, companies with sensitive data.
+Wait 3-5 minutes on first startup - it's downloading the embedding model:
 
----
+```bash
+docker compose logs backend -f
+```
 
-## 📊 Expected Performance
+Look for "Application startup complete" message.
 
-### With STANDARD Setup (RTX 4070, 12GB)
+### Can't login / Frontend not loading
 
-| Metric | Value |
-|---------|--------|
-| **Generation speed** | 80-100 token/s |
-| **Query latency** | 2-4 seconds |
-| **Supported documents** | 1,000+ |
-| **Chunks per document** | ~10-20 (average PDF) |
-| **Similarity search** | <100ms (Qdrant) |
-| **Upload throughput** | 1-2 doc/minute |
+Check all services are running:
 
-### Scaling
+```bash
+docker compose ps
 
-- **10 documents**: Instant retrieval (<100ms)
-- **100 documents**: Fast (<200ms)
-- **1,000 documents**: Good (<500ms)
-- **10,000+ documents**: Requires larger models and more VRAM
+# All should show "Up" status
+# If backend is "unhealthy", wait a few more minutes
+```
 
----
+### GPU not detected
 
-## 🛣️ Roadmap
+Verify NVIDIA drivers and Container Toolkit:
 
-### ✅ Completed (v1.1)
-- [x] RAG pipeline with LangChain
-- [x] Q4 quantized models support
-- [x] React + Vite modern frontend
-- [x] JWT authentication system
-- [x] Role-based access control (User/Super User/Admin)
-- [x] User management interface
-- [x] Document upload and management
-- [x] Document deletion via UI
-- [x] Conversation persistence
-- [x] Multi-user with isolation
-- [x] UTF-8 encoding fix
-- [x] Temperature 0.0 (deterministic)
-- [x] Complete REST API
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi
+```
 
-### 🚧 In Development (v1.2)
-- [ ] Conversation history management
-- [ ] Document preview before upload
-- [ ] Batch document upload
-- [ ] Advanced search filters
-- [ ] Export conversation history
+### No results from queries
 
-### 🔮 Future (v2.0)
-- [ ] Hybrid search (dense + sparse)
-- [ ] Re-ranking with cross-encoder
-- [ ] Dynamic chunk optimization
-- [ ] Support for tables/charts
-- [ ] Streaming API for responses
-- [ ] Mobile responsive improvements
-- [ ] Dark mode
-- [ ] Slack/Teams integration
+Lower the similarity threshold in `docker-compose.yml`:
+
+```yaml
+RELEVANCE_THRESHOLD: "0.3"  # Lower = more results
+```
+
+Then `docker compose restart backend`.
 
 ---
 
-## 📄 License
+## Performance
 
-MIT License - see [LICENSE](LICENSE)
+### Expected Speed (RTX 4070, 12GB VRAM)
+
+- **Setup time**: ~9 minutes (80 Mbit/s connection)
+- **First startup**: +3-5 minutes (embedding model download)
+- **Query response**: 2-4 seconds
+- **Generation speed**: 80-100 tokens/s
+- **Document capacity**: 1,000-10,000 documents
+- **Upload speed**: 1-2 documents/minute
 
 ---
 
-## 🤝 Contributing
+## Privacy & Security
 
-Contributions are welcome! Please:
+- ✅ **Zero external calls**: Everything runs locally
+- ✅ **No telemetry**: No tracking or analytics
+- ✅ **Local models**: LLM and embeddings on-premise
+- ✅ **AGPL-3.0 License**: If you modify and deploy as a service, you must share source code
+
+**Ideal for**: Law firms, healthcare, finance, government, enterprises with sensitive data.
+
+---
+
+## License
+
+This project is licensed under **AGPL-3.0** - see [LICENSE](LICENSE) file.
+
+**What this means:**
+- ✅ Free to use and modify
+- ✅ Must share modifications if you offer it as a service
+- ✅ Protects against proprietary SaaS parasites
+- ✅ Still fully open-source
+
+---
+
+## Contributing
+
+Contributions welcome! Please:
 
 1. Fork the repository
-2. Create feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
+2. Create feature branch (`git checkout -b feature/YourFeature`)
+3. Commit changes (`git commit -m 'Add feature'`)
+4. Push to branch (`git push origin feature/YourFeature`)
 5. Open Pull Request
 
 ---
 
-## 📧 Support
+## Support
 
 - **Issues**: [GitHub Issues](https://github.com/your-org/rag-enterprise/issues)
-- **Documentation**: See LOGO_SETUP.md for branding customization
+- **Docs**: See LOGO_SETUP.md for branding customization
 
 ---
 
-## 🙏 Credits
+## Credits
 
-- **Mistral AI**: LLM model
-- **Sentence Transformers**: Embedding models
-- **Qdrant**: Vector database
-- **Ollama**: Local LLM runtime
-- **LangChain**: RAG orchestration
-- **Apache Tika**: Document processing
-- **React + Vite**: Frontend framework
-- **FastAPI**: Backend framework
+Built with:
+- [Ollama](https://ollama.ai) - Local LLM runtime
+- [Qdrant](https://qdrant.tech) - Vector database
+- [LangChain](https://langchain.com) - RAG orchestration
+- [FastAPI](https://fastapi.tiangolo.com) - Backend framework
+- [React](https://react.dev) + [Vite](https://vitejs.dev) - Frontend
+- [Apache Tika](https://tika.apache.org) - Document processing
 
 ---
 
-**Happy RAG! 🚀**
+**Made with ❤️ for privacy-conscious enterprises**
