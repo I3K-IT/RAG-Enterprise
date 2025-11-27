@@ -215,11 +215,11 @@ step_2_docker_permissions() {
     sudo chown root:docker /var/run/docker 2>/dev/null || true
     sudo chmod 755 /var/run/docker 2>/dev/null || true
     
-    echo -e "${YELLOW}⚠ IMPORTANTE: Devi fare logout e login per applicare i permessi!${NC}"
-    echo -e "${YELLOW}   Comandi:${NC}"
+    echo -e "${YELLOW}⚠ IMPORTANT: You must logout and login to apply permissions!${NC}"
+    echo -e "${YELLOW}   Commands:${NC}"
     echo -e "${YELLOW}   1. exit${NC}"
-    echo -e "${YELLOW}   2. Accedi di nuovo${NC}"
-    echo -e "${YELLOW}   3. Esegui: ./setup.sh standard${NC}"
+    echo -e "${YELLOW}   2. Login again${NC}"
+    echo -e "${YELLOW}   3. Run: ./setup.sh standard${NC}"
     
     echo -e "${GREEN}✓ Docker permissions configured${NC}"
 }
