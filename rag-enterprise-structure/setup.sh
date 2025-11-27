@@ -276,6 +276,15 @@ step_4_nvidia_toolkit() {
     
     # Test GPU
     echo "Testing GPU with Docker..."
+    echo -e "${YELLOW}Note: This will download NVIDIA CUDA image (~1-2GB) if not already present${NC}"
+
+    # Pull CUDA image first (with visible progress)
+    if ! sudo docker images | grep -q "nvidia/cuda.*12.9.0-runtime"; then
+        echo "Pulling NVIDIA CUDA image..."
+        sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
+    fi
+
+    # Test GPU
     if sudo docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
         echo -e "${GREEN}✓ NVIDIA Container Toolkit working${NC}"
     else
@@ -384,15 +393,15 @@ step_6b_configure_compose() {
             ;;
     esac
     
-    # Update docker-compose.yml
-    sed -i "s/LLM_MODEL: .*/LLM_MODEL: $LLM/" docker-compose.yml
-    sed -i "s/EMBEDDING_MODEL: .*/EMBEDDING_MODEL: $EMBEDDING/" docker-compose.yml
-    
+    # Update docker-compose.yml (use | as delimiter to avoid issues with / in model names)
+    sed -i "s|LLM_MODEL: .*|LLM_MODEL: $LLM|" docker-compose.yml
+    sed -i "s|EMBEDDING_MODEL: .*|EMBEDDING_MODEL: $EMBEDDING|" docker-compose.yml
+
     # Add RELEVANCE_THRESHOLD if not exists
     if ! grep -q "RELEVANCE_THRESHOLD:" docker-compose.yml; then
         sed -i "/EMBEDDING_MODEL:/a\      RELEVANCE_THRESHOLD: \"$THRESHOLD\"" docker-compose.yml
     else
-        sed -i "s/RELEVANCE_THRESHOLD: .*/RELEVANCE_THRESHOLD: \"$THRESHOLD\"/" docker-compose.yml
+        sed -i "s|RELEVANCE_THRESHOLD: .*|RELEVANCE_THRESHOLD: \"$THRESHOLD\"|" docker-compose.yml
     fi
     
     echo -e "${GREEN}✓ docker-compose.yml configured${NC}"
@@ -407,13 +416,19 @@ step_6b_configure_compose() {
 
 step_7_pull_images() {
     echo -e "\n${YELLOW}[7/10] Pulling Docker Images...${NC}"
-    
+
     echo "Pulling images (this may take a few minutes)..."
     sudo docker pull ollama/ollama:latest
     sudo docker pull qdrant/qdrant:latest
-    sudo docker pull ghcr.io/open-webui/open-webui:main
-    sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
-    
+
+    # NVIDIA CUDA image already pulled in step 4 (GPU test), skip if present
+    if ! sudo docker images | grep -q "nvidia/cuda.*12.9.0-runtime"; then
+        echo "Pulling NVIDIA CUDA image..."
+        sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
+    else
+        echo -e "${GREEN}✓ NVIDIA CUDA image already present${NC}"
+    fi
+
     echo -e "${GREEN}✓ Docker images pulled${NC}"
 }
 
