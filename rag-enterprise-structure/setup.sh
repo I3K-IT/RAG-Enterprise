@@ -524,37 +524,23 @@ step_10_final_setup() {
         echo -e "${GREEN}✓ Model $OLLAMA_MODEL already available, skipping download${NC}"
     else
         # Pull LLM model
-        echo -e "\n${YELLOW}Pulling LLM model: $LLM_MODEL${NC}"
-        echo "(This will take several minutes depending on model size)"
-        
+        echo -e "\n${YELLOW}Pulling LLM model: $OLLAMA_MODEL${NC}"
+        echo -e "${YELLOW}Model size: ~8-10GB (14b) or ~4-5GB (7b)${NC}"
+        echo -e "${YELLOW}This will take several minutes depending on connection speed...${NC}"
+
         if ! sudo docker exec rag-ollama ollama pull $OLLAMA_MODEL; then
             echo -e "${RED}✗ Failed to pull Ollama model${NC}"
             echo "Retrying..."
             sleep 5
             if ! sudo docker exec rag-ollama ollama pull $OLLAMA_MODEL; then
                 echo -e "${RED}✗ Ollama model pull failed after retry${NC}"
+                echo -e "${RED}You can manually pull it later with: docker exec rag-ollama ollama pull $OLLAMA_MODEL${NC}"
                 exit 1
             fi
         fi
-        
-        echo -e "${GREEN}✓ LLM model pulled${NC}"
+
+        echo -e "${GREEN}✓ LLM model $OLLAMA_MODEL pulled successfully${NC}"
     fi
-  
-    # Pull LLM model
-    echo -e "\n${YELLOW}Pulling LLM model: $LLM_MODEL${NC}"
-    echo "(This will take several minutes depending on model size)"
-    
-    if ! sudo docker exec rag-ollama ollama pull $OLLAMA_MODEL; then
-        echo -e "${RED}✗ Failed to pull Ollama model${NC}"
-        echo "Retrying..."
-        sleep 5
-        if ! sudo docker exec rag-ollama ollama pull $OLLAMA_MODEL; then
-            echo -e "${RED}✗ Ollama model pull failed after retry${NC}"
-            exit 1
-        fi
-    fi
-    
-    echo -e "${GREEN}✓ LLM model pulled${NC}"
     
     # Wait for backend health
     echo -e "\n${YELLOW}Waiting for backend to be healthy...${NC}"
