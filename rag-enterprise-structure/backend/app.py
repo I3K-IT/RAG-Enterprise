@@ -158,9 +158,21 @@ app = FastAPI(
 )
 
 # CORS configuration
+# Read ALLOWED_ORIGINS from environment variable
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+if allowed_origins_env:
+    # Split by comma and strip whitespace
+    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+    logging.info(f"CORS: Restricted to specific origins: {allowed_origins}")
+else:
+    # Default: allow all (development mode)
+    allowed_origins = ["*"]
+    logging.warning("CORS: ALLOWED_ORIGINS not set - allowing all origins (*)")
+    logging.warning("For production, set ALLOWED_ORIGINS in .env (e.g., https://yourdomain.com)")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

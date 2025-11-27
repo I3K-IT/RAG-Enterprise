@@ -47,6 +47,9 @@ services:
       EMBEDDING_MODEL: BAAI/bge-m3
       RELEVANCE_THRESHOLD: "0.35"
       CUDA_VISIBLE_DEVICES: 0
+      # Security (optional - backend has secure defaults)
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
     volumes:
       - backend-uploads:/app/uploads
       - backend-database:/app/data
