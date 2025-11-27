@@ -11,7 +11,7 @@
 ## Why RAG Enterprise?
 
 - ✅ **100% Local**: No data leaves your infrastructure
-- 🚀 **One-Command Setup**: Automated installation script (~9 minutes)
+- 🚀 **One-Command Setup**: Automated installation script (~1 hour / ~15 min with fast connection)
 - 🤖 **Modern LLMs**: Qwen2.5, Mistral 7B (Q4 quantized)
 - 🔐 **Multi-user Auth**: JWT-based with role-based access control
 - 📊 **Production-Ready**: Tested with 10,000+ documents
@@ -42,7 +42,7 @@ cd rag-enterprise/rag-enterprise-structure
 ./setup.sh standard
 
 # 3. Follow prompts - you'll need to logout/login once during setup
-# Total time: ~9 minutes (with 80 Mbit/s connection)
+# Setup time: ~1 hour (80 Mbit/s) / ~10-15 min (400+ Mbit/s)
 
 # 4. Access the application
 # Frontend: http://localhost:3000
@@ -59,7 +59,7 @@ The setup script automatically installs and configures:
 - Qdrant vector database
 - Backend + Frontend services
 
-**First Startup**: After setup completes, the backend downloads the embedding model (~2.3GB) on first startup. This takes 3-5 minutes. Check status with:
+**First Startup**: After setup completes, the backend downloads the embedding model (~2.3GB) on first startup. This takes ~9 minutes (80 Mbit/s) or ~2 minutes (400+ Mbit/s). Check status with:
 
 ```bash
 docker compose logs backend -f
@@ -250,8 +250,9 @@ Then `docker compose restart backend`.
 
 ### Expected Speed (RTX 4070, 12GB VRAM)
 
-- **Setup time**: ~9 minutes (80 Mbit/s connection)
-- **First startup**: +3-5 minutes (embedding model download)
+- **Setup time**: ~1 hour (80 Mbit/s) / ~10-15 min (400+ Mbit/s)
+- **First startup**: +9 min (80 Mbit/s) / +2 min (400+ Mbit/s) for embedding model
+- **Total ready**: ~1h 10min (80 Mbit/s) / ~15-20 min (fast connection)
 - **Query response**: 2-4 seconds
 - **Generation speed**: 80-100 tokens/s
 - **Document capacity**: 1,000-10,000 documents
