@@ -273,23 +273,9 @@ step_4_nvidia_toolkit() {
     echo "Restarting Docker daemon..."
     sudo systemctl restart docker
     sleep 5
-    
-    # Test GPU
-    echo "Testing GPU with Docker..."
-    echo -e "${YELLOW}Note: This will download NVIDIA CUDA image (~1-2GB) if not already present${NC}"
 
-    # Pull CUDA image first (with visible progress)
-    if ! sudo docker images | grep -q "nvidia/cuda.*12.9.0-runtime"; then
-        echo "Pulling NVIDIA CUDA image..."
-        sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
-    fi
-
-    # Test GPU
-    if sudo docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
-        echo -e "${GREEN}✓ NVIDIA Container Toolkit working${NC}"
-    else
-        echo -e "${YELLOW}⚠ NVIDIA Container Toolkit test inconclusive (may work anyway)${NC}"
-    fi
+    echo -e "${GREEN}✓ NVIDIA Container Toolkit installed${NC}"
+    echo -e "${YELLOW}Note: GPU test will be performed after pulling images (step 7)${NC}"
 }
 
 # ============================================================================
@@ -418,12 +404,25 @@ step_7_pull_images() {
     echo -e "\n${YELLOW}[7/10] Pulling Docker Images...${NC}"
 
     echo "Pulling images (this may take a few minutes)..."
+
+    echo -e "\n${CYAN}Pulling Ollama...${NC}"
     sudo docker pull ollama/ollama:latest
+
+    echo -e "\n${CYAN}Pulling Qdrant...${NC}"
     sudo docker pull qdrant/qdrant:latest
 
-    # Note: NVIDIA CUDA image already pulled in step 4 during GPU test
+    echo -e "\n${CYAN}Pulling NVIDIA CUDA (~1-2GB)...${NC}"
+    sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
 
-    echo -e "${GREEN}✓ Docker images pulled${NC}"
+    echo -e "\n${GREEN}✓ All Docker images pulled${NC}"
+
+    # Test GPU
+    echo -e "\n${YELLOW}Testing GPU with Docker...${NC}"
+    if sudo docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
+        echo -e "${GREEN}✓ NVIDIA GPU working correctly${NC}"
+    else
+        echo -e "${YELLOW}⚠ GPU test inconclusive (may work anyway)${NC}"
+    fi
 }
 
 # ============================================================================
