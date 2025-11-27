@@ -421,13 +421,7 @@ step_7_pull_images() {
     sudo docker pull ollama/ollama:latest
     sudo docker pull qdrant/qdrant:latest
 
-    # NVIDIA CUDA image already pulled in step 4 (GPU test), skip if present
-    if ! sudo docker images | grep -q "nvidia/cuda.*12.9.0-runtime"; then
-        echo "Pulling NVIDIA CUDA image..."
-        sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
-    else
-        echo -e "${GREEN}✓ NVIDIA CUDA image already present${NC}"
-    fi
+    # Note: NVIDIA CUDA image already pulled in step 4 during GPU test
 
     echo -e "${GREEN}✓ Docker images pulled${NC}"
 }
