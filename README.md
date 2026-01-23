@@ -5,6 +5,9 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+> **One command. Full RAG system. Your data stays yours.**
 
 ---
 
@@ -46,7 +49,7 @@ cd rag-enterprise/rag-enterprise-structure
 
 # 4. Access the application
 # Frontend: http://localhost:3000
-# Default login: admin / admin123
+# Get admin password: docker compose logs backend | grep "Password:"
 ```
 
 ### What Gets Installed
@@ -109,10 +112,11 @@ Once you see "Application startup complete", open http://localhost:3000 and logi
 ### First Login
 
 1. Open http://localhost:3000
-2. Login with:
-   - Username: `admin`
-   - Password: `admin123`
-3. **Important**: Change admin password immediately
+2. Get your admin password from the logs:
+   ```bash
+   docker compose logs backend | grep "Password:"
+   ```
+3. Login with username `admin` and the password from logs
 4. Create additional users in Admin panel
 
 ### Upload Documents
@@ -285,20 +289,34 @@ This project is licensed under **AGPL-3.0** - see [LICENSE](LICENSE) file.
 
 ## Contributing
 
-Contributions welcome! Please:
+We welcome contributions! Please read our guidelines:
 
+- [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
+- [Security Policy](SECURITY.md) - Report vulnerabilities
+- [Roadmap](ROADMAP.md) - Planned features
+
+Quick start:
 1. Fork the repository
 2. Create feature branch (`git checkout -b feature/YourFeature`)
-3. Commit changes (`git commit -m 'Add feature'`)
-4. Push to branch (`git push origin feature/YourFeature`)
-5. Open Pull Request
+3. Make your changes
+4. Open Pull Request
 
 ---
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/rag-enterprise/issues)
-- **Docs**: See LOGO_SETUP.md for branding customization
+- **Issues**: [GitHub Issues](https://github.com/RAG-Enterprise/RAG-Enterprise/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/RAG-Enterprise/RAG-Enterprise/discussions)
+- **Docs**: See [LOGO_SETUP.md](LOGO_SETUP.md) for branding customization
+
+---
+
+## Star History
+
+If you find this project useful, please consider giving it a star! It helps others discover the project.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=RAG-Enterprise/RAG-Enterprise&type=Date)](https://star-history.com/#RAG-Enterprise/RAG-Enterprise&Date)
 
 ---
 
