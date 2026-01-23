@@ -306,8 +306,8 @@ Quick start:
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/RAG-Enterprise/RAG-Enterprise/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/RAG-Enterprise/RAG-Enterprise/discussions)
+- **Issues**: [GitHub Issues](https://github.com/I3K-IT/RAG-Enterprise/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/I3K-IT/RAG-Enterprise/discussions)
 - **Docs**: See [LOGO_SETUP.md](LOGO_SETUP.md) for branding customization
 
 ---
@@ -316,7 +316,7 @@ Quick start:
 
 If you find this project useful, please consider giving it a star! It helps others discover the project.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=RAG-Enterprise/RAG-Enterprise&type=Date)](https://star-history.com/#RAG-Enterprise/RAG-Enterprise&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=I3K-IT/RAG-Enterprise&type=Date)](https://star-history.com/#I3K-IT/RAG-Enterprise&Date)
 
 ---
 
@@ -332,4 +332,15 @@ Built with:
 
 ---
 
-**Made with ❤️ for privacy-conscious enterprises**
+## Author
+
+**Francesco Marchetti** - Creator & Lead Developer
+
+- LinkedIn: [francesco-marchetti](https://www.linkedin.com/in/francesco-marchetti-4a7b8149/)
+- Company: [I3K Technologies](https://www.i3k.eu)
+- Email: info@i3k.eu
+- Phone: +39 02 99914444 | +39 338 7913579
+
+---
+
+**Made with ❤️ by [I3K Technologies](https://www.i3k.eu) for privacy-conscious enterprises**

@@ -15,7 +15,7 @@ We take the security of RAG Enterprise seriously. If you believe you have found 
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via email to: **security@rag-enterprise.local** (replace with your actual security email)
+Instead, please report them via email to: **info@i3k.eu**
 
 You should receive a response within 48 hours. If for some reason you do not, please follow up via email to ensure we received your original message.
 
