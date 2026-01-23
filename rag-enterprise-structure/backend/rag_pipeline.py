@@ -236,7 +236,7 @@ ANSWER (use ONLY info from context):"""
 
             logger.info(f"      ✅ Retrieved {len(retrieved_docs)} documents (already filtered by Qdrant with threshold={self.relevance_threshold})")
 
-            # Log dettagliato dei documenti recuperati
+            # Detailed log of retrieved documents
             if retrieved_docs:
                 logger.info("      📊 Similarity scores:")
                 for i, doc in enumerate(retrieved_docs, 1):

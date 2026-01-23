@@ -43,16 +43,16 @@ def detect_document_type(text: str) -> str:
         if 'REPUBBLICA ITALIANA' in text_upper:  # Extra check
             return 'IDENTITY_CARD'
     
-    # 2. PASSAPORTO (molto specifico)
+    # 2. PASSPORT (very specific)
     if 'PASSAPORTO' in text_upper or 'PASSPORT' in text_upper:
         if 'REPUBBLICA ITALIANA' in text_upper:
             return 'PASSPORT'
-    
-    # 3. PATENTE (molto specifico)
+
+    # 3. DRIVING LICENSE (very specific)
     if 'PATENTE DI GUIDA' in text_upper or 'DRIVING LICENSE' in text_upper:
         return 'DRIVING_LICENSE'
-    
-    # 4. CONTRATTO
+
+    # 4. CONTRACT
     if 'CONTRATTO' in text_upper or 'CONTRACT' in text_upper or 'AGREEMENT' in text_upper:
         return 'CONTRACT'
     
@@ -64,26 +64,26 @@ def extract_id_fields(text: str) -> Dict[str, Optional[str]]:
     """Extracts fields from Identity Card - vertical layout"""
     fields = {}
     
-    # Codice Fiscale: dopo "CODICE FISCALE" o "FISCAL CODE", sulla riga successiva
-    # Pattern: 16 caratteri esatti (6 lettere + 2 digit + 1 lettera + 2 digit + 1 lettera + 3 digit + 1 lettera)
+    # Tax Code (Codice Fiscale): after "CODICE FISCALE" or "FISCAL CODE", on the next line
+    # Pattern: exactly 16 characters (6 letters + 2 digits + 1 letter + 2 digits + 1 letter + 3 digits + 1 letter)
     cf_pattern = r'(?:CODICE\s+FISCALE|FISCAL\s+CODE)\s*\n\s*([A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z])'
     cf_match = re.search(cf_pattern, text, re.IGNORECASE | re.MULTILINE)
     
     if cf_match:
         fields['codice_fiscale'] = cf_match.group(1)
     
-    # Indirizzo
+    # Address
     addr_pattern = r'(VIA|VIALE|PIAZZA|CORSO|STRADA)\s+([A-Z\s,\'-]+?),\s+N\.\s+(\d+)\s+([A-Z\s\(\)]+)'
     addr_match = re.search(addr_pattern, text)
     if addr_match:
-        fields['indirizzo'] = f"{addr_match.group(1)} {addr_match.group(2)}, N. {addr_match.group(3)} {addr_match.group(4)}"
-    
-    # Data nascita (cerca dopo "LUOGO E DATA DI NASCITA")
+        fields['address'] = f"{addr_match.group(1)} {addr_match.group(2)}, N. {addr_match.group(3)} {addr_match.group(4)}"
+
+    # Birth date (search after "LUOGO E DATA DI NASCITA" / "PLACE AND DATE OF BIRTH")
     date_pattern = r'(?:LUOGO\s+E\s+DATA|PLACE\s+AND\s+DATE)[^\n]*\n\s*([A-Z\s]+)\s+(\d{1,2})[./](\d{1,2})[./](\d{4})'
     date_match = re.search(date_pattern, text, re.IGNORECASE | re.MULTILINE)
     if date_match:
-        fields['data_nascita'] = f"{date_match.group(2)}.{date_match.group(3)}.{date_match.group(4)}"
-        fields['luogo_nascita'] = date_match.group(1).strip()
+        fields['birth_date'] = f"{date_match.group(2)}.{date_match.group(3)}.{date_match.group(4)}"
+        fields['birth_place'] = date_match.group(1).strip()
     
     return fields
 
@@ -92,11 +92,11 @@ def extract_passport_fields(text: str) -> Dict[str, Optional[str]]:
     """Extracts fields from Passport"""
     fields = {}
     
-    # Numero passaporto (di solito 9 caratteri)
+    # Passport number (usually 9 characters)
     passport_pattern = r'[A-Z]{2}\d{7}'
     passport_match = re.search(passport_pattern, text)
     if passport_match:
-        fields['numero_passaporto'] = passport_match.group()
+        fields['passport_number'] = passport_match.group()
     
     return fields
 
@@ -114,7 +114,7 @@ def extract_license_fields(text: str) -> Dict[str, Optional[str]]:
     license_pattern = r'(?:Numero|Number|N\.|Nr\.)\s*[:\s]*([A-Z0-9]{10})'
     license_match = re.search(license_pattern, text)
     if license_match:
-        fields['numero_patente'] = license_match.group(1)
+        fields['license_number'] = license_match.group(1)
     
     return fields
 

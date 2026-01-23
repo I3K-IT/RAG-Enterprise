@@ -23,7 +23,7 @@ class EmbeddingsService:
     # Available models
     MODELS = {
         "all-MiniLM-L6-v2": {
-            "description": "English, 22MB, veloce",
+            "description": "English, 22MB, fast",
             "lang": "en",
             "dim": 384
         },

@@ -62,7 +62,7 @@ class QdrantConnector:
     
     
     def disconnect(self):
-        """Disconnessione"""
+        """Disconnect from Qdrant"""
         try:
             if self.client:
                 self.connected = False
@@ -72,7 +72,7 @@ class QdrantConnector:
     
     
     def is_connected(self) -> bool:
-        """Check connessione"""
+        """Check connection status"""
         return self.connected
     
     

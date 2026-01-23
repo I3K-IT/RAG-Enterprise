@@ -433,7 +433,7 @@ function App() {
       const docs = response.data.documents || []
       setDocuments(docs)
     } catch (error) {
-      console.error('❌ Errore fetch documenti:', error)
+      console.error('❌ Error fetching documents:', error)
     } finally {
       setLoadingDocuments(false)
     }
@@ -551,7 +551,7 @@ function App() {
     setQuerying(true)
     setIsModelLoading(false)
 
-    // Timer: dopo 5 secondi mostra messaggio caricamento modello
+    // Timer: after 5 seconds show model loading message
     modelLoadingTimerRef.current = setTimeout(() => {
       setIsModelLoading(true)
     }, 5000)
@@ -578,7 +578,7 @@ function App() {
 
       const errorMessage = {
         role: 'assistant',
-        content: `❌ Errore: ${error.response?.data?.detail || error.message}`,
+        content: `❌ Error: ${error.response?.data?.detail || error.message}`,
         error: true,
         timestamp: new Date().toISOString()
       }

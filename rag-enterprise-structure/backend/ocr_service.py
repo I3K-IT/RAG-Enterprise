@@ -120,12 +120,12 @@ class OCRService:
                         data=file_data,
                         headers={
                             'Content-Type': mime_type,
-                            'Accept-Charset': 'utf-8'  # Forza UTF-8 nella risposta
+                            'Accept-Charset': 'utf-8'  # Force UTF-8 in response
                         },
                         timeout=600
                     )
 
-                    # Forza encoding UTF-8 sulla risposta
+                    # Force UTF-8 encoding on response
                     response.encoding = 'utf-8'
 
                     logger.info(f"Tika response status: {response.status_code}")
