@@ -38,3 +38,7 @@ volumes/
 # Local utility scripts and configuration
 auto-commit.sh
 CLAUDE.md
+
+# Internal documents (not for public repo)
+MARKETING_STRATEGY.md
+docs/MARKETING_STRATEGY.md
