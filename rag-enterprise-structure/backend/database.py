@@ -72,14 +72,34 @@ class UserDatabase:
             ).fetchone()
 
             if not admin_exists:
+                # Get admin password from environment or generate a secure random one
+                import secrets
+                default_admin_password = os.getenv("ADMIN_DEFAULT_PASSWORD", "")
+
+                if not default_admin_password:
+                    # Generate a secure random password
+                    default_admin_password = secrets.token_urlsafe(16)
+                    logger.warning("=" * 70)
+                    logger.warning("🔐 ADMIN ACCOUNT CREATED WITH RANDOM PASSWORD")
+                    logger.warning("")
+                    logger.warning(f"   Username: admin")
+                    logger.warning(f"   Password: {default_admin_password}")
+                    logger.warning("")
+                    logger.warning("⚠️  SAVE THIS PASSWORD NOW - it won't be shown again!")
+                    logger.warning("You can change it after login in the admin panel.")
+                    logger.warning("")
+                    logger.warning("To set a specific password, add to .env:")
+                    logger.warning("   ADMIN_DEFAULT_PASSWORD=your-secure-password")
+                    logger.warning("=" * 70)
+                else:
+                    logger.info("✅ Admin user created with password from ADMIN_DEFAULT_PASSWORD")
+
                 self.create_user(
                     username="admin",
                     email="admin@rag-enterprise.local",
-                    password="admin123",  # Default password - MUST BE CHANGED!
+                    password=default_admin_password,
                     role=UserRole.ADMIN
                 )
-                logger.info("✅ Admin user created (username: admin, password: admin123)")
-                logger.warning("⚠️  CHANGE THE ADMIN PASSWORD!")
         except Exception as e:
             logger.error(f"Error creating admin: {e}")
 

@@ -11,17 +11,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 # JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-please-2025")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
 
-# Security warning if using default key
-if SECRET_KEY == "your-secret-key-change-in-production-please-2025":
-    logger.warning("⚠️  JWT_SECRET_KEY not set - using insecure default key!")
-    logger.warning("For production, generate a secure key: openssl rand -hex 32")
-    logger.warning("Then set JWT_SECRET_KEY in .env file")
+# Security: Generate a random key for development if not set
+# In production, ALWAYS set JWT_SECRET_KEY in .env
+if not SECRET_KEY:
+    import secrets
+    SECRET_KEY = secrets.token_hex(32)
+    logger.warning("=" * 70)
+    logger.warning("⚠️  JWT_SECRET_KEY not configured!")
+    logger.warning("A random key has been generated for this session.")
+    logger.warning("NOTE: Users will be logged out when the server restarts.")
+    logger.warning("")
+    logger.warning("For production, generate a permanent key:")
+    logger.warning("  openssl rand -hex 32")
+    logger.warning("Then add to .env: JWT_SECRET_KEY=<your-key>")
+    logger.warning("=" * 70)
 else:
-    logger.info("✓ JWT_SECRET_KEY loaded from environment")
+    logger.info("✅ JWT_SECRET_KEY loaded from environment")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

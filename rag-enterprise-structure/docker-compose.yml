@@ -3,7 +3,8 @@ services:
     image: qdrant/qdrant:latest
     container_name: rag-qdrant
     environment:
-      QDRANT_API_KEY: rag-enterprise-key
+      # Qdrant API key - optional, set in .env for production
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
     volumes:
       - qdrant-data:/qdrant/storage
     ports:

@@ -146,6 +146,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
 CUDA_VISIBLE_DEVICES = os.getenv("CUDA_VISIBLE_DEVICES", "0")
 RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "0.3"))
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100"))  # Default 100MB
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -557,12 +558,23 @@ async def upload_document(
             status_code=400,
             detail=f"Format '{file_ext}' not supported. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
-    
+
+    # Check file size before reading entire content
+    # First read content to check size
+    content = await file.read()
+    file_size_mb = len(content) / (1024 * 1024)
+
+    if file_size_mb > MAX_UPLOAD_SIZE_MB:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {file_size_mb:.1f}MB. Maximum allowed: {MAX_UPLOAD_SIZE_MB}MB"
+        )
+
     try:
         # Create document_id with timestamp FIRST
         document_id = f"{datetime.now().timestamp()}_{file.filename}"
         file_path = os.path.join(UPLOAD_DIR, document_id)
-        content = await file.read()
+        # Note: content was already read above for size validation
 
         # Save file with the document_id (with timestamp)
         with open(file_path, "wb") as f:
