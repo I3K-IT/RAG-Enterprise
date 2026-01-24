@@ -47,7 +47,8 @@ class QdrantConnector:
             client_params = {
                 "host": self.host,
                 "port": self.port,
-                "timeout": 600
+                "timeout": 600,
+                "https": False  # Force HTTP for local Qdrant
             }
             if self.api_key:
                 client_params["api_key"] = self.api_key
