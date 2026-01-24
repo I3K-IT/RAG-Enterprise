@@ -26,8 +26,8 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update -qq && apt-get install -y -qq default-jre wget curl
 RUN mkdir -p /opt && wget -q https://archive.apache.org/dist/tika/3.2.3/tika-server-standard-3.2.3.jar -O /opt/tika-server.jar
 
-# Install PyTorch with CUDA 12.4 (stable, compatible with driver 550+)
-RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 --no-cache-dir
+# Install PyTorch with CUDA 12.8 (required for RTX 5000 series)
+RUN pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
 
 # Upgrade pip
 RUN pip install --upgrade pip setuptools wheel
