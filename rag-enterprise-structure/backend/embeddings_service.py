@@ -137,13 +137,18 @@ class EmbeddingsService:
     
     
     def _fallback_to_cpu(self):
-        """Move model to CPU as fallback when CUDA fails"""
+        """Reload model on CPU as fallback when CUDA fails"""
         if self.device != "cpu":
-            logger.warning("🔄 Moving model to CPU due to CUDA errors...")
+            logger.warning("🔄 Reloading model on CPU due to CUDA errors...")
+
+            # Completely free GPU memory
+            del self.model
             torch.cuda.empty_cache()
-            self.model = self.model.to("cpu")
+
+            # Reload model on CPU
+            self.model = SentenceTransformer(self.model_name, device="cpu")
             self.device = "cpu"
-            logger.info("✅ Model moved to CPU successfully")
+            logger.info("✅ Model reloaded on CPU successfully")
 
     def embed_texts(self, texts: List[str], batch_size: int = 8) -> List[List[float]]:
         """
