@@ -28,9 +28,9 @@ class RAGPipeline:
         qdrant_connector,
         embeddings_service,
         llm_model: str = "mistral",
-        chunk_size: int = 1000,
-        chunk_overlap: int = 100,
-        relevance_threshold: float = 0.5  # Relevance filter
+        chunk_size: int = 1500,
+        chunk_overlap: int = 200,
+        relevance_threshold: float = 0.35  # Relevance filter (lowered for better recall)
     ):
         self.qdrant_connector = qdrant_connector
         self.embeddings_service = embeddings_service
@@ -62,25 +62,24 @@ class RAGPipeline:
     
     
     def _get_prompt_template(self) -> str:
-        """Simplified template to reduce hallucinations"""
-        return """You are an assistant that answers ONLY using information present in the provided documents.
+        """Optimized template for better extraction and accuracy"""
+        return """You are a precise research assistant. Your task is to find and extract specific information from the provided documents.
 
-CRITICAL RULES:
-1. Use ONLY information present in the CONTEXT below
-2. If the information is NOT in the context → answer "I don't have this information in the documents"
-3. Do NOT invent, do NOT assume, do NOT generate data
-4. If there are multiple documents, use the one with the highest relevance
-5. The Italian TAX CODE has exactly 16 characters (e.g., MRCFNC69E20E329H)
-6. Verify that the name in the document matches the name in the question
+INSTRUCTIONS:
+1. Read ALL document chunks carefully - information may be spread across multiple chunks
+2. Extract and combine relevant information from different chunks when needed
+3. Quote specific names, dates, numbers, and facts exactly as they appear
+4. If you find partial information, provide what you found and note what's missing
+5. Only say "I don't have this information" if NONE of the chunks contain relevant data
 
 {history_section}
 
-CONTEXT:
+DOCUMENTS:
 {context}
 
 QUESTION: {question}
 
-ANSWER (use ONLY info from context):"""
+ANSWER (be specific, quote facts from documents):"""
     
     
     def _format_history(self, history: List[Dict] = None) -> str:
@@ -95,7 +94,7 @@ ANSWER (use ONLY info from context):"""
             return ""
 
         history_text = "USER'S PREVIOUS QUESTIONS (for context):\n"
-        for i, msg in enumerate(history[-3:], 1):  # Last 3 exchanges (reduced from 5)
+        for i, msg in enumerate(history[-5:], 1):  # Last 5 exchanges for better context
             user_msg = msg.get("user", "")
             if user_msg:  # Only if there's actually a question
                 history_text += f"{i}. {user_msg}\n"
@@ -106,8 +105,8 @@ ANSWER (use ONLY info from context):"""
     def chunk_text(
         self,
         text: str,
-        chunk_size: int = 1000,
-        overlap: int = 100
+        chunk_size: int = 1500,
+        overlap: int = 200
     ) -> List[str]:
         """
         Split text into chunks
@@ -199,7 +198,7 @@ ANSWER (use ONLY info from context):"""
     def query(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 10,
         temperature: float = 0.7,
         history: List[Dict] = None
     ) -> Tuple[str, List[Dict]]:
@@ -249,27 +248,27 @@ ANSWER (use ONLY info from context):"""
                 logger.warning(f"⚠️  Possible causes: threshold too high ({self.relevance_threshold}) or non-relevant documents")
                 return "I haven't found relevant documents to answer this question.", []
 
-            # 🎯 Intelligent gap-based filtering to reduce "noise dilution"
+            # 🎯 Keep more documents for complex queries - less aggressive filtering
+            # Only filter if there's a VERY clear winner with huge gap
             if len(retrieved_docs) > 1:
                 first_score = retrieved_docs[0].get("similarity", 0)
                 second_score = retrieved_docs[1].get("similarity", 0)
                 gap = first_score - second_score
 
-                # If there's a CLEARLY more relevant document (high score + significant gap)
-                # filter out documents with medium-low scores to avoid confusion in the LLM
-                # Lowered thresholds to be more aggressive: 0.60→0.50, 0.12→0.08
-                if first_score >= 0.50 and gap > 0.08:
+                # Only filter if gap is very large (>0.15) AND top score is high (>0.65)
+                # This preserves more context for complex questions
+                if first_score >= 0.65 and gap > 0.15:
                     logger.info(f"      🎯 Gap filtering activated: top_score={first_score:.3f}, gap={gap:.3f}")
-                    relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.45]
-                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documents (filtered < 0.45)")
+                    relevant_docs = [doc for doc in retrieved_docs if doc.get("similarity", 0) >= 0.40]
+                    logger.info(f"      ✅ Gap filtering: {len(retrieved_docs)} → {len(relevant_docs)} documents (filtered < 0.40)")
 
-                    # Safety check: keep at least the first document
-                    if not relevant_docs:
-                        logger.warning("⚠️  Gap filtering removed ALL documents, keeping the first one")
-                        relevant_docs = [retrieved_docs[0]]
+                    # Safety check: keep at least top 3 documents
+                    if len(relevant_docs) < 3:
+                        logger.warning("⚠️  Gap filtering too aggressive, keeping top 3")
+                        relevant_docs = retrieved_docs[:3]
                 else:
                     relevant_docs = retrieved_docs
-                    logger.info(f"      ✅ {len(relevant_docs)} relevant documents (gap={gap:.3f}, below threshold 0.08)")
+                    logger.info(f"      ✅ Keeping all {len(relevant_docs)} documents for comprehensive context")
             else:
                 relevant_docs = retrieved_docs
                 logger.info(f"      ✅ {len(relevant_docs)} relevant document")
