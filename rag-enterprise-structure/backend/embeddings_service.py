@@ -116,11 +116,35 @@ class EmbeddingsService:
                 normalize_embeddings=True
             )
             return embedding.tolist()
+        except RuntimeError as e:
+            # CUDA error - fallback to CPU
+            if "CUDA" in str(e):
+                logger.warning(f"⚠️ CUDA error in embed_text, falling back to CPU...")
+                self._fallback_to_cpu()
+
+                embedding = self.model.encode(
+                    text,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True
+                )
+                return embedding.tolist()
+            else:
+                logger.error(f"❌ Error embedding text: {str(e)}")
+                raise
         except Exception as e:
             logger.error(f"❌ Error embedding text: {str(e)}")
             raise
     
     
+    def _fallback_to_cpu(self):
+        """Move model to CPU as fallback when CUDA fails"""
+        if self.device != "cpu":
+            logger.warning("🔄 Moving model to CPU due to CUDA errors...")
+            torch.cuda.empty_cache()
+            self.model = self.model.to("cpu")
+            self.device = "cpu"
+            logger.info("✅ Model moved to CPU successfully")
+
     def embed_texts(self, texts: List[str], batch_size: int = 8) -> List[List[float]]:
         """
         Generate embeddings for multiple texts
@@ -145,14 +169,15 @@ class EmbeddingsService:
             return embeddings.tolist()
 
         except RuntimeError as e:
-            # CUDA out of memory or batch error - retry with smaller batch
-            if "CUDA" in str(e) or "out of memory" in str(e).lower():
-                logger.warning(f"⚠️ CUDA error with batch_size={batch_size}, retrying with batch_size=1...")
-                torch.cuda.empty_cache()  # Clear GPU memory
+            # CUDA error - fallback to CPU
+            if "CUDA" in str(e):
+                logger.warning(f"⚠️ CUDA error detected: {str(e)[:100]}...")
+                self._fallback_to_cpu()
 
+                # Retry on CPU
                 embeddings = self.model.encode(
                     texts,
-                    batch_size=1,
+                    batch_size=batch_size,
                     convert_to_numpy=True,
                     normalize_embeddings=True,
                     show_progress_bar=True
