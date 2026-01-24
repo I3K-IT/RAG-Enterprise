@@ -28,9 +28,9 @@ class RAGPipeline:
         qdrant_connector,
         embeddings_service,
         llm_model: str = "mistral",
-        chunk_size: int = 1500,
-        chunk_overlap: int = 200,
-        relevance_threshold: float = 0.35  # Relevance filter (lowered for better recall)
+        chunk_size: int = 2000,
+        chunk_overlap: int = 400,
+        relevance_threshold: float = 0.30  # Lowered for better recall
     ):
         self.qdrant_connector = qdrant_connector
         self.embeddings_service = embeddings_service
@@ -105,8 +105,8 @@ ANSWER (be specific, quote facts from documents):"""
     def chunk_text(
         self,
         text: str,
-        chunk_size: int = 1500,
-        overlap: int = 200
+        chunk_size: int = 2000,
+        overlap: int = 400
     ) -> List[str]:
         """
         Split text into chunks
@@ -198,7 +198,7 @@ ANSWER (be specific, quote facts from documents):"""
     def query(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int = 15,
         temperature: float = 0.7,
         history: List[Dict] = None
     ) -> Tuple[str, List[Dict]]:
