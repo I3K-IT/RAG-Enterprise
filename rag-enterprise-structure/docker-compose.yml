@@ -44,6 +44,7 @@ services:
     environment:
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       LLM_MODEL: qwen2.5:14b-instruct-q4_K_M
       EMBEDDING_MODEL: BAAI/bge-m3
       RELEVANCE_THRESHOLD: "0.35"

@@ -23,16 +23,18 @@ class QdrantConnector:
     COLLECTION_NAME = "rag_documents"
     VECTOR_SIZE = 1024  # BAAI/bge-m3
     
-    def __init__(self, host: str = "localhost", port: int = 6333):
+    def __init__(self, host: str = "localhost", port: int = 6333, api_key: str = None):
         """
         Initialize connector
 
         Args:
             host: Qdrant host
             port: Qdrant port
+            api_key: Qdrant API key (optional)
         """
         self.host = host
         self.port = port
+        self.api_key = api_key
         self.client = None
         self.connected = False
     
@@ -42,11 +44,15 @@ class QdrantConnector:
         try:
             logger.info(f"Connecting to Qdrant: {self.host}:{self.port}...")
             
-            self.client = QdrantClient(
-                host=self.host,
-                port=self.port,
-                timeout=600
-            )
+            client_params = {
+                "host": self.host,
+                "port": self.port,
+                "timeout": 600
+            }
+            if self.api_key:
+                client_params["api_key"] = self.api_key
+
+            self.client = QdrantClient(**client_params)
             
             # Test connection
             self.client.get_collections()

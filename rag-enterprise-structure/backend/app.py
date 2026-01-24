@@ -141,6 +141,7 @@ logger = logging.getLogger(__name__)
 # Environment variables
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "mistral")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
@@ -214,8 +215,9 @@ async def startup_event():
         # 1. Qdrant Connection
         logger.info("🔗 [1/4] Connecting to Qdrant...")
         qdrant_connector = QdrantConnector(
-            host="qdrant",
-            port=6333
+            host=QDRANT_HOST,
+            port=QDRANT_PORT,
+            api_key=QDRANT_API_KEY if QDRANT_API_KEY else None
         )
         qdrant_connector.connect()
         logger.info("✅ Qdrant connected")
