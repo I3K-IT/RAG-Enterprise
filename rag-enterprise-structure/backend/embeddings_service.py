@@ -121,13 +121,13 @@ class EmbeddingsService:
             raise
     
     
-    def embed_texts(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+    def embed_texts(self, texts: List[str], batch_size: int = 8) -> List[List[float]]:
         """
         Generate embeddings for multiple texts
 
         Args:
             texts: List of texts
-            batch_size: Batch size for processing
+            batch_size: Batch size for processing (default: 8 for GPU stability)
 
         Returns:
             List of embeddings
@@ -143,7 +143,24 @@ class EmbeddingsService:
 
             # Convert to list of lists
             return embeddings.tolist()
-            
+
+        except RuntimeError as e:
+            # CUDA out of memory or batch error - retry with smaller batch
+            if "CUDA" in str(e) or "out of memory" in str(e).lower():
+                logger.warning(f"⚠️ CUDA error with batch_size={batch_size}, retrying with batch_size=1...")
+                torch.cuda.empty_cache()  # Clear GPU memory
+
+                embeddings = self.model.encode(
+                    texts,
+                    batch_size=1,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    show_progress_bar=True
+                )
+                return embeddings.tolist()
+            else:
+                logger.error(f"❌ Error embedding texts: {str(e)}")
+                raise
         except Exception as e:
             logger.error(f"❌ Error embedding texts: {str(e)}")
             raise
