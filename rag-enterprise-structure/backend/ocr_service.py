@@ -173,18 +173,13 @@ class OCRService:
                 except Exception as e:
                     logger.warning(f"Direct read failed: {str(e)}")
 
-            # 2. For PDFs: Analyze first to determine best extraction method
+            # 2. For PDFs: Analyze for debugging, then try PyMuPDF (fast) before Tika
             if ext == '.pdf':
-                pdf_info = analyze_pdf(file_path)
+                pdf_info = analyze_pdf(file_path)  # Just for logging/debugging
 
-                # If PDF is scanned/image-based, skip Tika and go directly to OCR
-                if pdf_info["is_scanned"]:
-                    logger.info(f"📸 PDF detected as SCANNED ({pdf_info['page_count']} pages) - using OCR directly")
-                    return self._extract_with_tesseract(file_path)
-
-                # If PyMuPDF already extracted good text, use it
-                if pdf_info["sample_text"] and len(pdf_info["sample_text"]) > 200:
-                    logger.info(f"📄 Using PyMuPDF direct extraction...")
+                # Try PyMuPDF first - it's fast and handles text PDFs well
+                if pdf_info["has_text"] and pdf_info["text_ratio"] > 0.5:
+                    logger.info(f"📄 Trying PyMuPDF extraction (text_ratio={pdf_info['text_ratio']:.1%})...")
                     try:
                         import fitz
                         doc = fitz.open(file_path)
@@ -192,11 +187,13 @@ class OCRService:
                         for page in doc:
                             full_text += page.get_text() + "\n"
                         doc.close()
-                        if full_text and len(full_text.strip()) > 100:
+                        if full_text and len(full_text.strip()) > 500:
                             logger.info(f"✅ {len(full_text)} chars (PyMuPDF)")
                             return full_text.strip()
+                        else:
+                            logger.info(f"PyMuPDF got only {len(full_text)} chars, trying Tika...")
                     except Exception as e:
-                        logger.warning(f"PyMuPDF extraction failed: {e}, trying Tika...")
+                        logger.warning(f"PyMuPDF failed: {e}, trying Tika...")
 
             # 3. Ensure Tika is healthy
             self._ensure_tika_healthy()
