@@ -12,6 +12,9 @@ import os
 import logging
 from datetime import datetime
 import traceback
+import gc
+import asyncio
+import torch
 
 from rag_pipeline import RAGPipeline
 from ocr_service import OCRService
@@ -19,6 +22,9 @@ from embeddings_service import EmbeddingsService
 from qdrant_connector import QdrantConnector
 import re
 from typing import Dict, Optional
+
+# Processing lock - only one document at a time to prevent OOM
+_processing_lock = asyncio.Lock()
 
 # Authentication imports
 from auth import create_user_token
@@ -612,6 +618,16 @@ async def upload_document(
 
 async def process_document_background(file_path: str, document_id: str, filename: str):
     """Background task to process document - DETAILED LOGGING"""
+    # Use lock to prevent concurrent processing (OOM prevention)
+    async with _processing_lock:
+        await _process_document_impl(file_path, document_id, filename)
+
+
+async def _process_document_impl(file_path: str, document_id: str, filename: str):
+    """Internal document processing implementation"""
+    text = None
+    chunks = None
+
     try:
         logger.info("=" * 80)
         logger.info(f"📇 PROCESSING START: {filename}")
@@ -696,6 +712,28 @@ async def process_document_background(file_path: str, document_id: str, filename
         logger.error(f"❌ CRITICAL PROCESSING ERROR {filename}: {str(e)}")
         logger.error(traceback.format_exc())
         logger.error("=" * 80)
+
+    finally:
+        # 🧹 CRITICAL: Memory cleanup to prevent OOM on next upload
+        logger.info("🧹 Cleaning up memory...")
+
+        # Delete large variables
+        if text is not None:
+            del text
+        if chunks is not None:
+            del chunks
+
+        # Force Python garbage collection
+        gc.collect()
+
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            logger.info(f"   GPU memory after cleanup: {allocated:.2f}GB")
+
+        logger.info("✅ Memory cleanup completed")
 
 
 @app.get("/api/documents", response_model=DocumentsListResponse)
