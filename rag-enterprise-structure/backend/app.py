@@ -13,7 +13,6 @@ import logging
 from datetime import datetime
 import traceback
 import gc
-import threading
 import torch
 
 from rag_pipeline import RAGPipeline
@@ -22,10 +21,6 @@ from embeddings_service import EmbeddingsService
 from qdrant_connector import QdrantConnector
 import re
 from typing import Dict, Optional
-
-# Processing lock - only one document at a time to prevent OOM
-# IMPORTANT: Use threading.Lock (not asyncio.Lock) because BackgroundTasks runs in thread pool
-_processing_lock = threading.Lock()
 
 # Authentication imports
 from auth import create_user_token
@@ -617,22 +612,8 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def process_document_background(file_path: str, document_id: str, filename: str):
-    """
-    Background task to process document - RUNS IN THREAD POOL
-
-    IMPORTANT: This is a sync function (not async) so it runs in a thread pool,
-    not the event loop. This prevents blocking health checks during processing.
-    """
-    # Use lock to prevent concurrent processing (OOM prevention)
-    with _processing_lock:
-        logger.info(f"🔒 Acquired processing lock for {filename}")
-        _process_document_impl(file_path, document_id, filename)
-        logger.info(f"🔓 Released processing lock for {filename}")
-
-
-def _process_document_impl(file_path: str, document_id: str, filename: str):
-    """Internal document processing implementation - SYNC for thread pool"""
+async def process_document_background(file_path: str, document_id: str, filename: str):
+    """Background task to process document - DETAILED LOGGING"""
     text = None
     chunks = None
 
