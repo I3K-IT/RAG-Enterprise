@@ -190,7 +190,7 @@ class RAGBenchmark:
         try:
             response = requests.post(
                 f"{self.api_url}/api/auth/login",
-                data={"username": self.username, "password": self.password},
+                json={"username": self.username, "password": self.password},
                 timeout=30
             )
             if response.status_code == 200:
@@ -198,7 +198,7 @@ class RAGBenchmark:
                 print(f"✅ Authenticated as {self.username}")
                 return True
             else:
-                print(f"❌ Authentication failed: {response.status_code}")
+                print(f"❌ Authentication failed: {response.status_code} - {response.text[:100]}")
                 return False
         except Exception as e:
             print(f"❌ Authentication error: {e}")
