@@ -17,7 +17,7 @@
 - 🚀 **One-Command Setup**: Automated installation script (~1 hour / ~15 min with fast connection)
 - 🤖 **Modern LLMs**: Qwen2.5, Mistral 7B (Q4 quantized)
 - 🔐 **Multi-user Auth**: JWT-based with role-based access control
-- 📊 **Production-Ready**: Tested with 10,000+ documents
+- 📊 **Production-Ready**: Designed for 10,000+ documents
 - 🌍 **Multilingual**: Supports 29 languages
 - 🎨 **Clean UI**: Modern React interface
 - 📁 **Multiple Formats**: PDF, DOCX, TXT, MD, PPTX, XLSX, and more
