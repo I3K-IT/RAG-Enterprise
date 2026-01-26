@@ -1,5 +1,6 @@
 """
-OCR Service - Tika + Tesseract Fallback
+OCR Service - Smart PDF Detection + Tika/OCR Processing
+Automatically detects PDF type (text vs scanned) and routes appropriately.
 """
 import logging
 import subprocess
@@ -11,6 +12,60 @@ import re
 import os
 
 logger = logging.getLogger(__name__)
+
+
+def analyze_pdf(file_path: str) -> dict:
+    """
+    Analyze a PDF to determine if it's text-based or scanned.
+
+    Returns dict with:
+    - is_scanned: True if PDF appears to be scanned/image-based
+    - has_text: True if PDF has extractable text
+    - page_count: Number of pages
+    - text_ratio: Ratio of pages with text vs total pages
+    - sample_text: Sample of extracted text (first 500 chars)
+    """
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(file_path)
+        page_count = len(doc)
+        pages_with_text = 0
+        total_text = ""
+
+        # Check first 10 pages (or all if less)
+        pages_to_check = min(10, page_count)
+
+        for i in range(pages_to_check):
+            page = doc[i]
+            text = page.get_text().strip()
+            if len(text) > 50:  # Meaningful text (not just page numbers)
+                pages_with_text += 1
+                if len(total_text) < 1000:
+                    total_text += text + "\n"
+
+        doc.close()
+
+        text_ratio = pages_with_text / pages_to_check if pages_to_check > 0 else 0
+        is_scanned = text_ratio < 0.3  # Less than 30% of pages have text
+
+        result = {
+            "is_scanned": is_scanned,
+            "has_text": text_ratio > 0,
+            "page_count": page_count,
+            "text_ratio": text_ratio,
+            "sample_text": total_text[:500] if total_text else ""
+        }
+
+        logger.info(f"📊 PDF Analysis: {page_count} pages, text_ratio={text_ratio:.1%}, is_scanned={is_scanned}")
+        return result
+
+    except ImportError:
+        logger.warning("⚠️ PyMuPDF not installed, skipping PDF analysis")
+        return {"is_scanned": False, "has_text": True, "page_count": 0, "text_ratio": 1.0, "sample_text": ""}
+    except Exception as e:
+        logger.error(f"❌ PDF analysis failed: {e}")
+        return {"is_scanned": False, "has_text": True, "page_count": 0, "text_ratio": 1.0, "sample_text": ""}
 
 class OCRService:
     TIKA_URL = "http://localhost:9998"
@@ -105,11 +160,9 @@ class OCRService:
     def extract_text(self, file_path: str) -> str:
         try:
             logger.info(f"Extracting: {Path(file_path).name}")
-
-            # Ensure Tika is healthy before each extraction
-            self._ensure_tika_healthy()
             ext = Path(file_path).suffix.lower()
-            
+
+            # 1. Plain text files - read directly
             if ext in ['.txt', '.md', '.csv']:
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
@@ -119,7 +172,34 @@ class OCRService:
                         return text.strip()
                 except Exception as e:
                     logger.warning(f"Direct read failed: {str(e)}")
-            
+
+            # 2. For PDFs: Analyze first to determine best extraction method
+            if ext == '.pdf':
+                pdf_info = analyze_pdf(file_path)
+
+                # If PDF is scanned/image-based, skip Tika and go directly to OCR
+                if pdf_info["is_scanned"]:
+                    logger.info(f"📸 PDF detected as SCANNED ({pdf_info['page_count']} pages) - using OCR directly")
+                    return self._extract_with_tesseract(file_path)
+
+                # If PyMuPDF already extracted good text, use it
+                if pdf_info["sample_text"] and len(pdf_info["sample_text"]) > 200:
+                    logger.info(f"📄 Using PyMuPDF direct extraction...")
+                    try:
+                        import fitz
+                        doc = fitz.open(file_path)
+                        full_text = ""
+                        for page in doc:
+                            full_text += page.get_text() + "\n"
+                        doc.close()
+                        if full_text and len(full_text.strip()) > 100:
+                            logger.info(f"✅ {len(full_text)} chars (PyMuPDF)")
+                            return full_text.strip()
+                    except Exception as e:
+                        logger.warning(f"PyMuPDF extraction failed: {e}, trying Tika...")
+
+            # 3. Ensure Tika is healthy
+            self._ensure_tika_healthy()
             logger.info(f"Tika ready: {self.tika_ready}")
             
             if self.tika_ready:
