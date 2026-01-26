@@ -57,9 +57,9 @@ class OCRService:
             print(f"Kill error: {e}")
     
     def _start_tika(self):
-        logger.info("Starting Tika...")
+        logger.info("Starting Tika with 4GB heap...")
         self.tika_process = subprocess.Popen(
-            ['java', '-jar', '/opt/tika-server.jar', '-h', '0.0.0.0', '-p', '9998'],
+            ['java', '-Xmx4g', '-Xms1g', '-jar', '/opt/tika-server.jar', '-h', '0.0.0.0', '-p', '9998'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             preexec_fn=os.setsid
@@ -86,10 +86,28 @@ class OCRService:
     def _get_mime_type(self, file_path: str) -> str:
         ext = Path(file_path).suffix.lower()
         return self.MIME_TYPES.get(ext, 'application/octet-stream')
-    
+
+    def _ensure_tika_healthy(self):
+        """Check if Tika is responding, restart if not"""
+        try:
+            response = requests.get(f"{self.TIKA_URL}/version", timeout=5)
+            if response.status_code == 200:
+                return True
+        except Exception as e:
+            logger.warning(f"⚠️ Tika health check failed: {e}")
+
+        # Tika is not responding, restart it
+        logger.warning("🔄 Restarting Tika server...")
+        self._aggressive_kill_tika()
+        self._start_tika()
+        return self.tika_ready
+
     def extract_text(self, file_path: str) -> str:
         try:
             logger.info(f"Extracting: {Path(file_path).name}")
+
+            # Ensure Tika is healthy before each extraction
+            self._ensure_tika_healthy()
             ext = Path(file_path).suffix.lower()
             
             if ext in ['.txt', '.md', '.csv']:
