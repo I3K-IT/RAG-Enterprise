@@ -127,20 +127,21 @@ class OCRService:
                     logger.info(f"Opening file: {file_path}")
                     with open(file_path, 'rb') as f:
                         file_data = f.read()
-                    logger.info(f"File size: {len(file_data)} bytes")
-                    
+                    logger.info(f"File size: {len(file_data)} bytes ({len(file_data)/1024/1024:.1f}MB)")
+
                     mime_type = self._get_mime_type(file_path)
                     logger.info(f"MIME type: {mime_type}")
-                    logger.info(f"Sending to Tika: {self.TIKA_URL}/tika")
-                    
+                    logger.info(f"Sending to Tika: {self.TIKA_URL}/tika (timeout: 120s)")
+
+                    # Timeout ridotto: se Tika non risponde in 120s, c'è un problema
                     response = requests.put(
                         f"{self.TIKA_URL}/tika",
                         data=file_data,
                         headers={
                             'Content-Type': mime_type,
-                            'Accept-Charset': 'utf-8'  # Forza UTF-8 nella risposta
+                            'Accept-Charset': 'utf-8'
                         },
-                        timeout=600
+                        timeout=(30, 120)  # (connect timeout, read timeout)
                     )
 
                     # Forza encoding UTF-8 sulla risposta
@@ -155,9 +156,19 @@ class OCRService:
                         if text and len(text.strip()) > 100:
                             logger.info(f"✅ {len(text)} chars (Tika)")
                             return text
+                except requests.exceptions.Timeout:
+                    logger.error(f"⏱️ Tika timeout after 120s - file may be too complex")
+                    logger.warning("🔄 Restarting Tika and falling back to Tesseract...")
+                    self._aggressive_kill_tika()
+                    self._start_tika()
+                except requests.exceptions.ConnectionError as e:
+                    logger.error(f"🔌 Tika connection error: {e}")
+                    logger.warning("🔄 Restarting Tika...")
+                    self._aggressive_kill_tika()
+                    self._start_tika()
                 except Exception as e:
                     logger.error(f"Tika request error: {type(e).__name__}: {str(e)}")
-            
+
             # 🔧 FALLBACK TO TESSERACT if Tika didn't extract enough
             logger.warning("⚠️  Tika extraction insufficient, trying Tesseract...")
             tesseract_text = self._extract_with_tesseract(file_path)
