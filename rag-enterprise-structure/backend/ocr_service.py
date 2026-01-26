@@ -1,6 +1,5 @@
 """
-OCR Service - Tika + PaddleOCR GPU Fallback
-Uses PaddleOCR with GPU acceleration for fast OCR on scanned documents.
+OCR Service - Tika + Tesseract Fallback
 """
 import logging
 import subprocess
@@ -10,10 +9,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 import re
 import os
-import torch
 
 logger = logging.getLogger(__name__)
-
 
 class OCRService:
     TIKA_URL = "http://localhost:9998"
@@ -40,37 +37,10 @@ class OCRService:
         logger.info("Initializing OCR Service...")
         self.tika_ready = False
         self.tika_process = None
-        self.paddle_ocr = None
-        self.use_gpu = torch.cuda.is_available()
-
+        
         self._aggressive_kill_tika()
         self._start_tika()
-        self._init_paddle_ocr()
         logger.info("✅ OCR Service ready")
-
-    def _init_paddle_ocr(self):
-        """Initialize PaddleOCR with GPU if available"""
-        try:
-            from paddleocr import PaddleOCR
-
-            # Use GPU if available (much faster for large documents)
-            self.paddle_ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang='en',  # Can also use 'ch' for Chinese, 'it' for Italian
-                use_gpu=self.use_gpu,
-                show_log=False,  # Reduce noise in logs
-                # Performance optimizations
-                enable_mkldnn=not self.use_gpu,  # Use MKL-DNN on CPU
-                cpu_threads=4 if not self.use_gpu else 1,
-            )
-            device_str = "GPU (CUDA)" if self.use_gpu else "CPU"
-            logger.info(f"✅ PaddleOCR initialized on {device_str}")
-        except ImportError as e:
-            logger.warning(f"⚠️ PaddleOCR not available: {e}")
-            self.paddle_ocr = None
-        except Exception as e:
-            logger.error(f"❌ PaddleOCR init failed: {e}")
-            self.paddle_ocr = None
     
     def _aggressive_kill_tika(self):
         try:
@@ -150,12 +120,12 @@ class OCRService:
                         data=file_data,
                         headers={
                             'Content-Type': mime_type,
-                            'Accept-Charset': 'utf-8'  # Force UTF-8 in response
+                            'Accept-Charset': 'utf-8'  # Forza UTF-8 nella risposta
                         },
                         timeout=600
                     )
 
-                    # Force UTF-8 encoding on response
+                    # Forza encoding UTF-8 sulla risposta
                     response.encoding = 'utf-8'
 
                     logger.info(f"Tika response status: {response.status_code}")
@@ -170,19 +140,11 @@ class OCRService:
                 except Exception as e:
                     logger.error(f"Tika request error: {type(e).__name__}: {str(e)}")
             
-            # 🔧 FALLBACK TO PADDLEOCR (GPU-accelerated) if Tika didn't extract enough
-            if self.paddle_ocr:
-                logger.warning("⚠️  Tika extraction insufficient, trying PaddleOCR (GPU)...")
-                paddle_text = self._extract_with_paddle_ocr(file_path)
-                if paddle_text and len(paddle_text.strip()) > 0:
-                    logger.info(f"✅ {len(paddle_text)} chars (PaddleOCR {'GPU' if self.use_gpu else 'CPU'})")
-                    return paddle_text
-
-            # Last resort: Tesseract (slow, CPU-only)
-            logger.warning("⚠️  PaddleOCR unavailable, falling back to Tesseract (slow)...")
+            # 🔧 FALLBACK TO TESSERACT if Tika didn't extract enough
+            logger.warning("⚠️  Tika extraction insufficient, trying Tesseract...")
             tesseract_text = self._extract_with_tesseract(file_path)
             if tesseract_text and len(tesseract_text.strip()) > 0:
-                logger.info(f"✅ {len(tesseract_text)} chars (Tesseract fallback - slow)")
+                logger.info(f"✅ {len(tesseract_text)} chars (Tesseract fallback)")
                 return tesseract_text
 
             logger.warning("⚠️  No extraction worked")
@@ -228,55 +190,8 @@ class OCRService:
             logger.error(f"XML error: {type(e).__name__}: {str(e)}")
             return ""
     
-    def _extract_with_paddle_ocr(self, file_path: str) -> str:
-        """Extract text using PaddleOCR with GPU acceleration"""
-        try:
-            from pdf2image import convert_from_path
-            import numpy as np
-
-            logger.info(f"🔍 PaddleOCR: converting PDF to images...")
-            # Convert PDF to images with reasonable DPI for OCR
-            images = convert_from_path(file_path, dpi=200, fmt='jpeg')
-            total_pages = len(images)
-            logger.info(f"📄 {total_pages} pages converted, processing with {'GPU' if self.use_gpu else 'CPU'}...")
-
-            all_text = []
-            batch_size = 10  # Process pages in batches for progress logging
-
-            for i, img in enumerate(images):
-                # Convert PIL Image to numpy array for PaddleOCR
-                img_array = np.array(img)
-
-                # Run PaddleOCR on the image
-                result = self.paddle_ocr.ocr(img_array, cls=True)
-
-                # Extract text from result
-                page_text = []
-                if result and result[0]:
-                    for line in result[0]:
-                        if line and len(line) >= 2:
-                            text = line[1][0]  # Get text content
-                            page_text.append(text)
-
-                all_text.append('\n'.join(page_text))
-
-                # Progress logging every batch_size pages
-                if (i + 1) % batch_size == 0 or (i + 1) == total_pages:
-                    logger.info(f"  📖 Processed {i + 1}/{total_pages} pages...")
-
-            full_text = '\n\n'.join(all_text)
-            logger.info(f"✅ PaddleOCR extracted {len(full_text)} chars from {total_pages} pages")
-            return full_text
-
-        except ImportError as e:
-            logger.error(f"❌ Missing module for PaddleOCR: {e}")
-            return ""
-        except Exception as e:
-            logger.error(f"❌ PaddleOCR failed: {type(e).__name__}: {str(e)}")
-            return ""
-
     def _extract_with_tesseract(self, file_path: str) -> str:
-        """Fallback: extract text using Tesseract directly (slow, CPU-only)"""
+        """Fallback: extract text using Tesseract directly"""
         try:
             import pytesseract
             from pdf2image import convert_from_path
