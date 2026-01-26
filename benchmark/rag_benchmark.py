@@ -29,31 +29,34 @@ import statistics
 # ============================================================================
 
 BENCHMARK_DOCUMENTS = [
+    # LARGE DOCUMENTS (stress test)
     {
-        "id": "us_constitution",
-        "name": "US Constitution",
-        "url": "https://www.archives.gov/files/founding-docs/constitution-page-one-transcript.pdf",
-        "backup_url": "https://constitutioncenter.org/media/files/constitution.pdf",
-        "type": "legal",
-        "expected_pages": 15,
+        "id": "mueller_report",
+        "name": "Mueller Report (2019)",
+        "url": "https://www.justice.gov/archives/sco/file/1373816/dl",
+        "type": "legal_large",
+        "expected_pages": 448,
         "queries": [
-            "What are the first 10 amendments called?",
-            "How many articles are in the Constitution?",
-            "What does Article II establish?",
+            "What specific actions did the IRA take on Facebook?",
+            "Who were the members of the Internet Research Agency leadership?",
+            "What were the 10 episodes of potential obstruction?",
+            "What was the role of Paul Manafort?",
         ]
     },
     {
-        "id": "un_human_rights",
-        "name": "UN Declaration of Human Rights",
-        "url": "https://www.un.org/en/udhrbook/pdf/udhr_booklet_en_web.pdf",
-        "type": "legal",
-        "expected_pages": 10,
+        "id": "911_commission_report",
+        "name": "9/11 Commission Report",
+        "url": "https://www.9-11commission.gov/report/911Report.pdf",
+        "type": "legal_large",
+        "expected_pages": 585,
         "queries": [
-            "What does Article 1 state about human beings?",
-            "How many articles are in the declaration?",
-            "What rights does Article 19 protect?",
+            "What time did Flight 11 hit the North Tower?",
+            "Who was the leader of the 9/11 hijackers?",
+            "What were the main failures identified by the commission?",
+            "What recommendations did the commission make?",
         ]
     },
+    # MEDIUM DOCUMENTS
     {
         "id": "bitcoin_whitepaper",
         "name": "Bitcoin Whitepaper",
@@ -67,29 +70,27 @@ BENCHMARK_DOCUMENTS = [
         ]
     },
     {
-        "id": "rfc2616",
-        "name": "RFC 2616 - HTTP/1.1",
-        "url": "https://www.rfc-editor.org/rfc/pdfrfc/rfc2616.txt.pdf",
-        "backup_url": "https://www.ietf.org/rfc/rfc2616.txt",
+        "id": "attention_paper",
+        "name": "Attention Is All You Need (Transformers)",
+        "url": "https://arxiv.org/pdf/1706.03762.pdf",
         "type": "technical",
-        "expected_pages": 170,
+        "expected_pages": 15,
         "queries": [
-            "What HTTP methods are defined?",
-            "What is the purpose of the Host header?",
-            "What status code means 'Not Found'?",
+            "What is the main contribution of this paper?",
+            "How many attention heads are used?",
+            "What is multi-head attention?",
         ]
     },
     {
-        "id": "einstein_relativity",
-        "name": "Einstein - Relativity (1920)",
-        "url": "https://www.gutenberg.org/files/5001/5001-pdf.pdf",
-        "backup_url": "https://www.gutenberg.org/cache/epub/5001/pg5001.txt",
-        "type": "scientific",
-        "expected_pages": 100,
+        "id": "gdpr_regulation",
+        "name": "GDPR Full Text",
+        "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:32016R0679",
+        "type": "legal",
+        "expected_pages": 88,
         "queries": [
-            "What is the principle of relativity?",
-            "What is the relationship between energy and mass?",
-            "What happens to time at high velocities?",
+            "What is the right to be forgotten?",
+            "What are the penalties for GDPR violations?",
+            "What is a Data Protection Officer?",
         ]
     },
 ]
@@ -141,25 +142,48 @@ def get_hardware_info() -> Dict:
     except:
         info["ram_gb"] = "Unknown"
 
-    # GPU info (NVIDIA)
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version,cuda_version",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            parts = result.stdout.strip().split(", ")
-            info["gpu"] = {
-                "name": parts[0] if len(parts) > 0 else "Unknown",
-                "memory_mb": int(parts[1]) if len(parts) > 1 else 0,
-                "driver_version": parts[2] if len(parts) > 2 else "Unknown",
-                "cuda_version": parts[3] if len(parts) > 3 else "Unknown",
-            }
-        else:
-            info["gpu"] = {"name": "No NVIDIA GPU detected"}
-    except:
-        info["gpu"] = {"name": "Unable to detect GPU"}
+    # GPU info (NVIDIA) - try multiple methods
+    gpu_detected = False
+
+    # Method 1: nvidia-smi with full path options
+    nvidia_smi_paths = ["nvidia-smi", "/usr/bin/nvidia-smi", "/usr/local/bin/nvidia-smi"]
+    for nvidia_smi in nvidia_smi_paths:
+        try:
+            result = subprocess.run(
+                [nvidia_smi, "--query-gpu=name,memory.total,driver_version,cuda_version",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split(", ")
+                info["gpu"] = {
+                    "name": parts[0].strip() if len(parts) > 0 else "Unknown",
+                    "memory_mb": int(float(parts[1].strip())) if len(parts) > 1 else 0,
+                    "driver_version": parts[2].strip() if len(parts) > 2 else "Unknown",
+                    "cuda_version": parts[3].strip() if len(parts) > 3 else "Unknown",
+                }
+                gpu_detected = True
+                break
+        except:
+            continue
+
+    # Method 2: Try torch if nvidia-smi failed
+    if not gpu_detected:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                info["gpu"] = {
+                    "name": torch.cuda.get_device_name(0),
+                    "memory_mb": torch.cuda.get_device_properties(0).total_memory // (1024*1024),
+                    "driver_version": "Unknown (detected via PyTorch)",
+                    "cuda_version": torch.version.cuda or "Unknown",
+                }
+                gpu_detected = True
+        except:
+            pass
+
+    if not gpu_detected:
+        info["gpu"] = {"name": "No GPU detected"}
 
     return info
 
