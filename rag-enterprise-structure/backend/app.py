@@ -617,18 +617,22 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def process_document_background(file_path: str, document_id: str, filename: str):
-    """Background task to process document - DETAILED LOGGING"""
+def process_document_background(file_path: str, document_id: str, filename: str):
+    """
+    Background task to process document - RUNS IN THREAD POOL
+
+    IMPORTANT: This is a sync function (not async) so it runs in a thread pool,
+    not the event loop. This prevents blocking health checks during processing.
+    """
     # Use lock to prevent concurrent processing (OOM prevention)
-    # threading.Lock works with BackgroundTasks thread pool
     with _processing_lock:
         logger.info(f"🔒 Acquired processing lock for {filename}")
-        await _process_document_impl(file_path, document_id, filename)
+        _process_document_impl(file_path, document_id, filename)
         logger.info(f"🔓 Released processing lock for {filename}")
 
 
-async def _process_document_impl(file_path: str, document_id: str, filename: str):
-    """Internal document processing implementation"""
+def _process_document_impl(file_path: str, document_id: str, filename: str):
+    """Internal document processing implementation - SYNC for thread pool"""
     text = None
     chunks = None
 

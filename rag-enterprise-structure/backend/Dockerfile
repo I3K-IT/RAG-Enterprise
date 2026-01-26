@@ -64,8 +64,8 @@ ENV LLM_MODEL=mistral
 ENV EMBEDDING_MODEL=all-MiniLM-L6-v2
 ENV CUDA_VISIBLE_DEVICES=0
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Health check - increased timeout for large document processing
+HEALTHCHECK --interval=30s --timeout=120s --start-period=60s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Start app
