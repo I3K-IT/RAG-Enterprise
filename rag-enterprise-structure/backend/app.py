@@ -13,7 +13,7 @@ import logging
 from datetime import datetime
 import traceback
 import gc
-import asyncio
+import threading
 import torch
 
 from rag_pipeline import RAGPipeline
@@ -24,7 +24,8 @@ import re
 from typing import Dict, Optional
 
 # Processing lock - only one document at a time to prevent OOM
-_processing_lock = asyncio.Lock()
+# IMPORTANT: Use threading.Lock (not asyncio.Lock) because BackgroundTasks runs in thread pool
+_processing_lock = threading.Lock()
 
 # Authentication imports
 from auth import create_user_token
@@ -619,8 +620,11 @@ async def upload_document(
 async def process_document_background(file_path: str, document_id: str, filename: str):
     """Background task to process document - DETAILED LOGGING"""
     # Use lock to prevent concurrent processing (OOM prevention)
-    async with _processing_lock:
+    # threading.Lock works with BackgroundTasks thread pool
+    with _processing_lock:
+        logger.info(f"🔒 Acquired processing lock for {filename}")
         await _process_document_impl(file_path, document_id, filename)
+        logger.info(f"🔓 Released processing lock for {filename}")
 
 
 async def _process_document_impl(file_path: str, document_id: str, filename: str):
