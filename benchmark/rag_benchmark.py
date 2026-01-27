@@ -617,11 +617,15 @@ class RAGBenchmark:
 # ============================================================================
 
 def main():
+    # Default output directory relative to script location (benchmark/benchmark_results/)
+    script_dir = Path(__file__).parent
+    default_output = script_dir / "benchmark_results"
+
     parser = argparse.ArgumentParser(description="RAG Enterprise Benchmark")
     parser.add_argument("--api-url", default="http://localhost:8000",
                         help="RAG API URL (default: http://localhost:8000)")
-    parser.add_argument("--output", default="./benchmark_results",
-                        help="Output directory (default: ./benchmark_results)")
+    parser.add_argument("--output", default=str(default_output),
+                        help="Output directory (default: benchmark/benchmark_results/)")
     parser.add_argument("--username", default="admin",
                         help="API username (default: admin)")
     parser.add_argument("--password", default="admin",
