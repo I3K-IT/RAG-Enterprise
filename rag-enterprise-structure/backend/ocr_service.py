@@ -208,9 +208,9 @@ class OCRService:
 
                     mime_type = self._get_mime_type(file_path)
                     logger.info(f"MIME type: {mime_type}")
-                    logger.info(f"Sending to Tika: {self.TIKA_URL}/tika (timeout: 120s)")
+                    logger.info(f"Sending to Tika: {self.TIKA_URL}/tika (timeout: 600s)")
 
-                    # Timeout ridotto: se Tika non risponde in 120s, c'è un problema
+                    # Timeout 600s (10 min) - Tika with internal OCR needs time for scanned PDFs
                     response = requests.put(
                         f"{self.TIKA_URL}/tika",
                         data=file_data,
@@ -218,7 +218,7 @@ class OCRService:
                             'Content-Type': mime_type,
                             'Accept-Charset': 'utf-8'
                         },
-                        timeout=(30, 120)  # (connect timeout, read timeout)
+                        timeout=600
                     )
 
                     # Forza encoding UTF-8 sulla risposta
@@ -234,10 +234,8 @@ class OCRService:
                             logger.info(f"✅ {len(text)} chars (Tika)")
                             return text
                 except requests.exceptions.Timeout:
-                    logger.error(f"⏱️ Tika timeout after 120s - file may be too complex")
-                    logger.warning("🔄 Restarting Tika and falling back to Tesseract...")
-                    self._aggressive_kill_tika()
-                    self._start_tika()
+                    logger.error(f"⏱️ Tika timeout after 600s - file may be too large/complex")
+                    logger.warning("Falling back to Tesseract...")
                 except requests.exceptions.ConnectionError as e:
                     logger.error(f"🔌 Tika connection error: {e}")
                     logger.warning("🔄 Restarting Tika...")
