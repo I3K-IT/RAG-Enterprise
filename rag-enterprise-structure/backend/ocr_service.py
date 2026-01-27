@@ -173,11 +173,19 @@ class OCRService:
                 except Exception as e:
                     logger.warning(f"Direct read failed: {str(e)}")
 
-            # 2. For PDFs: Analyze for debugging, then try PyMuPDF (fast) before Tika
+            # 2. For PDFs: Analyze and route appropriately
             if ext == '.pdf':
-                pdf_info = analyze_pdf(file_path)  # Just for logging/debugging
+                pdf_info = analyze_pdf(file_path)
 
-                # Try PyMuPDF first - it's fast and handles text PDFs well
+                # SCANNED PDFs: Go directly to Tesseract (Tika doesn't have OCR configured)
+                if pdf_info["is_scanned"]:
+                    logger.info(f"📄 Scanned PDF detected (text_ratio={pdf_info['text_ratio']:.1%}) - using Tesseract directly")
+                    tesseract_text = self._extract_with_tesseract(file_path)
+                    if tesseract_text and len(tesseract_text.strip()) > 0:
+                        logger.info(f"✅ {len(tesseract_text)} chars (Tesseract OCR)")
+                        return tesseract_text
+
+                # TEXT PDFs: Try PyMuPDF first - it's fast and handles text PDFs well
                 if pdf_info["has_text"] and pdf_info["text_ratio"] > 0.5:
                     logger.info(f"📄 Trying PyMuPDF extraction (text_ratio={pdf_info['text_ratio']:.1%})...")
                     try:
