@@ -264,6 +264,50 @@ Then `docker compose restart backend`.
 
 ---
 
+## Community Benchmarks
+
+Real-world performance results from the community. Run `python benchmark/rag_benchmark.py` to test your hardware and contribute your results!
+
+### Hardware Configurations Tested
+
+| Hardware | CPU | RAM | GPU | VRAM |
+|----------|-----|-----|-----|------|
+| **Config #1** | AMD Ryzen 9 5950X (32 cores) | 64 GB | RTX 5070 Ti | 16 GB |
+
+### Upload Performance (seconds)
+
+| Hardware | Mean | Median | Min | Max |
+|----------|------|--------|-----|-----|
+| **Config #1** | 10.96s | 9.31s | 0.59s | 24.62s |
+
+### Query Performance (seconds)
+
+| Hardware | Mean | Median | Min | Max | P95 |
+|----------|------|--------|-----|-----|-----|
+| **Config #1** | 4.31s | 3.63s | 2.09s | 8.78s | 8.78s |
+
+### Test Documents
+
+| Document | Type | Size | Upload Time (Config #1) |
+|----------|------|------|-------------------------|
+| Mueller Report (2019) | Legal | 11 MB | 17.72s |
+| 9/11 Commission Report | Legal | 7.4 MB | 24.62s |
+| Bitcoin Whitepaper | Technical | 180 KB | 0.59s |
+| Attention Is All You Need | Technical | 2.2 MB | 0.91s |
+
+### Query Accuracy (Similarity Scores)
+
+| Query Type | Config #1 |
+|------------|-----------|
+| Factual lookups | 65-69% |
+| Conceptual questions | 50-62% |
+| Complex analysis | 45-55% |
+
+> **Want to contribute?** Run the benchmark on your hardware and [open an issue](https://github.com/I3K-IT/RAG-Enterprise/issues) with your results!
+> See [benchmark/README.md](benchmark/README.md) for instructions.
+
+---
+
 ## Privacy & Security
 
 - ✅ **Zero external calls**: Everything runs locally
