@@ -5,18 +5,17 @@ Standardized benchmark for comparing RAG performance across different hardware c
 ## Quick Start
 
 ```bash
-# From the benchmark directory
-cd benchmark
-
 # Run benchmark (requires running RAG system)
-python rag_benchmark.py --api-url http://localhost:8000
+python benchmark/rag_benchmark.py --api-url http://localhost:8000
 
 # With custom credentials
-python rag_benchmark.py --api-url http://localhost:8000 --username admin --password yourpassword
+python benchmark/rag_benchmark.py --api-url http://localhost:8000 --username admin --password yourpassword
 
 # Custom output directory
-python rag_benchmark.py --output ./my_results
+python benchmark/rag_benchmark.py --output ./my_results
 ```
+
+The script can be run from any directory - results are always saved to `benchmark/benchmark_results/` by default.
 
 ## What It Tests
 
@@ -37,7 +36,7 @@ python rag_benchmark.py --output ./my_results
 
 ## Output
 
-Results are saved in two formats:
+Results are saved in `benchmark/benchmark_results/` in two formats:
 
 ### JSON (`benchmark_YYYYMMDD_HHMMSS.json`)
 Complete raw data for programmatic analysis.
@@ -67,7 +66,7 @@ The benchmark script has minimal dependencies to run outside Docker.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--api-url` | http://localhost:8000 | RAG API endpoint |
-| `--output` | ./benchmark_results | Output directory |
+| `--output` | benchmark/benchmark_results/ | Output directory |
 | `--username` | admin | API username |
 | `--password` | admin | API password |
 | `--no-clear` | false | Don't clear existing documents |
