@@ -10,7 +10,7 @@ All features listed here are planned for this open-source project. Contributions
 
 - [x] One-command setup with Docker Compose
 - [x] Multi-format document processing (PDF, DOCX, PPTX, XLSX, TXT, MD, ODT, RTF, HTML, XML)
-- [x] Local LLM inference via Ollama (Qwen2.5, Mistral 7B Q4)
+- [x] Local LLM inference via Ollama (Qwen3, Mistral 7B Q4)
 - [x] Vector search with Qdrant and BAAI/bge-m3 embeddings
 - [x] OCR pipeline for scanned documents (Tesseract + Apache Tika)
 - [x] JWT authentication with role-based access control (User / Super User / Admin)

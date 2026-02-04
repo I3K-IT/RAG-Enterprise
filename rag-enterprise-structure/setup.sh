@@ -59,8 +59,8 @@ declare -A PROFILES_EMBEDDING=(
 
 declare -A PROFILES_LLM=(
     [minimal]="mistral:7b-instruct-q4_K_M"
-    [standard]="qwen2.5:14b-instruct-q4_K_M"
-    [advanced]="qwen2.5:32b-instruct-q4_K_M"
+    [standard]="qwen3:14b-q4_K_M"
+    [advanced]="qwen3:32b-q4_K_M"
 )
 
 declare -A PROFILES_SPACE=(
@@ -476,18 +476,21 @@ step_6b_configure_compose() {
         "mistral:7b-instruct-q4_K_M")
             LLM="mistral:7b-instruct-q4_K_M"
             ;;
-        "qwen2.5:14b-instruct-q4_K_M")
-            LLM="qwen2.5:14b-instruct-q4_K_M"
+        "qwen3:14b-q4_K_M")
+            LLM="qwen3:14b-q4_K_M"
             ;;
-        "qwen2.5:32b-instruct-q4_K_M")
-            LLM="qwen2.5:32b-instruct-q4_K_M"
+        "qwen3:32b-q4_K_M")
+            LLM="qwen3:32b-q4_K_M"
             ;;
         # Legacy support
         "qwen2.5:7b")
-            LLM="qwen2.5:7b"
+            LLM="qwen3:14b-q4_K_M"
             ;;
-        "qwen2.5:14b")
-            LLM="qwen2.5:14b-instruct-q4_K_M"
+        "qwen2.5:14b"|"qwen2.5:14b-instruct-q4_K_M")
+            LLM="qwen3:14b-q4_K_M"
+            ;;
+        "qwen2.5:32b-instruct-q4_K_M")
+            LLM="qwen3:32b-q4_K_M"
             ;;
         "neural-chat")
             LLM="neural-chat:7b"
@@ -601,18 +604,21 @@ step_10_final_setup() {
         "mistral:7b-instruct-q4_K_M")
             OLLAMA_MODEL="mistral:7b-instruct-q4_K_M"
             ;;
-        "qwen2.5:14b-instruct-q4_K_M")
-            OLLAMA_MODEL="qwen2.5:14b-instruct-q4_K_M"
+        "qwen3:14b-q4_K_M")
+            OLLAMA_MODEL="qwen3:14b-q4_K_M"
             ;;
-        "qwen2.5:32b-instruct-q4_K_M")
-            OLLAMA_MODEL="qwen2.5:32b-instruct-q4_K_M"
+        "qwen3:32b-q4_K_M")
+            OLLAMA_MODEL="qwen3:32b-q4_K_M"
             ;;
         # Legacy support
         "qwen2.5:7b")
-            OLLAMA_MODEL="qwen2.5:7b"
+            OLLAMA_MODEL="qwen3:14b-q4_K_M"
             ;;
-        "qwen2.5:14b")
-            OLLAMA_MODEL="qwen2.5:14b-instruct-q4_K_M"
+        "qwen2.5:14b"|"qwen2.5:14b-instruct-q4_K_M")
+            OLLAMA_MODEL="qwen3:14b-q4_K_M"
+            ;;
+        "qwen2.5:32b-instruct-q4_K_M")
+            OLLAMA_MODEL="qwen3:32b-q4_K_M"
             ;;
         "neural-chat")
             OLLAMA_MODEL="neural-chat:7b"

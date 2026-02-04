@@ -15,7 +15,7 @@
 
 - ✅ **100% Local**: No data leaves your infrastructure
 - 🚀 **One-Command Setup**: Automated installation script (~1 hour / ~15 min with fast connection)
-- 🤖 **Modern LLMs**: Qwen2.5, Mistral 7B (Q4 quantized)
+- 🤖 **Modern LLMs**: Qwen3, Mistral 7B (Q4 quantized)
 - 🔐 **Multi-user Auth**: JWT-based with role-based access control
 - 📊 **Production-Ready**: Designed for 10,000+ documents
 - 🌍 **Multilingual**: Supports 29 languages
@@ -58,7 +58,7 @@ The setup script automatically installs and configures:
 - Docker Engine + Docker Compose
 - NVIDIA Container Toolkit
 - All required Docker images
-- Ollama with LLM model (Mistral 7B or Qwen2.5:14b)
+- Ollama with LLM model (Mistral 7B or Qwen3:14b)
 - Qdrant vector database
 - Backend + Frontend services
 
@@ -146,7 +146,7 @@ Edit `docker-compose.yml`:
 
 ```yaml
 environment:
-  LLM_MODEL: qwen2.5:14b-instruct-q4_K_M  # or mistral:7b-instruct-q4_K_M
+  LLM_MODEL: qwen3:14b-q4_K_M  # or mistral:7b-instruct-q4_K_M
   EMBEDDING_MODEL: BAAI/bge-m3
   RELEVANCE_THRESHOLD: "0.35"
 ```
