@@ -5,13 +5,43 @@ Orchestrates: Retrieval + LLM Generation with Source Attribution
 
 import logging
 from typing import List, Tuple, Dict
+import requests as _requests
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.llms import Ollama
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
 logger = logging.getLogger(__name__)
+
+
+class OllamaChatDirect:
+    """Direct Ollama /api/chat client with think=false support."""
+
+    def __init__(self, model: str, base_url: str, temperature: float = 0.0,
+                 timeout: int = 120):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.temperature = temperature
+        self.timeout = timeout
+        self._session = _requests.Session()
+
+    def __call__(self, prompt: str) -> str:
+        return self.invoke(prompt)
+
+    def invoke(self, prompt: str) -> str:
+        resp = self._session.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "think": False,
+                "options": {"temperature": self.temperature},
+            },
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
 
 
 class RAGPipeline:
@@ -44,9 +74,9 @@ class RAGPipeline:
             separators=["\n\n", "\n", ".", " ", ""]
         )
         
-        # LLM (via Ollama)
+        # LLM (via Ollama) — Direct API call with think=False for Qwen3
         # Temperature 0.0 = completely deterministic to ensure consistent responses
-        self.llm = Ollama(
+        self.llm = OllamaChatDirect(
             model=self.llm_model,  # Use the model passed from docker-compose.yml
             base_url="http://ollama:11434",
             temperature=0.0
