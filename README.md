@@ -38,8 +38,8 @@
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/your-org/rag-enterprise.git
-cd rag-enterprise/rag-enterprise-structure
+git clone https://github.com/I3K-IT/RAG-Enterprise.git
+cd RAG-Enterprise/rag-enterprise-structure
 
 # 2. Run setup script (installs everything)
 ./setup.sh standard
