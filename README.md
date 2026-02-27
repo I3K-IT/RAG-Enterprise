@@ -17,6 +17,7 @@
 - 🚀 **One-Command Setup**: Automated installation script (~1 hour / ~15 min with fast connection)
 - 🤖 **Modern LLMs**: Qwen3, Mistral 7B (Q4 quantized)
 - 🔐 **Multi-user Auth**: JWT-based with role-based access control
+- 💾 **Backup & Restore**: Full system backup with 70+ cloud providers via rclone
 - 📊 **Production-Ready**: Designed for 10,000+ documents
 - 🌍 **Multilingual**: Supports 29 languages
 - 🎨 **Clean UI**: Modern React interface
@@ -87,6 +88,7 @@ Once you see "Application startup complete", open http://localhost:3000 and logi
 │  FastAPI Backend (Port 8000)           │
 │  - RAG Pipeline (LangChain)            │
 │  - Role-Based Access Control           │
+│  - Backup & Restore (rclone)           │
 │  - OCR (Apache Tika + Tesseract)       │
 │  - Embeddings (BAAI/bge-m3)            │
 └─────────────────┬───────────────────────┘
@@ -138,6 +140,43 @@ Once you see "Application startup complete", open http://localhost:3000 and logi
 - ✅ XLSX/XLS
 - ✅ TXT, MD
 - ✅ ODT, RTF, HTML, XML
+
+---
+
+## Backup & Restore
+
+RAG Enterprise includes a complete backup system that protects your entire deployment — database, documents, and vector store — with support for **70+ cloud providers** via [rclone](https://rclone.org).
+
+![Backup Management Panel](docs/images/backup-panel.png)
+
+### Key Features
+
+- **One-click backup**: Create full system backups from the admin panel
+- **10 provider types**: Mega, S3/MinIO, Google Drive, OneDrive, Dropbox, WebDAV (Nextcloud), FTP, SFTP, Backblaze B2, pCloud
+- **Automatic scheduling**: Cron-based with configurable retention policies
+- **Selective restore**: Choose which components to restore (database, documents, vectors)
+- **Zero-downtime backup**: SQLite safe backup API, no service interruption
+
+### Quick Example
+
+```bash
+# Add a Mega cloud provider
+curl -X POST http://localhost:8000/api/admin/backup/providers \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"name": "my-mega", "type": "mega", "config": {"user": "email@example.com", "pass": "password"}}'
+
+# Run backup + upload to cloud
+curl -X POST http://localhost:8000/api/admin/backup/run \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"provider": "my-mega"}'
+
+# Schedule daily backups at 2 AM
+curl -X POST http://localhost:8000/api/admin/backup/schedule \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"cron": "0 2 * * *", "provider": "my-mega", "retention": 5, "enabled": true}'
+```
+
+> **Full documentation**: See [docs/BACKUP.md](docs/BACKUP.md) for complete setup guide, all provider configurations, API reference, and troubleshooting.
 
 ---
 
@@ -379,7 +418,7 @@ Quick start:
 
 - **Issues**: [GitHub Issues](https://github.com/I3K-IT/RAG-Enterprise/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/I3K-IT/RAG-Enterprise/discussions)
-- **Docs**: See [LOGO_SETUP.md](LOGO_SETUP.md) for branding customization
+- **Docs**: See [LOGO_SETUP.md](LOGO_SETUP.md) for branding, [docs/BACKUP.md](docs/BACKUP.md) for backup guide
 
 ---
 
@@ -400,6 +439,7 @@ Built with:
 - [FastAPI](https://fastapi.tiangolo.com) - Backend framework
 - [React](https://react.dev) + [Vite](https://vitejs.dev) - Frontend
 - [Apache Tika](https://tika.apache.org) - Document processing
+- [rclone](https://rclone.org) - Cloud storage integration for backups
 
 ---
 

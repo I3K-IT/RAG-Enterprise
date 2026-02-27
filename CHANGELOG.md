@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.0] - 2026-02-27
+
+### Added
+
+- **Backup & Restore system** with full admin panel UI
+  - One-click local backup of database, documents, and vector store
+  - Cloud backup support via rclone (70+ providers: Mega, S3, Google Drive, OneDrive, Dropbox, WebDAV, FTP, SFTP, B2, pCloud)
+  - Automatic scheduled backups with cron expressions and configurable retention policies
+  - Selective restore (choose which components to restore individually)
+  - Cloud provider management with connection testing
+  - Backup history tracking (last 100 operations)
+  - Download backups from cloud to local storage
+- Complete backup documentation ([docs/BACKUP.md](docs/BACKUP.md)) with setup guides for all providers
+- rclone pre-installed in Docker image for cloud storage integration
+
+### Security
+
+- All backup endpoints require admin role authentication
+- Cloud provider passwords encrypted via rclone obscure mechanism
+- Path traversal protection on archive extraction during restore
+- Safe online SQLite backup (no downtime, no data corruption)
+
+---
+
 ## [1.0.0] - 2026-02-21
 
 First public release of RAG Enterprise — a 100% local Retrieval-Augmented Generation system for businesses that need complete data privacy.
@@ -58,4 +82,5 @@ First public release of RAG Enterprise — a 100% local Retrieval-Augmented Gene
 - LLM switched from Qwen 2.5 to Qwen3 14B Q4_K_M for improved quality
 - All Italian text translated to English for international accessibility
 
+[1.1.0]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.1.0
 [1.0.0]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.0.0
