@@ -15,6 +15,36 @@ const BRANDING = {
 // API Configuration - use environment variable or fallback to localhost
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+// Cloud provider configuration templates
+const PROVIDER_CONFIGS = {
+  mega: { label: 'Mega', fields: ['user', 'pass'], placeholders: { user: 'Email', pass: 'Password' }, types: { pass: 'password' } },
+  s3: { label: 'Amazon S3 / MinIO', fields: ['provider', 'access_key_id', 'secret_access_key', 'region', 'endpoint'], placeholders: { provider: 'Provider (AWS, MinIO)', access_key_id: 'Access Key ID', secret_access_key: 'Secret Access Key', region: 'Region (eu-west-1)', endpoint: 'Endpoint URL (for MinIO)' }, types: { secret_access_key: 'password' } },
+  drive: { label: 'Google Drive', fields: ['token'], placeholders: { token: 'OAuth Token JSON (from rclone authorize drive)' } },
+  onedrive: { label: 'Microsoft OneDrive', fields: ['token'], placeholders: { token: 'OAuth Token JSON (from rclone authorize onedrive)' } },
+  dropbox: { label: 'Dropbox', fields: ['token'], placeholders: { token: 'OAuth Token JSON (from rclone authorize dropbox)' } },
+  webdav: { label: 'WebDAV (Nextcloud)', fields: ['url', 'user', 'pass'], placeholders: { url: 'WebDAV URL', user: 'Username', pass: 'Password' }, types: { pass: 'password' } },
+  ftp: { label: 'FTP / FTPS', fields: ['host', 'user', 'pass', 'port'], placeholders: { host: 'Hostname', user: 'Username', pass: 'Password', port: 'Port (21)' }, types: { pass: 'password' } },
+  sftp: { label: 'SFTP (SSH)', fields: ['host', 'user', 'pass', 'port'], placeholders: { host: 'Hostname', user: 'Username', pass: 'Password', port: 'Port (22)' }, types: { pass: 'password' } },
+  b2: { label: 'Backblaze B2', fields: ['account', 'key'], placeholders: { account: 'Account ID', key: 'Application Key' }, types: { key: 'password' } },
+  pcloud: { label: 'pCloud', fields: ['token'], placeholders: { token: 'OAuth Token JSON' } },
+}
+
+const CRON_PRESETS = [
+  { label: 'Every 6 hours', value: '0 */6 * * *' },
+  { label: 'Daily at 2:00 AM', value: '0 2 * * *' },
+  { label: 'Daily at midnight', value: '0 0 * * *' },
+  { label: 'Weekly (Sunday 3 AM)', value: '0 3 * * 0' },
+  { label: 'Monthly (1st at 1 AM)', value: '0 1 1 * *' },
+]
+
+const formatBytes = (bytes) => {
+  if (!bytes) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
 function App() {
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -35,6 +65,21 @@ function App() {
     role: 'user'
   })
   const [creatingUser, setCreatingUser] = useState(false)
+
+  // Backup panel state
+  const [adminTab, setAdminTab] = useState('users')
+  const [backupStatus, setBackupStatus] = useState(null)
+  const [backupProviders, setBackupProviders] = useState([])
+  const [backupHistory, setBackupHistory] = useState([])
+  const [localBackups, setLocalBackups] = useState([])
+  const [backupSchedule, setBackupSchedule] = useState(null)
+  const [backupRunning, setBackupRunning] = useState(false)
+  const [showAddProvider, setShowAddProvider] = useState(false)
+  const [newProvider, setNewProvider] = useState({ name: '', type: 'mega', config: {} })
+  const [scheduleForm, setScheduleForm] = useState({
+    cron: '0 2 * * *', provider: '', remote_path: 'rag-enterprise-backups', retention: 5, enabled: false
+  })
+  const [testingProvider, setTestingProvider] = useState(null)
 
   // Change password state
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
@@ -261,6 +306,130 @@ function App() {
     setShowAdminPanel(newState)
     if (newState) {
       fetchAllUsers()
+    }
+  }
+
+  // ============================================================================
+  // BACKUP FUNCTIONS
+  // ============================================================================
+
+  const fetchBackupData = async () => {
+    try {
+      const [statusRes, providersRes, historyRes, localRes, scheduleRes] = await Promise.all([
+        axios.get(`${API_URL}/api/admin/backup/status`),
+        axios.get(`${API_URL}/api/admin/backup/providers`),
+        axios.get(`${API_URL}/api/admin/backup/history`),
+        axios.get(`${API_URL}/api/admin/backup/local`),
+        axios.get(`${API_URL}/api/admin/backup/schedule`)
+      ])
+      setBackupStatus(statusRes.data)
+      setBackupProviders(providersRes.data.providers || [])
+      setBackupHistory(historyRes.data.history || [])
+      setLocalBackups(localRes.data.backups || [])
+      const sched = scheduleRes.data
+      setBackupSchedule(sched)
+      if (sched) {
+        setScheduleForm({
+          cron: sched.cron || '0 2 * * *',
+          provider: sched.provider || '',
+          remote_path: sched.remote_path || 'rag-enterprise-backups',
+          retention: sched.retention || 5,
+          enabled: sched.enabled || false
+        })
+      }
+    } catch (error) {
+      console.error('Error fetching backup data:', error)
+    }
+  }
+
+  const handleAddProvider = async (e) => {
+    e.preventDefault()
+    try {
+      await axios.post(`${API_URL}/api/admin/backup/providers`, newProvider)
+      alert(`Provider "${newProvider.name}" configured!`)
+      setShowAddProvider(false)
+      setNewProvider({ name: '', type: 'mega', config: {} })
+      fetchBackupData()
+    } catch (error) {
+      alert(`Error: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const handleRemoveProvider = async (name) => {
+    if (!window.confirm(`Remove provider "${name}"?`)) return
+    try {
+      await axios.delete(`${API_URL}/api/admin/backup/providers/${name}`)
+      fetchBackupData()
+    } catch (error) {
+      alert(`Error: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const handleTestProvider = async (name) => {
+    setTestingProvider(name)
+    try {
+      const res = await axios.post(`${API_URL}/api/admin/backup/providers/${name}/test`)
+      if (res.data.status === 'ok') {
+        const free = res.data.free ? ` (${(res.data.free / 1024 / 1024 / 1024).toFixed(1)} GB free)` : ''
+        alert(`Connection OK!${free}`)
+      } else {
+        alert(`Error: ${res.data.message}`)
+      }
+    } catch (error) {
+      alert(`Test failed: ${error.response?.data?.detail || error.message}`)
+    } finally {
+      setTestingProvider(null)
+    }
+  }
+
+  const handleRunBackup = async (provider = null) => {
+    setBackupRunning(true)
+    try {
+      await axios.post(`${API_URL}/api/admin/backup/run`, {
+        provider: provider || null,
+        remote_path: 'rag-enterprise-backups'
+      })
+      alert(provider ? `Backup to "${provider}" started!` : 'Local backup started!')
+      setTimeout(fetchBackupData, 5000)
+    } catch (error) {
+      alert(`Backup error: ${error.response?.data?.detail || error.message}`)
+    } finally {
+      setBackupRunning(false)
+    }
+  }
+
+  const handleSetSchedule = async (e) => {
+    e.preventDefault()
+    try {
+      await axios.post(`${API_URL}/api/admin/backup/schedule`, scheduleForm)
+      alert('Schedule updated!')
+      fetchBackupData()
+    } catch (error) {
+      alert(`Error: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const handleDeleteLocalBackup = async (filename) => {
+    if (!window.confirm(`Delete backup "${filename}"?`)) return
+    try {
+      await axios.delete(`${API_URL}/api/admin/backup/local/${filename}`)
+      fetchBackupData()
+    } catch (error) {
+      alert(`Error: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const handleRestore = async (filename) => {
+    if (!window.confirm(
+      `WARNING: This will overwrite current data!\n\nRestore from "${filename}"?\n\nThe system may need a restart after restore.`
+    )) return
+    try {
+      await axios.post(`${API_URL}/api/admin/backup/restore`, {
+        filename, restore_db: true, restore_uploads: true, restore_qdrant: true
+      })
+      alert('Restore started! Check backend logs for progress.')
+    } catch (error) {
+      alert(`Restore error: ${error.response?.data?.detail || error.message}`)
     }
   }
 
@@ -697,9 +866,22 @@ function App() {
       {showAdminPanel && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-slate-800 rounded-lg shadow-2xl border border-slate-700 w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-            {/* Header */}
+            {/* Header with tabs */}
             <div className="p-6 border-b border-slate-700 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-white">👥 User Management</h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setAdminTab('users'); fetchAllUsers() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'users' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  Users
+                </button>
+                <button
+                  onClick={() => { setAdminTab('backup'); fetchBackupData() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'backup' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  Backup
+                </button>
+              </div>
               <button
                 onClick={toggleAdminPanel}
                 className="text-slate-400 hover:text-white text-2xl"
@@ -710,6 +892,7 @@ function App() {
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {adminTab === 'users' && (<>
               {/* Create User Form */}
               <div className="bg-slate-700 rounded-lg p-4">
                 <h3 className="text-lg font-semibold text-white mb-4">➕ Create New User</h3>
@@ -820,6 +1003,297 @@ function App() {
                   </div>
                 )}
               </div>
+              </>)}
+
+              {/* ============ BACKUP TAB ============ */}
+              {adminTab === 'backup' && (
+                <div className="space-y-6">
+                  {/* Status Overview */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-slate-700 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-bold text-white">{backupStatus?.local_backups || 0}</p>
+                      <p className="text-xs text-slate-400">Local Backups</p>
+                    </div>
+                    <div className="bg-slate-700 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-bold text-white">{backupProviders.length}</p>
+                      <p className="text-xs text-slate-400">Cloud Providers</p>
+                    </div>
+                    <div className="bg-slate-700 rounded-lg p-3 text-center">
+                      <div className={`w-3 h-3 rounded-full mx-auto mb-1 ${backupStatus?.rclone_installed ? 'bg-green-500' : 'bg-red-500'}`} />
+                      <p className="text-xs text-slate-400">{backupStatus?.rclone_installed ? 'rclone OK' : 'rclone Missing'}</p>
+                    </div>
+                  </div>
+
+                  {/* Quick Backup */}
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-lg font-semibold text-white">Backup Now</h3>
+                      <button
+                        onClick={() => handleRunBackup()}
+                        disabled={backupRunning}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white rounded-lg transition font-semibold text-sm"
+                      >
+                        {backupRunning ? 'Running...' : 'Local Backup'}
+                      </button>
+                    </div>
+                    {backupProviders.length > 0 && (
+                      <div className="flex gap-2 flex-wrap">
+                        {backupProviders.map(p => (
+                          <button
+                            key={p.name}
+                            onClick={() => handleRunBackup(p.name)}
+                            disabled={backupRunning}
+                            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-sm rounded transition"
+                          >
+                            Backup to {p.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Cloud Providers */}
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-lg font-semibold text-white">Cloud Providers ({backupProviders.length})</h3>
+                      <button
+                        onClick={() => setShowAddProvider(!showAddProvider)}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition"
+                      >
+                        {showAddProvider ? 'Cancel' : '+ Add Provider'}
+                      </button>
+                    </div>
+
+                    {backupProviders.length > 0 ? (
+                      <div className="space-y-2 mb-3">
+                        {backupProviders.map(p => (
+                          <div key={p.name} className="bg-slate-600 rounded-lg p-3 flex items-center justify-between">
+                            <div>
+                              <p className="text-white font-semibold">{p.name}</p>
+                              <p className="text-xs text-slate-400">{p.type_name}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleTestProvider(p.name)}
+                                disabled={testingProvider === p.name}
+                                className="px-2 py-1 bg-slate-500 hover:bg-slate-400 text-white text-xs rounded transition"
+                              >
+                                {testingProvider === p.name ? 'Testing...' : 'Test'}
+                              </button>
+                              <button
+                                onClick={() => handleRemoveProvider(p.name)}
+                                className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-slate-400 text-sm mb-3">No cloud providers configured yet</p>
+                    )}
+
+                    {showAddProvider && (
+                      <form onSubmit={handleAddProvider} className="bg-slate-600 rounded-lg p-4 space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <input
+                            type="text"
+                            placeholder="Name (e.g. my-mega)"
+                            value={newProvider.name}
+                            onChange={(e) => setNewProvider({ ...newProvider, name: e.target.value })}
+                            className="px-3 py-2 bg-slate-500 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            required
+                          />
+                          <select
+                            value={newProvider.type}
+                            onChange={(e) => setNewProvider({ ...newProvider, type: e.target.value, config: {} })}
+                            className="px-3 py-2 bg-slate-500 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          >
+                            {Object.entries(PROVIDER_CONFIGS).map(([key, cfg]) => (
+                              <option key={key} value={key}>{cfg.label}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {PROVIDER_CONFIGS[newProvider.type]?.fields.map(field => (
+                          <input
+                            key={field}
+                            type={PROVIDER_CONFIGS[newProvider.type]?.types?.[field] || 'text'}
+                            placeholder={PROVIDER_CONFIGS[newProvider.type]?.placeholders?.[field] || field}
+                            value={newProvider.config[field] || ''}
+                            onChange={(e) => setNewProvider({
+                              ...newProvider,
+                              config: { ...newProvider.config, [field]: e.target.value }
+                            })}
+                            className="w-full px-3 py-2 bg-slate-500 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          />
+                        ))}
+
+                        {['drive', 'onedrive', 'dropbox', 'pcloud'].includes(newProvider.type) && (
+                          <p className="text-xs text-yellow-400">
+                            Run <code className="bg-slate-700 px-1 rounded">rclone authorize {newProvider.type}</code> on your local machine to get the OAuth token.
+                          </p>
+                        )}
+
+                        <button
+                          type="submit"
+                          className="w-full py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded transition text-sm"
+                        >
+                          Add Provider
+                        </button>
+                      </form>
+                    )}
+                  </div>
+
+                  {/* Schedule */}
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <h3 className="text-lg font-semibold text-white mb-3">Automatic Schedule</h3>
+                    <form onSubmit={handleSetSchedule} className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Frequency</label>
+                          <select
+                            value={CRON_PRESETS.find(p => p.value === scheduleForm.cron) ? scheduleForm.cron : 'custom'}
+                            onChange={(e) => {
+                              if (e.target.value !== 'custom') {
+                                setScheduleForm({ ...scheduleForm, cron: e.target.value })
+                              }
+                            }}
+                            className="w-full px-3 py-2 bg-slate-600 text-white rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {CRON_PRESETS.map(p => (
+                              <option key={p.value} value={p.value}>{p.label}</option>
+                            ))}
+                            <option value="custom">Custom cron...</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Cron Expression</label>
+                          <input
+                            type="text"
+                            value={scheduleForm.cron}
+                            onChange={(e) => setScheduleForm({ ...scheduleForm, cron: e.target.value })}
+                            className="w-full px-3 py-2 bg-slate-600 text-white rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Upload to</label>
+                          <select
+                            value={scheduleForm.provider}
+                            onChange={(e) => setScheduleForm({ ...scheduleForm, provider: e.target.value })}
+                            className="w-full px-3 py-2 bg-slate-600 text-white rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">Local only</option>
+                            {backupProviders.map(p => (
+                              <option key={p.name} value={p.name}>{p.name} ({p.type_name})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Keep last N backups</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={scheduleForm.retention}
+                            onChange={(e) => setScheduleForm({ ...scheduleForm, retention: parseInt(e.target.value) || 5 })}
+                            className="w-full px-3 py-2 bg-slate-600 text-white rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={scheduleForm.enabled}
+                            onChange={(e) => setScheduleForm({ ...scheduleForm, enabled: e.target.checked })}
+                            className="rounded"
+                          />
+                          Enable automatic backup
+                        </label>
+                        <div className="flex items-center gap-3">
+                          {backupSchedule?.next_run && (
+                            <span className="text-xs text-slate-400">
+                              Next: {new Date(backupSchedule.next_run).toLocaleString()}
+                            </span>
+                          )}
+                          <button
+                            type="submit"
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded transition text-sm"
+                          >
+                            Save Schedule
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+
+                  {/* History */}
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-lg font-semibold text-white">History ({backupHistory.length})</h3>
+                      <button onClick={fetchBackupData} className="text-sm text-blue-400 hover:text-blue-300">Refresh</button>
+                    </div>
+                    {backupHistory.length === 0 ? (
+                      <p className="text-slate-400 text-sm">No backup history yet</p>
+                    ) : (
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {[...backupHistory].reverse().slice(0, 10).map((entry, idx) => (
+                          <div key={idx} className="bg-slate-600 rounded p-2 flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${entry.status === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+                                {entry.status === 'success' ? 'OK' : 'ERR'}
+                              </span>
+                              <span className="text-white truncate max-w-[200px]">{entry.backup_name || 'N/A'}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-slate-400 text-xs">
+                              <span className="bg-slate-500 px-1.5 py-0.5 rounded">{entry.type}</span>
+                              {entry.size_bytes && <span>{formatBytes(entry.size_bytes)}</span>}
+                              {entry.duration_seconds && <span>{entry.duration_seconds.toFixed(1)}s</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Local Backups */}
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <h3 className="text-lg font-semibold text-white mb-3">Local Backups ({localBackups.length})</h3>
+                    {localBackups.length === 0 ? (
+                      <p className="text-slate-400 text-sm">No local backups</p>
+                    ) : (
+                      <div className="space-y-2 max-h-60 overflow-y-auto">
+                        {localBackups.map((backup, idx) => (
+                          <div key={idx} className="bg-slate-600 rounded-lg p-3 flex items-center justify-between">
+                            <div className="flex-1 min-w-0 mr-3">
+                              <p className="text-white text-sm font-semibold truncate">{backup.name}</p>
+                              <p className="text-xs text-slate-400">
+                                {formatBytes(backup.size_bytes)} &middot; {new Date(backup.created).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleRestore(backup.name)}
+                                className="px-2 py-1 bg-yellow-600 hover:bg-yellow-700 text-white text-xs rounded transition"
+                              >
+                                Restore
+                              </button>
+                              <button
+                                onClick={() => handleDeleteLocalBackup(backup.name)}
+                                className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
