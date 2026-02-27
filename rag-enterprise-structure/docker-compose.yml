@@ -55,6 +55,7 @@ services:
     volumes:
       - backend-uploads:/app/uploads
       - backend-database:/app/data
+      - backend-backups:/app/backups
       - ./backend:/app
       - huggingface-cache:/root/.cache/huggingface
       - ollama-cache:/root/.ollama
@@ -92,6 +93,7 @@ volumes:
   ollama-data:
   backend-uploads:
   backend-database:
+  backend-backups:
   huggingface-cache:
   ollama-cache:
 
