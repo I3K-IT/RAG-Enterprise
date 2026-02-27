@@ -387,6 +387,7 @@ step_6a_configure_env() {
     # Security configuration
     JWT_SECRET=""
     ALLOWED_ORIGINS=""
+    QDRANT_API_KEY=""
 
     if [[ $CONFIGURE_SECURITY =~ ^[Yy]$ ]]; then
         echo -e "\n${CYAN}Generating security configuration...${NC}"
@@ -394,6 +395,10 @@ step_6a_configure_env() {
         # Generate JWT secret
         JWT_SECRET=$(openssl rand -hex 32)
         echo -e "${GREEN}✓ JWT secret key generated${NC}"
+
+        # Generate Qdrant API key
+        QDRANT_API_KEY=$(openssl rand -hex 32)
+        echo -e "${GREEN}✓ Qdrant API key generated${NC}"
 
         # Set ALLOWED_ORIGINS based on scenario
         case $SCENARIO in
@@ -433,6 +438,7 @@ EOF
 # Security
 JWT_SECRET_KEY=${JWT_SECRET}
 ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+QDRANT_API_KEY=${QDRANT_API_KEY}
 EOF
     fi
 
@@ -442,6 +448,7 @@ EOF
     if [ ! -z "$JWT_SECRET" ]; then
         echo -e "  Security: ${GREEN}ENABLED${NC}"
         echo -e "  CORS: ${ALLOWED_ORIGINS}"
+        echo -e "  Qdrant auth: ${GREEN}ENABLED${NC}"
     else
         echo -e "  Security: ${YELLOW}DISABLED (development mode)${NC}"
     fi
@@ -514,6 +521,18 @@ step_6b_configure_compose() {
         sed -i "s|RELEVANCE_THRESHOLD: .*|RELEVANCE_THRESHOLD: \"$THRESHOLD\"|" docker-compose.yml
     fi
     
+    # Enable Qdrant API key auth if QDRANT_API_KEY is set in .env
+    if [ -f ".env" ]; then
+        QDRANT_KEY_CHECK=$(grep "^QDRANT_API_KEY=" .env | cut -d'=' -f2)
+        if [ ! -z "$QDRANT_KEY_CHECK" ]; then
+            echo "Enabling Qdrant API key authentication..."
+            # Uncomment the environment block for qdrant service
+            sed -i 's|    # environment:|    environment:|' docker-compose.yml
+            sed -i 's|    #   QDRANT__SERVICE__API_KEY|      QDRANT__SERVICE__API_KEY|' docker-compose.yml
+            echo -e "${GREEN}✓ Qdrant API key authentication enabled${NC}"
+        fi
+    fi
+
     echo -e "${GREEN}✓ docker-compose.yml configured${NC}"
     echo -e "  LLM: $LLM"
     echo -e "  Embedding: $EMBEDDING"
@@ -692,8 +711,15 @@ step_10_final_setup() {
         exit 1
     fi
     
-    # Qdrant
-    if curl -s http://localhost:6333/ | grep -q "version"; then
+    # Qdrant (pass API key header if configured)
+    QDRANT_KEY_HEADER=""
+    if [ -f ".env" ]; then
+        QDRANT_KEY_FROM_ENV=$(grep "^QDRANT_API_KEY=" .env | cut -d'=' -f2)
+        if [ ! -z "$QDRANT_KEY_FROM_ENV" ]; then
+            QDRANT_KEY_HEADER="-H api-key:${QDRANT_KEY_FROM_ENV}"
+        fi
+    fi
+    if curl -s $QDRANT_KEY_HEADER http://localhost:6333/ | grep -q "version"; then
         echo -e "${GREEN}✓ Qdrant responding${NC}"
     else
         echo -e "${RED}✗ Qdrant not responding${NC}"
