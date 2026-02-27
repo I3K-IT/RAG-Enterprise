@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Tika to support all formats
-RUN apt-get update -qq && apt-get install -y -qq default-jre wget curl
+RUN apt-get update -qq && apt-get install -y -qq default-jre wget curl unzip
 RUN mkdir -p /opt && wget -q https://archive.apache.org/dist/tika/3.2.3/tika-server-standard-3.2.3.jar -O /opt/tika-server.jar
 
 # Install rclone for cloud backup support (Google Drive, OneDrive, Mega, S3, etc.)
