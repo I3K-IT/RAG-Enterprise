@@ -366,7 +366,8 @@ async def login(request: LoginRequest):
     User login - returns JWT token
 
     Default credentials:
-    - Admin: username=admin, password=admin123
+    - Admin: username=admin, password=<from logs or ADMIN_DEFAULT_PASSWORD env var>
+    - Get password: docker compose logs backend | grep "Password:"
     """
     user = db.authenticate_user(request.username, request.password)
 

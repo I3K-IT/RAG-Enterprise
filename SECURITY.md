@@ -46,7 +46,13 @@ When deploying RAG Enterprise, please follow these security guidelines:
   ```bash
   openssl rand -hex 32
   ```
-- **Change the default admin password** immediately after first login
+- **Admin password**: The initial admin password is randomly generated on first startup and shown in the backend logs. Retrieve it with:
+  ```bash
+  docker compose logs backend | grep "Password:"
+  ```
+- **Custom admin password**: You can set `ADMIN_DEFAULT_PASSWORD` in `.env` before first startup to use a known password instead of a random one
+- **Password recovery**: If logs are cleared and the password is lost, delete the user database and restart the backend (see [README Troubleshooting](README.md#admin-password-lost--not-in-logs))
+- **Change the admin password** immediately after first login
 - Use strong passwords for all user accounts
 
 ### 2. Network Security
