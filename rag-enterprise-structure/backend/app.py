@@ -34,6 +34,14 @@ from middleware import (
     require_delete_permission, CurrentUser
 )
 
+# Backup imports
+from backup_service import backup_service
+from backup_scheduler import BackupScheduler
+from backup_models import (
+    BackupProviderCreate, BackupRunRequest, BackupScheduleRequest,
+    BackupRestoreRequest
+)
+
 def detect_document_type(text: str) -> str:
     """Detects document type - with stricter checks"""
     text_upper = text.upper()
@@ -150,6 +158,7 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
 CUDA_VISIBLE_DEVICES = os.getenv("CUDA_VISIBLE_DEVICES", "0")
 RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "0.3"))
 MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100"))  # Default 100MB
+BACKUP_DIR = os.getenv("BACKUP_DIR", "/app/backups")
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -190,6 +199,9 @@ qdrant_connector: Optional[QdrantConnector] = None
 
 # Conversational memory for users
 user_conversations: dict = {}  # {user_id: [{"user": "...", "assistant": "..."}]}
+
+# Backup scheduler
+backup_scheduler = BackupScheduler(backup_service)
 
 
 # ============================================================================
@@ -249,6 +261,11 @@ async def startup_event():
         )
         logger.info("✅ RAG Pipeline ready")
 
+        # 5. Backup Scheduler
+        logger.info("🔗 [5/5] Starting Backup Scheduler...")
+        backup_scheduler.start()
+        logger.info("✅ Backup Scheduler ready")
+
         logger.info("=" * 80)
         logger.info("🎉 BACKEND FULLY INITIALIZED")
         logger.info("=" * 80)
@@ -265,6 +282,7 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup at shutdown"""
     logger.info("🛑 Shutting down RAG Backend...")
+    backup_scheduler.stop()
     if qdrant_connector:
         qdrant_connector.disconnect()
     logger.info("✅ Cleanup completed")
@@ -973,6 +991,225 @@ async def get_stats():
     except Exception as e:
         logger.error(f"Statistics error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# BACKUP & RESTORE ENDPOINTS
+# ============================================================================
+
+@app.get("/api/admin/backup/status")
+async def get_backup_status(current_user: CurrentUser = Depends(require_admin)):
+    """Get backup system status"""
+    return backup_service.get_status()
+
+
+@app.get("/api/admin/backup/providers")
+async def list_backup_providers(current_user: CurrentUser = Depends(require_admin)):
+    """List configured cloud providers and supported types"""
+    return {
+        "providers": backup_service.list_providers(),
+        "supported_types": backup_service.get_supported_providers()
+    }
+
+
+@app.post("/api/admin/backup/providers")
+async def add_backup_provider(
+    provider: BackupProviderCreate,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Add a new cloud provider for backup.
+
+    Example configurations:
+    - Mega: {"name": "mega", "type": "mega", "config": {"user": "email", "pass": "password"}}
+    - S3: {"name": "aws", "type": "s3", "config": {"provider": "AWS", "access_key_id": "...", "secret_access_key": "...", "region": "eu-west-1"}}
+    - Google Drive: {"name": "gdrive", "type": "drive", "config": {"token": "{...}"}}
+    - WebDAV/Nextcloud: {"name": "nextcloud", "type": "webdav", "config": {"url": "https://...", "user": "...", "pass": "..."}}
+    """
+    return backup_service.add_provider(
+        name=provider.name,
+        provider_type=provider.type,
+        config=provider.config
+    )
+
+
+@app.delete("/api/admin/backup/providers/{name}")
+async def remove_backup_provider(
+    name: str,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Remove a configured cloud provider"""
+    backup_service.remove_provider(name)
+    return {"message": f"Provider '{name}' removed"}
+
+
+@app.post("/api/admin/backup/providers/{name}/test")
+async def test_backup_provider(
+    name: str,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Test connection to a cloud provider"""
+    return backup_service.test_provider(name)
+
+
+@app.post("/api/admin/backup/run")
+async def run_backup(
+    request: BackupRunRequest,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Trigger a manual backup.
+
+    If 'provider' is specified, the backup will be uploaded to that cloud provider.
+    Otherwise, it will be stored locally only.
+    """
+    background_tasks.add_task(
+        _execute_manual_backup, request.provider, request.remote_path
+    )
+    return {"message": "Backup started", "status": "running"}
+
+
+def _execute_manual_backup(provider: Optional[str], remote_path: str):
+    """Execute manual backup in background"""
+    start_time = datetime.now()
+    entry = {
+        "type": "manual",
+        "started_at": start_time.isoformat(),
+        "provider": provider
+    }
+
+    try:
+        result = backup_service.create_backup()
+        entry["backup_name"] = result["backup_name"]
+        entry["size_bytes"] = result["size_bytes"]
+
+        if provider:
+            upload_result = backup_service.upload_to_cloud(
+                result["archive_path"], provider, remote_path
+            )
+            entry["cloud_upload"] = upload_result
+
+        entry["status"] = "success"
+        entry["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Manual backup completed: {result['backup_name']}")
+
+    except Exception as e:
+        entry["status"] = "error"
+        entry["error"] = str(e)
+        entry["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+        logger.error(f"Manual backup failed: {e}")
+
+    finally:
+        backup_service.log_backup(entry)
+
+
+@app.get("/api/admin/backup/schedule")
+async def get_backup_schedule(current_user: CurrentUser = Depends(require_admin)):
+    """Get current backup schedule"""
+    return backup_scheduler.get_schedule()
+
+
+@app.post("/api/admin/backup/schedule")
+async def set_backup_schedule(
+    request: BackupScheduleRequest,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Set or update the backup schedule.
+
+    Cron expression examples:
+    - "0 2 * * *"     → Daily at 2:00 AM
+    - "0 3 * * 0"     → Weekly on Sunday at 3:00 AM
+    - "0 1 1 * *"     → Monthly on the 1st at 1:00 AM
+    - "0 */6 * * *"   → Every 6 hours
+    """
+    return backup_scheduler.set_schedule(
+        cron_expression=request.cron,
+        provider=request.provider,
+        remote_path=request.remote_path,
+        retention=request.retention,
+        enabled=request.enabled
+    )
+
+
+@app.get("/api/admin/backup/history")
+async def get_backup_history(current_user: CurrentUser = Depends(require_admin)):
+    """Get backup execution history"""
+    return {"history": backup_service.get_history()}
+
+
+@app.get("/api/admin/backup/local")
+async def list_local_backups(current_user: CurrentUser = Depends(require_admin)):
+    """List local backup files"""
+    return {"backups": backup_service.list_local_backups()}
+
+
+@app.delete("/api/admin/backup/local/{filename}")
+async def delete_local_backup(
+    filename: str,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Delete a local backup file"""
+    if backup_service.delete_local_backup(filename):
+        return {"message": f"Backup '{filename}' deleted"}
+    raise HTTPException(status_code=404, detail="Backup not found")
+
+
+@app.get("/api/admin/backup/cloud/{provider}")
+async def list_cloud_backups(
+    provider: str,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """List backups stored on a cloud provider"""
+    return {"backups": backup_service.list_cloud_backups(provider)}
+
+
+@app.post("/api/admin/backup/cloud/{provider}/download")
+async def download_cloud_backup(
+    provider: str,
+    filename: str,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Download a backup from cloud to local storage"""
+    local_path = backup_service.download_from_cloud(provider, filename)
+    return {"message": f"Downloaded to {local_path}", "local_path": local_path}
+
+
+@app.post("/api/admin/backup/restore")
+async def restore_backup(
+    request: BackupRestoreRequest,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Restore from a local backup archive.
+
+    WARNING: This will overwrite current data. Use with caution.
+    """
+    archive_path = os.path.join(BACKUP_DIR, request.filename)
+    if not os.path.exists(archive_path):
+        raise HTTPException(status_code=404, detail="Backup file not found")
+
+    background_tasks.add_task(
+        _execute_restore,
+        archive_path,
+        request.restore_db,
+        request.restore_uploads,
+        request.restore_qdrant
+    )
+    return {"message": "Restore started", "status": "running"}
+
+
+def _execute_restore(archive_path: str, restore_db: bool, restore_uploads: bool, restore_qdrant: bool):
+    """Execute restore in background"""
+    try:
+        result = backup_service.restore_from_backup(
+            archive_path, restore_db, restore_uploads, restore_qdrant
+        )
+        logger.info(f"Restore completed: {result}")
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
 
 
 # ============================================================================

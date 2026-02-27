@@ -26,6 +26,11 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update -qq && apt-get install -y -qq default-jre wget curl
 RUN mkdir -p /opt && wget -q https://archive.apache.org/dist/tika/3.2.3/tika-server-standard-3.2.3.jar -O /opt/tika-server.jar
 
+# Install rclone for cloud backup support (Google Drive, OneDrive, Mega, S3, etc.)
+RUN curl -O https://downloads.rclone.org/current/rclone-current-linux-amd64.deb && \
+    dpkg -i rclone-current-linux-amd64.deb && \
+    rm rclone-current-linux-amd64.deb
+
 # Install PyTorch with CUDA 12.8 from official index
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
 
@@ -51,8 +56,13 @@ COPY backend/auth_models.py .
 COPY backend/database.py .
 COPY backend/middleware.py .
 
-# Create directory for uploads and database
-RUN mkdir -p /app/uploads /app/data
+# Copy backup files
+COPY backend/backup_service.py .
+COPY backend/backup_models.py .
+COPY backend/backup_scheduler.py .
+
+# Create directory for uploads, database and backups
+RUN mkdir -p /app/uploads /app/data /app/backups
 
 # Expose port
 EXPOSE 8000
