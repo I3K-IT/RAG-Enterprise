@@ -27,9 +27,7 @@ RUN apt-get update -qq && apt-get install -y -qq default-jre wget curl
 RUN mkdir -p /opt && wget -q https://archive.apache.org/dist/tika/3.2.3/tika-server-standard-3.2.3.jar -O /opt/tika-server.jar
 
 # Install rclone for cloud backup support (Google Drive, OneDrive, Mega, S3, etc.)
-RUN curl -O https://downloads.rclone.org/current/rclone-current-linux-amd64.deb && \
-    dpkg -i rclone-current-linux-amd64.deb && \
-    rm rclone-current-linux-amd64.deb
+RUN curl -fsSL https://rclone.org/install.sh | bash
 
 # Install PyTorch with CUDA 12.8 from official index
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
