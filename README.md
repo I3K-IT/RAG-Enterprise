@@ -119,6 +119,9 @@ Once you see "Application startup complete", open http://localhost:3000 and logi
 3. Login with username `admin` and the password from logs
 4. Create additional users in Admin panel
 
+> **Note**: The admin password is randomly generated at first startup for security.
+> It is **not** a fixed default like `admin123`. If you don't see it in the logs, see [Password Recovery](#admin-password-lost--not-in-logs) below.
+
 ### Upload Documents
 
 1. Login as Super User or Admin
@@ -217,6 +220,30 @@ docker compose logs backend -f
 ```
 
 Look for "Application startup complete" message.
+
+### Admin password lost / not in logs
+
+The admin password is randomly generated on first startup. If the logs have been cleared and you can't find it:
+
+**Option A**: Set a custom password and recreate the admin user:
+```bash
+# 1. Add to your .env file
+echo "ADMIN_DEFAULT_PASSWORD=your-secure-password" >> .env
+
+# 2. Delete the user database to force recreation
+docker compose exec backend rm /app/data/rag_users.db
+
+# 3. Restart the backend
+docker compose restart backend
+```
+
+**Option B**: Set `ADMIN_DEFAULT_PASSWORD` in `.env` before first startup to avoid random passwords entirely:
+```env
+# In .env - the admin account will use this password
+ADMIN_DEFAULT_PASSWORD=your-secure-password
+```
+
+> **Tip**: If you prefer a known password, set `ADMIN_DEFAULT_PASSWORD` in `.env` **before** first startup. Otherwise, the system generates a secure random password shown only once in the logs.
 
 ### Can't login / Frontend not loading
 
