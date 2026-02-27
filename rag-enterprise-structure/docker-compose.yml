@@ -2,7 +2,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.15.2
     container_name: rag-qdrant
-    # To enable Qdrant API key authentication, uncomment and set QDRANT_API_KEY in .env:
+    # Qdrant API key auth: auto-configured by setup.sh when security is enabled
     # environment:
     #   QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
     volumes:
