@@ -3,7 +3,9 @@ RAG Pipeline - LangChain + Qdrant Integration
 Orchestrates: Retrieval + LLM Generation with Source Attribution
 """
 
+import json
 import logging
+import time
 from typing import List, Tuple, Dict
 import requests as _requests
 from langchain.chains import RetrievalQA
@@ -12,6 +14,139 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
 logger = logging.getLogger(__name__)
+
+
+def _format_bytes(n: int) -> str:
+    """Format bytes into human-readable string."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _format_eta(seconds: float) -> str:
+    """Format seconds into human-readable ETA."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = int(minutes // 60)
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
+
+
+def wait_for_ollama(base_url: str, timeout: int = 300):
+    """
+    Wait for Ollama server to be ready.
+
+    Args:
+        base_url: Ollama base URL (e.g. http://ollama:11434)
+        timeout: Maximum seconds to wait
+    """
+    logger.info(f"⏳ Waiting for Ollama at {base_url} ...")
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            resp = _requests.get(f"{base_url}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                logger.info(f"✅ Ollama is ready ({time.time() - start:.0f}s)")
+                return
+        except _requests.ConnectionError:
+            pass
+        except Exception as exc:
+            logger.debug(f"Ollama not ready yet: {exc}")
+        time.sleep(3)
+    raise RuntimeError(
+        f"Ollama not reachable at {base_url} after {timeout}s. "
+        "Make sure the Ollama container is running."
+    )
+
+
+def ensure_model(base_url: str, model: str):
+    """
+    Check if a model is available in Ollama; if not, pull it with progress.
+
+    Args:
+        base_url: Ollama base URL
+        model: Model name (e.g. qwen3:14b-q4_K_M)
+    """
+    base_url = base_url.rstrip("/")
+
+    # Check existing models
+    resp = _requests.get(f"{base_url}/api/tags", timeout=10)
+    resp.raise_for_status()
+    available = [m["name"] for m in resp.json().get("models", [])]
+
+    # Ollama sometimes stores names with :latest suffix
+    if model in available or f"{model}:latest" in available:
+        logger.info(f"✅ Model '{model}' already available in Ollama")
+        return
+
+    # Model not found — pull it
+    logger.info("=" * 70)
+    logger.info(f"⬇️  Model '{model}' not found in Ollama — downloading now")
+    logger.info(f"   This may take several minutes depending on your connection speed")
+    logger.info("=" * 70)
+
+    pull_resp = _requests.post(
+        f"{base_url}/api/pull",
+        json={"name": model, "stream": True},
+        stream=True,
+        timeout=3600,  # 1 hour timeout for large models
+    )
+    pull_resp.raise_for_status()
+
+    start_time = time.time()
+    last_log_time = 0.0
+    last_status = ""
+
+    for line in pull_resp.iter_lines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        status = data.get("status", "")
+        total = data.get("total", 0)
+        completed = data.get("completed", 0)
+
+        # Show download progress every 5 seconds to avoid log spam
+        now = time.time()
+        if total and completed:
+            pct = (completed / total) * 100
+            elapsed = now - start_time
+            speed = completed / elapsed if elapsed > 0 else 0
+            remaining = total - completed
+            eta = remaining / speed if speed > 0 else 0
+
+            if now - last_log_time >= 5 or pct >= 100:
+                logger.info(
+                    f"   ⬇️  {status}: {pct:.1f}% "
+                    f"({_format_bytes(completed)}/{_format_bytes(total)}) "
+                    f"- Speed: {_format_bytes(speed)}/s "
+                    f"- ETA: {_format_eta(eta)}"
+                )
+                last_log_time = now
+        elif status and status != last_status:
+            logger.info(f"   📦 {status}")
+            last_status = status
+
+        # Check for errors
+        if "error" in data:
+            raise RuntimeError(f"Ollama pull failed: {data['error']}")
+
+    elapsed_total = time.time() - start_time
+    logger.info("=" * 70)
+    logger.info(
+        f"✅ Model '{model}' downloaded successfully "
+        f"(took {_format_eta(elapsed_total)})"
+    )
+    logger.info("=" * 70)
 
 
 class OllamaChatDirect:
@@ -58,6 +193,7 @@ class RAGPipeline:
         qdrant_connector,
         embeddings_service,
         llm_model: str = "mistral",
+        ollama_base_url: str = "http://ollama:11434",
         chunk_size: int = 2000,
         chunk_overlap: int = 400,
         relevance_threshold: float = 0.30  # Lowered for better recall
@@ -66,19 +202,19 @@ class RAGPipeline:
         self.embeddings_service = embeddings_service
         self.llm_model = llm_model
         self.relevance_threshold = relevance_threshold
-        
+
         # Text splitter per chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", ".", " ", ""]
         )
-        
+
         # LLM (via Ollama) — Direct API call with think=False for Qwen3
         # Temperature 0.0 = completely deterministic to ensure consistent responses
         self.llm = OllamaChatDirect(
             model=self.llm_model,  # Use the model passed from docker-compose.yml
-            base_url="http://ollama:11434",
+            base_url=ollama_base_url,
             temperature=0.0
         )
         

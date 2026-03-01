@@ -66,8 +66,8 @@ RUN mkdir -p /app/uploads /app/data /app/backups
 EXPOSE 8000
 
 # Environment variables
-ENV MILVIUS_HOST=milvus
-ENV MILVIUS_PORT=19530
+ENV OLLAMA_HOST=ollama
+ENV OLLAMA_PORT=11434
 ENV LLM_MODEL=mistral
 ENV EMBEDDING_MODEL=all-MiniLM-L6-v2
 ENV CUDA_VISIBLE_DEVICES=0
