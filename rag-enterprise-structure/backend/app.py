@@ -153,6 +153,9 @@ QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "mistral")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "ollama")
+OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
+OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
 CUDA_VISIBLE_DEVICES = os.getenv("CUDA_VISIBLE_DEVICES", "0")
@@ -218,6 +221,7 @@ async def startup_event():
     logger.info("=" * 80)
     logger.info(f"Configuration:")
     logger.info(f"  - QDRANT: {QDRANT_HOST}:{QDRANT_PORT}")
+    logger.info(f"  - OLLAMA: {OLLAMA_BASE_URL}")
     logger.info(f"  - LLM: {LLM_MODEL}")
     logger.info(f"  - Embedding: {EMBEDDING_MODEL}")
     logger.info(f"  - Relevance Threshold: {RELEVANCE_THRESHOLD}")
@@ -257,6 +261,7 @@ async def startup_event():
             qdrant_connector=qdrant_connector,
             embeddings_service=embeddings_service,
             llm_model=LLM_MODEL,
+            ollama_base_url=OLLAMA_BASE_URL,
             relevance_threshold=RELEVANCE_THRESHOLD
         )
         logger.info("✅ RAG Pipeline ready")

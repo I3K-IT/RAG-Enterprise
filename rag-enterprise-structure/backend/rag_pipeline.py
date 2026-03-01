@@ -58,6 +58,7 @@ class RAGPipeline:
         qdrant_connector,
         embeddings_service,
         llm_model: str = "mistral",
+        ollama_base_url: str = "http://ollama:11434",
         chunk_size: int = 2000,
         chunk_overlap: int = 400,
         relevance_threshold: float = 0.30  # Lowered for better recall
@@ -66,19 +67,19 @@ class RAGPipeline:
         self.embeddings_service = embeddings_service
         self.llm_model = llm_model
         self.relevance_threshold = relevance_threshold
-        
+
         # Text splitter per chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", ".", " ", ""]
         )
-        
+
         # LLM (via Ollama) — Direct API call with think=False for Qwen3
         # Temperature 0.0 = completely deterministic to ensure consistent responses
         self.llm = OllamaChatDirect(
             model=self.llm_model,  # Use the model passed from docker-compose.yml
-            base_url="http://ollama:11434",
+            base_url=ollama_base_url,
             temperature=0.0
         )
         
