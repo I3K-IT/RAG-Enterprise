@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.5] - 2026-03-01
+
+### Added
+
+- **Automatic model download at startup** — if the configured LLM model is not present in Ollama, the backend automatically downloads it showing real-time progress: percentage, downloaded/total size, speed, and estimated time remaining
+- **Ollama readiness check** — the backend waits for Ollama to be reachable before proceeding, preventing 404/connection errors on fresh installations
+
+### Fixed
+
+- **Ollama URL now configurable** via `OLLAMA_HOST` and `OLLAMA_PORT` environment variables — previously hardcoded to `http://ollama:11434`, which only worked inside Docker networking
+- Replaced stale `MILVIUS_HOST`/`MILVIUS_PORT` env vars in Dockerfile with correct `OLLAMA_HOST`/`OLLAMA_PORT` defaults
+
+---
+
 ## [1.1.0] - 2026-02-27
 
 ### Added
@@ -82,5 +96,6 @@ First public release of RAG Enterprise — a 100% local Retrieval-Augmented Gene
 - LLM switched from Qwen 2.5 to Qwen3 14B Q4_K_M for improved quality
 - All Italian text translated to English for international accessibility
 
+[1.1.5]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.1.5
 [1.1.0]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.1.0
 [1.0.0]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.0.0
