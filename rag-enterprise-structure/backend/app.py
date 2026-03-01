@@ -15,7 +15,7 @@ import traceback
 import gc
 import torch
 
-from rag_pipeline import RAGPipeline
+from rag_pipeline import RAGPipeline, wait_for_ollama, ensure_model
 from ocr_service import OCRService
 from embeddings_service import EmbeddingsService
 from qdrant_connector import QdrantConnector
@@ -231,7 +231,7 @@ async def startup_event():
     
     try:
         # 1. Qdrant Connection
-        logger.info("🔗 [1/4] Connecting to Qdrant...")
+        logger.info("🔗 [1/6] Connecting to Qdrant...")
         qdrant_connector = QdrantConnector(
             host=QDRANT_HOST,
             port=QDRANT_PORT,
@@ -241,7 +241,7 @@ async def startup_event():
         logger.info("✅ Qdrant connected")
 
         # 2. OCR Service
-        logger.info("🔗 [2/4] Loading OCR Service...")
+        logger.info("🔗 [2/6] Loading OCR Service...")
         try:
             ocr_service = OCRService()
             logger.info("✅ OCR Service ready")
@@ -251,12 +251,17 @@ async def startup_event():
             ocr_service = None
 
         # 3. Embedding Service
-        logger.info(f"🔗 [3/4] Loading Embedding Service ({EMBEDDING_MODEL})...")
+        logger.info(f"🔗 [3/6] Loading Embedding Service ({EMBEDDING_MODEL})...")
         embeddings_service = EmbeddingsService(model_name=EMBEDDING_MODEL)
         logger.info("✅ Embedding Service ready")
 
-        # 4. RAG Pipeline
-        logger.info(f"🔗 [4/4] Initializing RAG Pipeline (LLM: {LLM_MODEL})...")
+        # 4. Ollama readiness + model auto-pull
+        logger.info(f"🔗 [4/6] Connecting to Ollama ({OLLAMA_BASE_URL})...")
+        wait_for_ollama(OLLAMA_BASE_URL, timeout=300)
+        ensure_model(OLLAMA_BASE_URL, LLM_MODEL)
+
+        # 5. RAG Pipeline
+        logger.info(f"🔗 [5/6] Initializing RAG Pipeline (LLM: {LLM_MODEL})...")
         rag_pipeline = RAGPipeline(
             qdrant_connector=qdrant_connector,
             embeddings_service=embeddings_service,
@@ -266,8 +271,8 @@ async def startup_event():
         )
         logger.info("✅ RAG Pipeline ready")
 
-        # 5. Backup Scheduler
-        logger.info("🔗 [5/5] Starting Backup Scheduler...")
+        # 6. Backup Scheduler
+        logger.info("🔗 [6/6] Starting Backup Scheduler...")
         backup_scheduler.start()
         logger.info("✅ Backup Scheduler ready")
 
