@@ -30,7 +30,10 @@
 ### Prerequisites
 
 - **OS**: Ubuntu 20.04+ (22.04 recommended)
-- **GPU**: NVIDIA with 8-16GB VRAM (drivers pre-installed)
+- **GPU**: NVIDIA (CUDA), AMD (ROCm), or CPU-only
+  - NVIDIA: 8-16GB VRAM, drivers pre-installed
+  - AMD: ROCm-compatible GPU, ROCm drivers pre-installed
+  - CPU: No GPU required (slower inference)
 - **RAM**: 16GB minimum, 32GB recommended
 - **Storage**: 50GB+ available
 - **Connection**: 80+ Mbit/s recommended
@@ -57,8 +60,8 @@ cd RAG-Enterprise/rag-enterprise-structure
 
 The setup script automatically installs and configures:
 - Docker Engine + Docker Compose
-- NVIDIA Container Toolkit
-- All required Docker images
+- GPU toolkit (NVIDIA Container Toolkit or AMD ROCm, based on your selection)
+- All required Docker images (CUDA or ROCm variant)
 - Ollama with LLM model (Mistral 7B or Qwen3:14b)
 - Qdrant vector database
 - Backend + Frontend services
@@ -297,12 +300,19 @@ docker compose ps
 
 ### GPU not detected
 
-Verify NVIDIA drivers and Container Toolkit:
-
+**NVIDIA:**
 ```bash
 nvidia-smi
 docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi
 ```
+
+**AMD (ROCm):**
+```bash
+ls /dev/kfd /dev/dri
+# Verify ROCm: https://rocm.docs.amd.com
+```
+
+**CPU-only:** No GPU needed — set `GPU_TYPE=cpu` in `.env` (or select option 3 during setup).
 
 ### No results from queries
 

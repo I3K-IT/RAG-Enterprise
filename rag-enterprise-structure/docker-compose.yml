@@ -16,8 +16,6 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: rag-ollama
-    environment:
-      CUDA_VISIBLE_DEVICES: 0
     volumes:
       - ollama-data:/root/.ollama
     ports:
@@ -25,13 +23,6 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
   backend:
     build:
@@ -50,7 +41,6 @@ services:
       LLM_MODEL: qwen3:14b-q4_K_M
       EMBEDDING_MODEL: BAAI/bge-m3
       RELEVANCE_THRESHOLD: "0.35"
-      CUDA_VISIBLE_DEVICES: 0
       # Security (optional - backend has secure defaults)
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
@@ -67,13 +57,7 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+
   frontend:
     build:
       context: ../frontend
@@ -90,6 +74,7 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
+
 volumes:
   qdrant-data:
   ollama-data:

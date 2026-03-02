@@ -248,34 +248,97 @@ step_3_start_docker() {
 }
 
 # ============================================================================
-# STEP 4: Install NVIDIA Container Toolkit
+# STEP 3A: Select GPU Type
 # ============================================================================
 
-step_4_nvidia_toolkit() {
-    echo -e "\n${YELLOW}[4/10] Installing NVIDIA Container Toolkit...${NC}"
-    
-    # Check GPU
-    if ! command -v nvidia-smi &> /dev/null; then
-        echo -e "${RED}✗ NVIDIA GPU drivers not found${NC}"
-        exit 1
-    fi
-    
-    nvidia-smi | grep -i "NVIDIA GeForce\|Tesla" && echo -e "${GREEN}✓ NVIDIA GPU detected${NC}"
-    
-    # Install toolkit
-    echo "Installing NVIDIA Container Toolkit..."
-    sudo apt-get install -y -qq nvidia-container-toolkit 2>/dev/null || true
-    
-    # Configure Docker daemon
-    sudo nvidia-ctk runtime configure --runtime=docker
-    
-    # Restart Docker daemon to apply changes
-    echo "Restarting Docker daemon..."
-    sudo systemctl restart docker
-    sleep 5
+step_3a_select_gpu() {
+    echo -e "\n${YELLOW}[3A/10] GPU Configuration...${NC}"
 
-    echo -e "${GREEN}✓ NVIDIA Container Toolkit installed${NC}"
-    echo -e "${YELLOW}Note: GPU test will be performed after pulling images (step 7)${NC}"
+    echo -e "\n${CYAN}Select your GPU type:${NC}"
+    echo "1) NVIDIA (CUDA) - Most common, requires nvidia drivers"
+    echo "2) AMD (ROCm)    - AMD GPUs with ROCm support"
+    echo "3) CPU only      - No GPU (slower inference)"
+    echo ""
+    read -p "Select GPU type [1-3] (default: 1): " GPU_CHOICE
+    GPU_CHOICE=${GPU_CHOICE:-1}
+
+    case $GPU_CHOICE in
+        1)
+            GPU_TYPE="nvidia"
+            echo -e "${GREEN}✓ NVIDIA GPU selected${NC}"
+            ;;
+        2)
+            GPU_TYPE="amd"
+            echo -e "${GREEN}✓ AMD GPU (ROCm) selected${NC}"
+            ;;
+        3)
+            GPU_TYPE="cpu"
+            echo -e "${GREEN}✓ CPU-only mode selected${NC}"
+            ;;
+        *)
+            echo -e "${RED}✗ Invalid option, defaulting to NVIDIA${NC}"
+            GPU_TYPE="nvidia"
+            ;;
+    esac
+}
+
+# ============================================================================
+# STEP 4: Install GPU Toolkit (NVIDIA / AMD / CPU)
+# ============================================================================
+
+step_4_gpu_toolkit() {
+    echo -e "\n${YELLOW}[4/10] Configuring GPU support (${GPU_TYPE})...${NC}"
+
+    case $GPU_TYPE in
+        nvidia)
+            # Check GPU
+            if ! command -v nvidia-smi &> /dev/null; then
+                echo -e "${RED}✗ NVIDIA GPU drivers not found${NC}"
+                echo -e "${YELLOW}Install NVIDIA drivers first, or re-run setup and select CPU mode${NC}"
+                exit 1
+            fi
+
+            nvidia-smi | grep -i "NVIDIA GeForce\|Tesla" && echo -e "${GREEN}✓ NVIDIA GPU detected${NC}"
+
+            # Install toolkit
+            echo "Installing NVIDIA Container Toolkit..."
+            sudo apt-get install -y -qq nvidia-container-toolkit 2>/dev/null || true
+
+            # Configure Docker daemon
+            sudo nvidia-ctk runtime configure --runtime=docker
+
+            # Restart Docker daemon to apply changes
+            echo "Restarting Docker daemon..."
+            sudo systemctl restart docker
+            sleep 5
+
+            echo -e "${GREEN}✓ NVIDIA Container Toolkit installed${NC}"
+            echo -e "${YELLOW}Note: GPU test will be performed after pulling images (step 7)${NC}"
+            ;;
+        amd)
+            # Check ROCm devices
+            if [ ! -e /dev/kfd ] || [ ! -d /dev/dri ]; then
+                echo -e "${RED}✗ ROCm devices not found (/dev/kfd, /dev/dri)${NC}"
+                echo -e "${YELLOW}Install AMD ROCm drivers first: https://rocm.docs.amd.com${NC}"
+                exit 1
+            fi
+
+            echo -e "${GREEN}✓ ROCm devices detected (/dev/kfd, /dev/dri)${NC}"
+
+            # Check if user has access to render group
+            if ! groups | grep -qE "render|video"; then
+                echo -e "${YELLOW}Adding user to render and video groups...${NC}"
+                sudo usermod -aG render,video $USER
+                echo -e "${YELLOW}⚠ You may need to logout/login for group changes to take effect${NC}"
+            fi
+
+            echo -e "${GREEN}✓ AMD ROCm configuration complete${NC}"
+            ;;
+        cpu)
+            echo -e "${GREEN}✓ CPU-only mode - no GPU toolkit needed${NC}"
+            echo -e "${YELLOW}Note: LLM inference will be slower without GPU acceleration${NC}"
+            ;;
+    esac
 }
 
 # ============================================================================
@@ -414,6 +477,19 @@ step_6a_configure_env() {
         echo -e "${YELLOW}⚠ Security not configured (development mode)${NC}"
     fi
 
+    # Set COMPOSE_FILE based on GPU_TYPE
+    case $GPU_TYPE in
+        nvidia)
+            COMPOSE_FILE_VAL="docker-compose.yml:docker-compose.nvidia.yml"
+            ;;
+        amd)
+            COMPOSE_FILE_VAL="docker-compose.yml:docker-compose.amd.yml"
+            ;;
+        cpu)
+            COMPOSE_FILE_VAL="docker-compose.yml"
+            ;;
+    esac
+
     # Create .env file
     cat > .env <<EOF
 # ==============================================================================
@@ -421,7 +497,12 @@ step_6a_configure_env() {
 # ==============================================================================
 # Generated on: $(date)
 # Scenario: ${SCENARIO} (1=localhost, 2=LAN, 3=production)
+# GPU: ${GPU_TYPE}
 # ==============================================================================
+
+# GPU Type
+GPU_TYPE=${GPU_TYPE}
+COMPOSE_FILE=${COMPOSE_FILE_VAL}
 
 # Frontend API URL
 VITE_API_URL=${VITE_API_URL}
@@ -548,24 +629,48 @@ step_7_pull_images() {
 
     echo "Pulling images (this may take a few minutes)..."
 
-    echo -e "\n${CYAN}Pulling Ollama...${NC}"
-    sudo docker pull ollama/ollama:latest
-
     echo -e "\n${CYAN}Pulling Qdrant...${NC}"
     sudo docker pull qdrant/qdrant:latest
 
-    echo -e "\n${CYAN}Pulling NVIDIA CUDA (~1-2GB)...${NC}"
-    sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
+    case $GPU_TYPE in
+        nvidia)
+            echo -e "\n${CYAN}Pulling Ollama (CUDA)...${NC}"
+            sudo docker pull ollama/ollama:latest
 
-    echo -e "\n${GREEN}✓ All Docker images pulled${NC}"
+            echo -e "\n${CYAN}Pulling NVIDIA CUDA (~1-2GB)...${NC}"
+            sudo docker pull nvidia/cuda:12.9.0-runtime-ubuntu22.04
 
-    # Test GPU
-    echo -e "\n${YELLOW}Testing GPU with Docker...${NC}"
-    if sudo docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
-        echo -e "${GREEN}✓ NVIDIA GPU working correctly${NC}"
-    else
-        echo -e "${YELLOW}⚠ GPU test inconclusive (may work anyway)${NC}"
-    fi
+            echo -e "\n${GREEN}✓ All Docker images pulled${NC}"
+
+            # Test GPU
+            echo -e "\n${YELLOW}Testing NVIDIA GPU with Docker...${NC}"
+            if sudo docker run --rm --gpus all nvidia/cuda:12.9.0-runtime-ubuntu22.04 nvidia-smi &> /dev/null; then
+                echo -e "${GREEN}✓ NVIDIA GPU working correctly${NC}"
+            else
+                echo -e "${YELLOW}⚠ GPU test inconclusive (may work anyway)${NC}"
+            fi
+            ;;
+        amd)
+            echo -e "\n${CYAN}Pulling Ollama ROCm (~4-5GB, larger than CUDA version)...${NC}"
+            sudo docker pull ollama/ollama:rocm
+
+            echo -e "\n${GREEN}✓ All Docker images pulled${NC}"
+
+            # Test GPU
+            echo -e "\n${YELLOW}Testing AMD GPU with Docker...${NC}"
+            if sudo docker run --rm --device /dev/kfd --device /dev/dri ollama/ollama:rocm ollama --version &> /dev/null; then
+                echo -e "${GREEN}✓ AMD ROCm GPU working correctly${NC}"
+            else
+                echo -e "${YELLOW}⚠ GPU test inconclusive (may work anyway)${NC}"
+            fi
+            ;;
+        cpu)
+            echo -e "\n${CYAN}Pulling Ollama (CPU)...${NC}"
+            sudo docker pull ollama/ollama:latest
+
+            echo -e "\n${GREEN}✓ All Docker images pulled${NC}"
+            ;;
+    esac
 }
 
 # ============================================================================
@@ -790,12 +895,20 @@ main() {
     
     print_header
     print_profile_info
+
+    # Load GPU_TYPE from .env if resuming from a later step
+    if [ $START_STEP -gt 3 ] && [ -f ".env" ]; then
+        GPU_TYPE=$(grep "^GPU_TYPE=" .env | cut -d'=' -f2)
+        GPU_TYPE=${GPU_TYPE:-nvidia}
+        echo -e "${CYAN}GPU type from .env: ${GPU_TYPE}${NC}"
+    fi
     
     [ $START_STEP -le 0 ] && step_0_system_prep
     [ $START_STEP -le 1 ] && step_1_install_docker
     [ $START_STEP -le 2 ] && step_2_docker_permissions
     [ $START_STEP -le 3 ] && step_3_start_docker
-    [ $START_STEP -le 4 ] && step_4_nvidia_toolkit
+    [ $START_STEP -le 3 ] && step_3a_select_gpu
+    [ $START_STEP -le 4 ] && step_4_gpu_toolkit
     [ $START_STEP -le 5 ] && step_5_install_docker_compose
     [ $START_STEP -le 6 ] && step_6_prepare_project
     [ $START_STEP -le 6 ] && step_6a_configure_env

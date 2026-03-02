@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.0] - 2026-03-02
+
+### Added
+
+- **Multi-GPU support** — system now supports NVIDIA (CUDA), AMD (ROCm), and CPU-only modes ([#9](https://github.com/I3K-IT/RAG-Enterprise/issues/9))
+  - New `GPU_TYPE` setting in `.env` (`nvidia`, `amd`, `cpu`)
+  - Docker Compose override files: `docker-compose.nvidia.yml` (NVIDIA CUDA), `docker-compose.amd.yml` (AMD ROCm)
+  - Setup wizard now asks GPU type and auto-configures the correct Docker images and device mappings
+  - AMD uses `ollama/ollama:rocm` image with `/dev/kfd` and `/dev/dri` device passthrough
+  - CPU-only mode works out of the box with no GPU drivers required
+
+---
+
 ## [1.1.5] - 2026-03-01
 
 ### Added

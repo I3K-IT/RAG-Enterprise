@@ -1,0 +1,8 @@
+# AMD ROCm GPU override
+# Used automatically when GPU_TYPE=amd in .env
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
