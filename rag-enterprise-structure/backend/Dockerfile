@@ -59,6 +59,10 @@ COPY backend/backup_service.py .
 COPY backend/backup_models.py .
 COPY backend/backup_scheduler.py .
 
+# Copy entrypoint script
+COPY backend/entrypoint.sh .
+RUN chmod +x /app/entrypoint.sh
+
 # Create directory for uploads, database and backups
 RUN mkdir -p /app/uploads /app/data /app/backups
 
@@ -76,5 +80,5 @@ ENV CUDA_VISIBLE_DEVICES=0
 HEALTHCHECK --interval=30s --timeout=120s --start-period=60s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Start app
-CMD ["python3", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start app via entrypoint (ensures dependencies are up to date with volume-mounted code)
+ENTRYPOINT ["/app/entrypoint.sh"]
