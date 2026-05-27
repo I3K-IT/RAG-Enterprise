@@ -1,0 +1,61 @@
+{
+  "title": "RAG Enterprise — Self-hosted document intelligence platform",
+  "description": "<p>RAG Enterprise is a 100% self-hosted Retrieval-Augmented Generation platform for sovereign document intelligence, designed for organizations that cannot use cloud-based RAG services due to regulatory, privacy, or data sovereignty constraints (legal firms, healthcare providers, financial institutions, public administration).</p><p><strong>Architecture</strong>: React frontend + FastAPI backend with LangChain RAG pipeline, Qdrant vector database for semantic search, Ollama for local LLM inference, BAAI/bge-m3 multilingual embeddings (29 languages supported), Apache Tika + Tesseract OCR for document ingestion (PDF, DOCX, PPTX, XLSX, TXT, MD, ODT, RTF, HTML, XML). JWT authentication with role-based access control (User / Super User / Admin). Fully containerized via Docker Compose with single-command installation.</p><p>The <strong>Community edition</strong> (AGPL-3.0) handles 10,000+ documents comfortably with no data leaving the user's server. The <strong>Pro edition</strong> (commercial license) extends this with a hybrid SQL-Vector engine combining traditional keyword search with semantic retrieval, and a 6-stage retrieval pipeline (query expansion → retrieval → reranking → fusion → filtering → generation) optimized for structured documents in regulated domains.</p><p>Compliant by design with GDPR and the EU AI Act.</p>",
+  "license": "AGPL-3.0",
+  "upload_type": "software",
+  "creators": [
+    {
+      "name": "Marchetti, Francesco",
+      "affiliation": "I3K Technologies",
+      "orcid": "0009-0003-8613-3065"
+    }
+  ],
+  "keywords": [
+    "retrieval augmented generation",
+    "RAG",
+    "document intelligence",
+    "self-hosted",
+    "on-premises",
+    "GDPR",
+    "AI Act",
+    "EU sovereignty",
+    "open source",
+    "FastAPI",
+    "LangChain",
+    "Qdrant",
+    "vector database",
+    "semantic search",
+    "Ollama",
+    "local LLM",
+    "embeddings",
+    "multilingual",
+    "OCR",
+    "Docker",
+    "legal tech",
+    "healthcare AI",
+    "fintech",
+    "sovereign AI"
+  ],
+  "language": "eng",
+  "access_right": "open",
+  "communities": [
+    {
+      "identifier": "eu"
+    }
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/I3K-IT/RAG-Enterprise",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://i3k.eu",
+      "relation": "isDocumentedBy",
+      "resource_type": "other",
+      "scheme": "url"
+    }
+  ],
+  "notes": "Maintained by I3K Technologies, Milan, Italy. Project website: https://i3k.eu"
+}
