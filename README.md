@@ -6,6 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20413005.svg)](https://doi.org/10.5281/zenodo.20413005)
 
 > **One command. Full RAG system. Your data stays yours.**
 
@@ -392,6 +393,34 @@ Real-world performance results from the community. Run `python benchmark/rag_ben
 - ✅ **AGPL-3.0 License**: If you modify and deploy as a service, you must share source code
 
 **Ideal for**: Law firms, healthcare, finance, government, enterprises with sensitive data.
+
+---
+
+## How to cite
+
+If you use RAG Enterprise in academic research, EU grant proposals, or technical publications, please cite it as:
+
+**APA**:
+> Marchetti, F. (2026). *RAG Enterprise — Self-hosted document intelligence platform* (Version 1.2.1) [Software]. Zenodo. https://doi.org/10.5281/zenodo.20413005
+
+**BibTeX**:
+
+```bibtex
+@software{marchetti2026ragenterprise,
+  author       = {Marchetti, Francesco},
+  title        = {RAG Enterprise: Self-hosted document intelligence platform},
+  year         = {2026},
+  publisher    = {Zenodo},
+  version      = {v1.2.1},
+  doi          = {10.5281/zenodo.20413005},
+  url          = {https://doi.org/10.5281/zenodo.20413005},
+  license      = {AGPL-3.0},
+  note         = {Sovereign GDPR-compliant Retrieval-Augmented Generation system for regulated industries; Community (AGPL-3.0) and Pro (commercial) editions}
+}
+```
+
+**Plain text**:
+> Francesco Marchetti. (2026). RAG Enterprise — Self-hosted document intelligence platform (v1.2.1) [Software]. https://doi.org/10.5281/zenodo.20413005
 
 ---
 
