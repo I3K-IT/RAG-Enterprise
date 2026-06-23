@@ -162,8 +162,7 @@ CUDA_VISIBLE_DEVICES = os.getenv("CUDA_VISIBLE_DEVICES", "0")
 RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "0.3"))
 MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100"))  # Default 100MB
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/app/backups")
-# On CPU inference can take several minutes; GPU users can lower this via env var
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "600"))
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)

@@ -730,7 +730,7 @@ function App() {
         query: userMessage.content,
         top_k: 5
       }, {
-        timeout: 620000  // 620s — slightly above backend LLM_TIMEOUT (600s) to get a clean error
+        timeout: 630000  // slightly above max LLM_TIMEOUT (600s on CPU) to let the backend error first
       })
 
       const assistantMessage = {

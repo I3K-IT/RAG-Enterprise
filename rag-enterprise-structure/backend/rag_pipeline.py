@@ -197,7 +197,7 @@ class RAGPipeline:
         chunk_size: int = 2000,
         chunk_overlap: int = 400,
         relevance_threshold: float = 0.30,  # Lowered for better recall
-        llm_timeout: int = 600  # 10 min default — CPU inference can be slow
+        llm_timeout: int = 120
     ):
         self.qdrant_connector = qdrant_connector
         self.embeddings_service = embeddings_service
