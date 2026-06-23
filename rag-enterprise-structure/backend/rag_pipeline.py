@@ -196,7 +196,8 @@ class RAGPipeline:
         ollama_base_url: str = "http://ollama:11434",
         chunk_size: int = 2000,
         chunk_overlap: int = 400,
-        relevance_threshold: float = 0.30  # Lowered for better recall
+        relevance_threshold: float = 0.30,  # Lowered for better recall
+        llm_timeout: int = 120
     ):
         self.qdrant_connector = qdrant_connector
         self.embeddings_service = embeddings_service
@@ -215,7 +216,8 @@ class RAGPipeline:
         self.llm = OllamaChatDirect(
             model=self.llm_model,  # Use the model passed from docker-compose.yml
             base_url=ollama_base_url,
-            temperature=0.0
+            temperature=0.0,
+            timeout=llm_timeout
         )
         
         # Prompt template

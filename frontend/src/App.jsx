@@ -729,6 +729,8 @@ function App() {
       const response = await axios.post(`${API_URL}/api/query`, {
         query: userMessage.content,
         top_k: 5
+      }, {
+        timeout: 630000  // slightly above max LLM_TIMEOUT (600s on CPU) to let the backend error first
       })
 
       const assistantMessage = {
@@ -745,9 +747,14 @@ function App() {
     } catch (error) {
       console.error('Query error:', error)
 
+      const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
+      const errorContent = isTimeout
+        ? '⏱️ The model took too long to respond. On CPU this can take several minutes — please try again or use a lighter model.'
+        : `❌ Error: ${error.response?.data?.detail || error.message}`
+
       const errorMessage = {
         role: 'assistant',
-        content: `❌ Error: ${error.response?.data?.detail || error.message}`,
+        content: errorContent,
         error: true,
         timestamp: new Date().toISOString()
       }

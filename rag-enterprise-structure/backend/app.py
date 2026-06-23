@@ -162,6 +162,7 @@ CUDA_VISIBLE_DEVICES = os.getenv("CUDA_VISIBLE_DEVICES", "0")
 RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "0.3"))
 MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100"))  # Default 100MB
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/app/backups")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -267,7 +268,8 @@ async def startup_event():
             embeddings_service=embeddings_service,
             llm_model=LLM_MODEL,
             ollama_base_url=OLLAMA_BASE_URL,
-            relevance_threshold=RELEVANCE_THRESHOLD
+            relevance_threshold=RELEVANCE_THRESHOLD,
+            llm_timeout=LLM_TIMEOUT
         )
         logger.info("✅ RAG Pipeline ready")
 
