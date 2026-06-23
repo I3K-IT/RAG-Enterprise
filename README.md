@@ -186,20 +186,53 @@ curl -X POST http://localhost:8000/api/admin/backup/schedule \
 
 ## Configuration
 
-### Change LLM Model
+All configuration is done via the `.env` file. Copy the example and edit:
 
-Edit `docker-compose.yml`:
-
-```yaml
-environment:
-  LLM_MODEL: qwen3:14b-q4_K_M  # or mistral:7b-instruct-q4_K_M
-  EMBEDDING_MODEL: BAAI/bge-m3
-  RELEVANCE_THRESHOLD: "0.35"
+```bash
+cp .env.example .env
+nano .env
 ```
 
-Then restart:
+After any change, restart the stack:
+
 ```bash
-docker compose restart backend
+docker compose down && docker compose up -d
+```
+
+### Change LLM Model
+
+The default model is **Qwen3:14b** (~10-12 GB VRAM). If it's too heavy for your hardware, switch to a lighter model in `.env`:
+
+| Model | VRAM | Best for |
+|-------|------|----------|
+| `qwen3:14b-q4_K_M` | ~10-12 GB | Best quality (default) |
+| `qwen3:8b-q4_K_M` | ~5 GB | Good balance quality/speed |
+| `qwen3:4b-q4_K_M` | ~3 GB | Fast, works on most GPUs |
+| `qwen3:1.7b-q4_K_M` | ~1.5 GB | Ultra-light, works on CPU |
+| `mistral:7b` | ~5 GB | Proven alternative, English-focused |
+
+```env
+# .env
+LLM_MODEL=qwen3:8b-q4_K_M
+```
+
+The new model is pulled automatically on next startup.
+
+### LLM Timeout
+
+The `LLM_TIMEOUT` variable controls how long the backend waits for the model to generate a response. Default is **120 seconds** (2 minutes), suitable for GPU inference.
+
+On **CPU-only** setups, larger models can take 5-10+ minutes per query. Increase the timeout accordingly:
+
+| Setup | Recommended timeout |
+|-------|-------------------|
+| GPU (NVIDIA/AMD) | `120` (default) |
+| CPU + light model (4B/1.7B) | `300` |
+| CPU + large model (8B/14B) | `600` |
+
+```env
+# .env — example for CPU-only with 14B model
+LLM_TIMEOUT=600
 ```
 
 ### Customize Branding
