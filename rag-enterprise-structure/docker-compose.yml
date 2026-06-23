@@ -41,6 +41,8 @@ services:
       LLM_MODEL: qwen3:14b-q4_K_M
       EMBEDDING_MODEL: BAAI/bge-m3
       RELEVANCE_THRESHOLD: "0.35"
+      # LLM inference timeout in seconds (default 600 = 10 min; lower to ~120 on GPU)
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-600}
       # Security (optional - backend has secure defaults)
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
