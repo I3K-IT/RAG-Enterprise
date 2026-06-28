@@ -51,13 +51,14 @@ pub async fn ensure_ready(eullm_url: &str) -> Result<()> {
     // Trova o scarica il binario eullm
     let bin = find_or_install_eullm().await?;
 
-    // Pre-pull qwen3-8b se non in cache.
-    // Avvia eullm-8b, attende il pull+load, poi lo killa.
-    // Deve stare prima del 14b: non possono coesistere in VRAM.
+    // 1. Pre-pull qwen3-14b (inference + ingestione — il modello principale).
+    ensure_model_cached(&bin, MODEL_CHAT, eullm_url).await?;
+
+    // 2. Pre-pull qwen3-8b (extraction SQL — schedulata fuori orario o on-demand).
+    //    Non possono coesistere in VRAM: pull sequenziale.
     ensure_model_cached(&bin, MODEL_EXTRACT, eullm_url).await?;
 
-    // Avvia eullm con qwen3-14b — rimane in serving per tutta la sessione.
-    // `eullm run --fit` scarica il modello se non in cache.
+    // 3. Avvia eullm in serving con qwen3-14b — rimane attivo per tutta la sessione.
     spawn_eullm_background(&bin, MODEL_CHAT);
 
     // Attendi che /api/tags risponda
