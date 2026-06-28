@@ -3,12 +3,17 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
+    #[serde(default)]
     pub server: ServerSettings,
+    #[serde(default)]
     pub database: DatabaseSettings,
-    pub auth: AuthSettings,
+    pub auth: AuthSettings,          // jwt_secret required — no default
+    #[serde(default)]
     pub qdrant: QdrantSettings,
-    pub eullm: EullmSettings,
+    pub eullm: EullmSettings,        // model required — no default
+    #[serde(default)]
     pub embeddings: EmbeddingsSettings,
+    #[serde(default)]
     pub backup: BackupSettings,
 }
 
@@ -67,6 +72,22 @@ pub struct EmbeddingsSettings {
 pub struct BackupSettings {
     #[serde(default = "default_backup_dir")]
     pub dir: String,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self { Self { host: default_host(), port: default_port() } }
+}
+impl Default for DatabaseSettings {
+    fn default() -> Self { Self { url: default_db_url() } }
+}
+impl Default for QdrantSettings {
+    fn default() -> Self { Self { url: default_qdrant_url(), collection: default_collection() } }
+}
+impl Default for EmbeddingsSettings {
+    fn default() -> Self { Self { model_id: default_embedding_model() } }
+}
+impl Default for BackupSettings {
+    fn default() -> Self { Self { dir: default_backup_dir() } }
 }
 
 fn default_host() -> String { "0.0.0.0".into() }
