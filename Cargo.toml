@@ -87,10 +87,14 @@ thiserror = "2"
 anyhow = "1"
 
 [features]
-# "ocr" richiede leptonica e pdfium installati sul sistema.
-# Abilita con: cargo build --features ocr
-# In produzione (build release) va sempre abilitato.
+# "ocr"  — richiede leptonica + pdfium installati sul sistema.
+#           cargo build --features ocr
 ocr = ["leptess", "pdfium-render"]
+
+# "cuda" — abilita GPU per Candle (bge-m3 in VRAM). NO cuDNN: usa cudarc+cuBLAS.
+#           Richiede CUDA Toolkit (nvcc + libcublas-dev). NON richiede cuDNN.
+#           cargo build --features ocr,cuda
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 
 # ---- Fase 2 — Pro (decommentare quando si avvia Fase 2) ----
 # notify = "6"             # folder-watcher (watchdog equivalente)
