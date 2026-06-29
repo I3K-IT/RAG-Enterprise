@@ -15,6 +15,8 @@ pub struct Settings {
     pub embeddings: EmbeddingsSettings,
     #[serde(default)]
     pub backup: BackupSettings,
+    #[serde(default)]
+    pub storage: StorageSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +76,12 @@ pub struct BackupSettings {
     pub dir: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StorageSettings {
+    #[serde(default = "default_documents_dir")]
+    pub documents_dir: String,
+}
+
 impl Default for ServerSettings {
     fn default() -> Self { Self { host: default_host(), port: default_port() } }
 }
@@ -89,6 +97,9 @@ impl Default for EmbeddingsSettings {
 impl Default for BackupSettings {
     fn default() -> Self { Self { dir: default_backup_dir() } }
 }
+impl Default for StorageSettings {
+    fn default() -> Self { Self { documents_dir: default_documents_dir() } }
+}
 
 fn default_host() -> String { "0.0.0.0".into() }
 fn default_port() -> u16 { 8000 }
@@ -103,6 +114,7 @@ fn default_repeat_penalty() -> f32 { 1.3 }
 fn default_keep_alive() -> i32 { -1 }
 fn default_embedding_model() -> String { "BAAI/bge-m3".into() }
 fn default_backup_dir() -> String { "./backups".into() }
+fn default_documents_dir() -> String { "./documents".into() }
 
 impl Settings {
     pub fn load() -> Result<Self> {

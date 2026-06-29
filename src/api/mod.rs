@@ -30,7 +30,8 @@ pub fn router(state: AppState) -> Router {
     let doc_routes = Router::new()
         .route("/api/documents", get(documents::list))
         .route("/api/documents/upload", post(documents::upload))
-        .route("/api/documents/{id}", delete(documents::delete));
+        .route("/api/documents/{id}", delete(documents::delete))
+        .route("/api/documents/{id}/download", get(documents::download));
 
     let admin_routes = Router::new()
         .route("/api/admin/backup", post(admin::trigger_backup))

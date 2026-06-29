@@ -5,7 +5,7 @@
 
 use axum::{
     extract::{Multipart, Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     Json,
 };
@@ -148,6 +148,15 @@ pub async fn upload(
         return err(StatusCode::INTERNAL_SERVER_ERROR, format!("db insert: {e}"));
     }
 
+    // 8. Save original file for later download (best-effort)
+    let orig_path = state.storage.path_for(&document_id, &filename);
+    if let Some(parent) = orig_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&orig_path, &file_bytes) {
+        tracing::warn!(path = %orig_path.display(), error = %e, "could not save original file");
+    }
+
     tracing::info!(
         document_id = %document_id,
         filename = %filename,
@@ -165,6 +174,36 @@ pub async fn upload(
         "upload_date": upload_date,
     }))
     .into_response()
+}
+
+// ── GET /api/documents/{id}/download ─────────────────────────────────────────
+
+pub async fn download(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Path(document_id): Path<String>,
+) -> Response {
+    let doc = match db::documents::find_by_id(&state.db, &document_id).await {
+        Ok(Some(d)) if d.is_deleted == 0 => d,
+        Ok(_) => return err(StatusCode::NOT_FOUND, "document not found"),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+
+    let path = state.storage.path_for(&document_id, &doc.filename);
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", doc.filename),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => err(StatusCode::NOT_FOUND, "file not found on disk"),
+    }
 }
 
 // ── DELETE /api/documents/{id} ────────────────────────────────────────────────
@@ -192,8 +231,22 @@ pub async fn delete(
         );
     }
 
+    let doc = db::documents::find_by_id(&state.db, &document_id)
+        .await
+        .ok()
+        .flatten();
+
     match db::documents::soft_delete(&state.db, &document_id).await {
-        Ok(true) => Json(json!({ "deleted": true })).into_response(),
+        Ok(true) => {
+            // Best-effort: remove stored original file
+            if let Some(d) = doc {
+                let file_path = state.storage.path_for(&document_id, &d.filename);
+                let dir_path = state.storage.path_for(&document_id, "");
+                let _ = std::fs::remove_file(&file_path);
+                let _ = std::fs::remove_dir(dir_path.parent().unwrap_or(&file_path));
+            }
+            Json(json!({ "deleted": true })).into_response()
+        }
         Ok(false) => err(StatusCode::NOT_FOUND, "document not found"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }

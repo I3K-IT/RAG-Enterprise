@@ -26,7 +26,9 @@ use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct QueryRequest {
-    pub question: String,
+    pub query: String,
+    #[serde(default)]
+    pub top_k: Option<u64>,
     #[serde(default)]
     pub use_history: bool,
 }
@@ -111,7 +113,7 @@ pub async fn query(
     Json(req): Json<QueryRequest>,
 ) -> Response {
     let (full_prompt, sources) =
-        match prepare(&state, &req.question, claims.user_id, req.use_history).await {
+        match prepare(&state, &req.query, claims.user_id, req.use_history).await {
             Ok(v) => v,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
         };
@@ -123,7 +125,7 @@ pub async fn query(
 
     // Persist conversation
     let sources_json = serde_json::to_string(&sources).unwrap_or_default();
-    let _ = db::conversations::insert(&state.db, claims.user_id, "user", &req.question, None).await;
+    let _ = db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None).await;
     let _ = db::conversations::insert(
         &state.db,
         claims.user_id,
@@ -150,14 +152,14 @@ pub async fn query_stream(
     // Run setup synchronously before opening the SSE stream so we can return
     // a proper HTTP error if embed/search fails.
     let (full_prompt, sources) =
-        match prepare(&state, &req.question, claims.user_id, req.use_history).await {
+        match prepare(&state, &req.query, claims.user_id, req.use_history).await {
             Ok(v) => v,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
         };
 
     // Persist user question (answer is stored when the stream finishes).
     let _ =
-        db::conversations::insert(&state.db, claims.user_id, "user", &req.question, None).await;
+        db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None).await;
 
     // Start eullm streaming in background.
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
