@@ -1,24 +1,39 @@
 use std::sync::Arc;
 use sqlx::SqlitePool;
 
+use crate::clients::embeddings::EmbeddingService;
+use crate::clients::eullm::EullmClient;
+use crate::clients::qdrant_store::QdrantStore;
 use crate::config::Settings;
+use crate::documents::storage::FileStorage;
 
-/// Shared application state, cloned into every axum handler.
+/// Shared application state cloned into every axum handler.
 #[derive(Clone)]
 pub struct AppState {
     pub settings: Arc<Settings>,
     pub db: SqlitePool,
-    // Added in Fase 1 when clients are implemented:
-    // pub qdrant: Arc<clients::qdrant::QdrantClient>,
-    // pub embeddings: Arc<clients::embeddings::EmbeddingService>,
-    // pub eullm: Arc<clients::eullm::EullmClient>,
+    pub embeddings: Arc<EmbeddingService>,
+    pub qdrant: Arc<QdrantStore>,
+    pub eullm: Arc<EullmClient>,
+    pub storage: Arc<FileStorage>,
 }
 
 impl AppState {
-    pub fn new(settings: Settings, db: SqlitePool) -> Self {
+    pub fn new(
+        settings: Settings,
+        db: SqlitePool,
+        embeddings: EmbeddingService,
+        qdrant: QdrantStore,
+        eullm: EullmClient,
+    ) -> Self {
+        let storage = FileStorage::new(&settings.storage.documents_dir);
         Self {
             settings: Arc::new(settings),
             db,
+            embeddings: Arc::new(embeddings),
+            qdrant: Arc::new(qdrant),
+            eullm: Arc::new(eullm),
+            storage: Arc::new(storage),
         }
     }
 }

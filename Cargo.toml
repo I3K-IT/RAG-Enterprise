@@ -38,10 +38,11 @@ candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
 tokenizers = "0.20"
+hf-hub = "0.3"
 
 # --- Ingestione documenti ---
-# PDF testo:
-# pdf_oxide = "..."           # lift dal branch legacy / crates.io — da aggiungere in Fase 1
+# PDF testo: pdf_oxide (Rust puro, validato vs PyMuPDF)
+pdf_oxide = "0.3"
 # OCR (sistema libs: leptonica + pdfium — abilita con --features ocr):
 pdfium-render = { version = "0.8", features = ["sync"], optional = true }
 leptess = { version = "0.14", optional = true }
@@ -72,6 +73,7 @@ zstd = "0.13"
 tempfile = "3"
 walkdir = "2"
 tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 
 # --- Scheduler ---
 tokio-cron-scheduler = "0.13"

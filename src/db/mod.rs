@@ -1,4 +1,5 @@
 pub mod conversations;
+pub mod documents;
 pub mod users;
 
 use anyhow::Result;

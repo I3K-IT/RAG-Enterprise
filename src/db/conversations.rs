@@ -5,11 +5,12 @@
 
 use anyhow::Result;
 use chrono::Utc;
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 pub const MAX_MESSAGES_PER_USER: i64 = 100;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ChatMessageRow {
     pub id: i64,
     pub user_id: i64,

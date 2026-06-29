@@ -12,6 +12,7 @@ pub enum Role {
     User,
 }
 
+#[allow(dead_code)]
 impl Role {
     pub fn can_upload(self) -> bool {
         matches!(self, Role::Admin | Role::SuperUser)
