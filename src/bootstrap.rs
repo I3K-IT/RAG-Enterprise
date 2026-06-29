@@ -331,6 +331,9 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     // content-length corretto. I CDN con URL pre-firmati (HuggingFace LFS / S3)
     // spesso non rispondono correttamente alle HEAD — content-length mancante o 0.
     let probe = client.get(url).send().await.context("probe GET")?;
+    if !probe.status().is_success() {
+        bail!("HTTP {} — {display_name} ({url})", probe.status());
+    }
     let final_url = probe.url().to_string();
 
     let total: u64 = probe
