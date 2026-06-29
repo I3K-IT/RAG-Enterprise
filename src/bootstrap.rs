@@ -61,7 +61,10 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub async fn ensure_ready(eullm_url: &str) -> Result<()> {
+pub async fn ensure_ready(eullm_url: &str, embedding_model_id: &str) -> Result<()> {
+    // Embedding model: sempre necessario, scarica prima di avviare eullm
+    ensure_embedding_model(embedding_model_id).await?;
+
     if probe_api(eullm_url).await {
         tracing::info!("eullm già in ascolto su {eullm_url}");
         return Ok(());
@@ -187,6 +190,127 @@ async fn latest_eullm_version() -> String {
         tracing::warn!(fallback = EULLM_FALLBACK_VERSION, "versione eullm non verificabile");
         EULLM_FALLBACK_VERSION.to_owned()
     })
+}
+
+// ── Embedding model: controlla / scarica ─────────────────────────────────────
+
+async fn ensure_embedding_model(model_id: &str) -> Result<()> {
+    if crate::clients::embeddings::find_model_in_cache(model_id).is_some() {
+        tracing::info!("{model_id}: già in cache locale");
+        return Ok(());
+    }
+
+    let dest = crate::clients::embeddings::download_target_dir(model_id);
+    tracing::info!("{model_id}: non in cache, avvio download → {}", dest.display());
+    tokio::fs::create_dir_all(&dest)
+        .await
+        .with_context(|| format!("mkdir {}", dest.display()))?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("i3k-rag-engine/0.1")
+        .timeout(Duration::from_secs(300))
+        .build()
+        .context("reqwest client")?;
+
+    let base = format!("https://huggingface.co/{model_id}/resolve/main");
+
+    // File di configurazione piccoli: download diretto
+    for name in &["config.json", "tokenizer.json"] {
+        let path = dest.join(name);
+        if !path.exists() {
+            tracing::info!("{model_id}/{name}: download…");
+            download_small_file(&client, &format!("{base}/{name}"), &path)
+                .await
+                .with_context(|| format!("download {name}"))?;
+        }
+    }
+
+    // Pesi: download parallelo (8 connessioni) con temp file + rename atomico
+    let single = dest.join("model.safetensors");
+    if !single.exists() {
+        let tmp = dest.join("model.safetensors.tmp");
+        let _ = tokio::fs::remove_file(&tmp).await; // pulisce residui precedenti
+        match parallel_download(
+            &format!("{base}/model.safetensors"),
+            &tmp,
+            &format!("{model_id}/model.safetensors"),
+            DOWNLOAD_CONNECTIONS,
+        )
+        .await
+        {
+            Ok(()) => {
+                tokio::fs::rename(&tmp, &single)
+                    .await
+                    .context("rename model.safetensors")?;
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                tracing::warn!("model.safetensors non disponibile ({e:#}), provo sharded…");
+                download_sharded_model(&client, &base, &dest).await?;
+            }
+        }
+    }
+
+    tracing::info!("{model_id}: download completato");
+    Ok(())
+}
+
+async fn download_sharded_model(client: &reqwest::Client, base: &str, dest: &Path) -> Result<()> {
+    let idx_name = "model.safetensors.index.json";
+    let idx_path = dest.join(idx_name);
+    download_small_file(client, &format!("{base}/{idx_name}"), &idx_path)
+        .await
+        .context("download safetensors index")?;
+
+    let idx: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(&idx_path)?)
+            .context("parse safetensors.index.json")?;
+
+    let mut shards: Vec<String> = idx["weight_map"]
+        .as_object()
+        .context("weight_map mancante")?
+        .values()
+        .filter_map(|v| v.as_str())
+        .map(String::from)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    shards.sort();
+
+    for shard in shards {
+        let path = dest.join(&shard);
+        if !path.exists() {
+            let tmp = dest.join(format!("{shard}.tmp"));
+            let _ = tokio::fs::remove_file(&tmp).await;
+            parallel_download(
+                &format!("{base}/{shard}"),
+                &tmp,
+                &shard,
+                DOWNLOAD_CONNECTIONS,
+            )
+            .await
+            .with_context(|| format!("download shard {shard}"))?;
+            tokio::fs::rename(&tmp, &path)
+                .await
+                .with_context(|| format!("rename {shard}"))?;
+        }
+    }
+    Ok(())
+}
+
+async fn download_small_file(client: &reqwest::Client, url: &str, dest: &Path) -> Result<()> {
+    let bytes = client
+        .get(url)
+        .send()
+        .await
+        .context("GET")?
+        .error_for_status()
+        .context("HTTP")?
+        .bytes()
+        .await
+        .context("bytes")?;
+    tokio::fs::write(dest, &bytes).await.context("write")?;
+    Ok(())
 }
 
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
