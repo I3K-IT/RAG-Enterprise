@@ -73,6 +73,7 @@ zstd = "0.13"
 tempfile = "3"
 walkdir = "2"
 tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 
 # --- Scheduler ---
 tokio-cron-scheduler = "0.13"

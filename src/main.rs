@@ -48,9 +48,18 @@ async fn main() -> Result<()> {
     .context("qdrant init")?;
     tracing::info!("qdrant pronto");
 
+    let eullm = clients::eullm::EullmClient::new(
+        settings.eullm.url.clone(),
+        settings.eullm.model.clone(),
+        settings.eullm.num_ctx,
+        settings.eullm.num_predict,
+        settings.eullm.repeat_penalty,
+        settings.eullm.keep_alive,
+    );
+
     let port = settings.server.port;
     let host = settings.server.host.clone();
-    let app_state = state::AppState::new(settings, db, embeddings, qdrant);
+    let app_state = state::AppState::new(settings, db, embeddings, qdrant, eullm);
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)

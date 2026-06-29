@@ -2,6 +2,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::clients::embeddings::EmbeddingService;
+use crate::clients::eullm::EullmClient;
 use crate::clients::qdrant_store::QdrantStore;
 use crate::config::Settings;
 
@@ -12,6 +13,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub embeddings: Arc<EmbeddingService>,
     pub qdrant: Arc<QdrantStore>,
+    pub eullm: Arc<EullmClient>,
 }
 
 impl AppState {
@@ -20,12 +22,14 @@ impl AppState {
         db: SqlitePool,
         embeddings: EmbeddingService,
         qdrant: QdrantStore,
+        eullm: EullmClient,
     ) -> Self {
         Self {
             settings: Arc::new(settings),
             db,
             embeddings: Arc::new(embeddings),
             qdrant: Arc::new(qdrant),
+            eullm: Arc::new(eullm),
         }
     }
 }
