@@ -1,0 +1,11 @@
+/target/
+Cargo.lock
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+data/
+analytics_data/
+uploads/
+logs/

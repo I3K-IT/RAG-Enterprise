@@ -1,0 +1,106 @@
+[package]
+name = "i3k-rag-engine"
+version = "0.1.0"
+edition = "2021"
+description = "i3k RAG Engine — Community core (Rust port of RAG-Enterprise)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# --- Web / API ---
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "request-id", "fs"] }
+
+# --- Serializzazione / validazione ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+validator = { version = "0.18", features = ["derive"] }
+
+# --- Database: sqlx async, compile-checked, SQLite default / Postgres pronto ---
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres", "chrono", "uuid", "migrate"] }
+
+# --- Auth ---
+jsonwebtoken = "9"
+argon2 = "0.5"
+password-hash = "0.5"
+rand = "0.8"
+
+# --- HTTP client: eullm (LLM) + Qdrant snapshot ---
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+url = "2"
+
+# --- Vector DB ---
+qdrant-client = "1"
+
+# --- Embedding: bge-m3 via Candle (in-process, GPU/CPU, NO cuDNN) ---
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
+tokenizers = "0.20"
+
+# --- Ingestione documenti ---
+# PDF testo:
+# pdf_oxide = "..."           # lift dal branch legacy / crates.io — da aggiungere in Fase 1
+# OCR (sistema libs: leptonica + pdfium — abilita con --features ocr):
+pdfium-render = { version = "0.8", features = ["sync"], optional = true }
+leptess = { version = "0.14", optional = true }
+# Altri formati (no Tika nel Community core):
+calamine = "0.26"
+docx-rs = "0.4"
+quick-xml = "0.37"
+zip = "2"
+scraper = "0.21"
+pulldown-cmark = "0.12"
+csv = "1"
+
+# --- Chunking / text ---
+regex = "1"
+unicode-segmentation = "1"
+
+# --- Licensing (Pro: volume-cap + firma ED25519) ---
+ed25519-dalek = "2"
+
+# --- Tempo / ID ---
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# --- Backup / restore ---
+tar = "0.4"
+flate2 = "1"
+zstd = "0.13"
+tempfile = "3"
+walkdir = "2"
+tokio-util = { version = "0.7", features = ["io"] }
+
+# --- Scheduler ---
+tokio-cron-scheduler = "0.13"
+
+# --- Config ---
+config = "0.14"
+dotenvy = "0.15"
+
+# --- Logging / errori ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror = "2"
+anyhow = "1"
+
+[features]
+# "ocr"  — richiede leptonica + pdfium installati sul sistema.
+#           cargo build --features ocr
+ocr = ["leptess", "pdfium-render"]
+
+# "cuda" — abilita GPU per Candle (bge-m3 in VRAM). NO cuDNN: usa cudarc+cuBLAS.
+#           Richiede CUDA Toolkit (nvcc + libcublas-dev). NON richiede cuDNN.
+#           cargo build --features ocr,cuda
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+
+# ---- Fase 2 — Pro (decommentare quando si avvia Fase 2) ----
+# notify = "6"             # folder-watcher (watchdog equivalente)
+# llm_json = "1"           # JSON repair per extraction worker
+
+# ---- Fase 6 — Hardening (NON nell'MVP) ----
+# utoipa = "5"
+# metrics = "0.24"
+# sentry = "0.34"
