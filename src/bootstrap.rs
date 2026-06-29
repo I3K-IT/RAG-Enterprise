@@ -30,6 +30,10 @@ const EULLM_REPO: &str = "eullm/eullm";
 const EULLM_ASSET: &str = "eullm-linux-x64-cuda-12.8";
 const EULLM_FALLBACK_VERSION: &str = "0.6.6";
 
+// URL base per i file del modello embedding (bge-m3).
+// Cambia in "https://i3k.dev/models/bge-m3" quando i file sono caricati su i3k.dev.
+const BGE_M3_BASE_URL: &str = "https://huggingface.co/BAAI/bge-m3/resolve/main";
+
 struct ModelInfo {
     /// Nome logico (per logging e path della cartella in ~/.eullm/models/)
     name: &'static str,
@@ -61,7 +65,10 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub async fn ensure_ready(eullm_url: &str) -> Result<()> {
+pub async fn ensure_ready(eullm_url: &str, embedding_model_id: &str) -> Result<()> {
+    // Embedding model: sempre necessario, scarica prima di avviare eullm
+    ensure_embedding_model(embedding_model_id).await?;
+
     if probe_api(eullm_url).await {
         tracing::info!("eullm già in ascolto su {eullm_url}");
         return Ok(());
@@ -189,6 +196,127 @@ async fn latest_eullm_version() -> String {
     })
 }
 
+// ── Embedding model: controlla / scarica ─────────────────────────────────────
+
+async fn ensure_embedding_model(model_id: &str) -> Result<()> {
+    if crate::clients::embeddings::find_model_in_cache(model_id).is_some() {
+        tracing::info!("{model_id}: già in cache locale");
+        return Ok(());
+    }
+
+    let dest = crate::clients::embeddings::download_target_dir(model_id);
+    tracing::info!("{model_id}: non in cache, avvio download → {}", dest.display());
+    tokio::fs::create_dir_all(&dest)
+        .await
+        .with_context(|| format!("mkdir {}", dest.display()))?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("i3k-rag-engine/0.1")
+        .timeout(Duration::from_secs(300))
+        .build()
+        .context("reqwest client")?;
+
+    let base = BGE_M3_BASE_URL;
+
+    // File di configurazione piccoli: download diretto
+    for name in &["config.json", "tokenizer.json"] {
+        let path = dest.join(name);
+        if !path.exists() {
+            tracing::info!("{model_id}/{name}: download…");
+            download_small_file(&client, &format!("{base}/{name}"), &path)
+                .await
+                .with_context(|| format!("download {name}"))?;
+        }
+    }
+
+    // Pesi: download parallelo (8 connessioni) con temp file + rename atomico
+    let single = dest.join("model.safetensors");
+    if !single.exists() {
+        let tmp = dest.join("model.safetensors.tmp");
+        let _ = tokio::fs::remove_file(&tmp).await; // pulisce residui precedenti
+        match parallel_download(
+            &format!("{base}/model.safetensors"),
+            &tmp,
+            &format!("{model_id}/model.safetensors"),
+            DOWNLOAD_CONNECTIONS,
+        )
+        .await
+        {
+            Ok(()) => {
+                tokio::fs::rename(&tmp, &single)
+                    .await
+                    .context("rename model.safetensors")?;
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                tracing::warn!("model.safetensors non disponibile ({e:#}), provo sharded…");
+                download_sharded_model(&client, &base, &dest).await?;
+            }
+        }
+    }
+
+    tracing::info!("{model_id}: download completato");
+    Ok(())
+}
+
+async fn download_sharded_model(client: &reqwest::Client, base: &str, dest: &Path) -> Result<()> {
+    let idx_name = "model.safetensors.index.json";
+    let idx_path = dest.join(idx_name);
+    download_small_file(client, &format!("{base}/{idx_name}"), &idx_path)
+        .await
+        .context("download safetensors index")?;
+
+    let idx: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(&idx_path)?)
+            .context("parse safetensors.index.json")?;
+
+    let mut shards: Vec<String> = idx["weight_map"]
+        .as_object()
+        .context("weight_map mancante")?
+        .values()
+        .filter_map(|v| v.as_str())
+        .map(String::from)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    shards.sort();
+
+    for shard in shards {
+        let path = dest.join(&shard);
+        if !path.exists() {
+            let tmp = dest.join(format!("{shard}.tmp"));
+            let _ = tokio::fs::remove_file(&tmp).await;
+            parallel_download(
+                &format!("{base}/{shard}"),
+                &tmp,
+                &shard,
+                DOWNLOAD_CONNECTIONS,
+            )
+            .await
+            .with_context(|| format!("download shard {shard}"))?;
+            tokio::fs::rename(&tmp, &path)
+                .await
+                .with_context(|| format!("rename {shard}"))?;
+        }
+    }
+    Ok(())
+}
+
+async fn download_small_file(client: &reqwest::Client, url: &str, dest: &Path) -> Result<()> {
+    let bytes = client
+        .get(url)
+        .send()
+        .await
+        .context("GET")?
+        .error_for_status()
+        .context("HTTP")?
+        .bytes()
+        .await
+        .context("bytes")?;
+    tokio::fs::write(dest, &bytes).await.context("write")?;
+    Ok(())
+}
+
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
 
 /// Scarica `url` in `dest` usando `n` connessioni parallele con Range requests.
@@ -199,32 +327,34 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         .timeout(Duration::from_secs(3600))
         .build()?;
 
-    // HEAD per ottenere la dimensione totale
-    let head = client
-        .head(url)
-        .send()
-        .await
-        .context("HEAD request")?;
+    // Probe GET (non HEAD): segue i redirect CDN e restituisce l'URL finale con
+    // content-length corretto. I CDN con URL pre-firmati (HuggingFace LFS / S3)
+    // spesso non rispondono correttamente alle HEAD — content-length mancante o 0.
+    let probe = client.get(url).send().await.context("probe GET")?;
+    if !probe.status().is_success() {
+        bail!("HTTP {} — {display_name} ({url})", probe.status());
+    }
+    let final_url = probe.url().to_string();
 
-    let total: u64 = head
+    let total: u64 = probe
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let accepts_ranges = head
+    let accepts_ranges = probe
         .headers()
         .get("accept-ranges")
         .map(|v| v != "none")
-        .unwrap_or(true); // assumiamo supporto a meno di indicazione contraria
+        .unwrap_or(true);
 
     if total == 0 || !accepts_ranges {
-        tracing::info!("{display_name}: download singola connessione (Range non supportato)");
-        let bytes = client.get(url).send().await?.bytes().await?;
-        tokio::fs::write(dest, &bytes).await?;
+        tracing::info!("{display_name}: download streaming (Range non supportato)");
+        download_streaming(probe, dest, display_name).await?;
         return Ok(());
     }
+    drop(probe); // non scarichiamo il body — usiamo Range requests sull'URL finale
 
     // Pre-alloca il file
     {
@@ -285,11 +415,12 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         }
     });
 
-    // Chunk download tasks
+    // Chunk download tasks — usano l'URL finale (post-redirect) per evitare
+    // un redirect per ogni Range request
     let mut tasks = Vec::with_capacity(n);
     for (chunk_start, chunk_end) in ranges {
         let client = client.clone();
-        let url = url.to_owned();
+        let url = final_url.clone();
         let file = Arc::clone(&file);
         let dl = Arc::clone(&downloaded);
         tasks.push(tokio::spawn(async move {
@@ -307,6 +438,47 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     tracing::info!(
         "{display_name}: completato  {}  in {}",
         fmt_bytes(total),
+        fmt_eta(start.elapsed().as_secs()),
+    );
+    Ok(())
+}
+
+/// Streaming download (fallback quando il server non supporta Range o non fornisce content-length).
+/// Mostra progress ogni 10%.
+async fn download_streaming(
+    resp: reqwest::Response,
+    dest: &Path,
+    display_name: &str,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = tokio::fs::File::create(dest).await.context("crea file")?;
+    let mut downloaded: u64 = 0;
+    let mut stream = resp;
+    let start = Instant::now();
+    let mut last_pct = 0u64;
+    while let Some(chunk) = stream.chunk().await.context("chunk")? {
+        file.write_all(&chunk).await.context("write")?;
+        downloaded += chunk.len() as u64;
+        if total > 0 {
+            let pct = downloaded * 100 / total;
+            if pct / 10 != last_pct / 10 {
+                let elapsed = start.elapsed().as_secs_f64().max(0.001);
+                let rate = downloaded as f64 / elapsed;
+                let eta = fmt_eta(((total - downloaded) as f64 / rate) as u64);
+                tracing::info!(
+                    "{display_name}: {pct:.0}%  ({} / {})  ETA {eta}",
+                    fmt_bytes(downloaded),
+                    fmt_bytes(total),
+                );
+                last_pct = pct;
+            }
+        }
+    }
+    file.flush().await.context("flush")?;
+    tracing::info!(
+        "{display_name}: completato  {}  in {}",
+        fmt_bytes(downloaded.max(total)),
         fmt_eta(start.elapsed().as_secs()),
     );
     Ok(())

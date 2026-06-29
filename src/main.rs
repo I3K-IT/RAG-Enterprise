@@ -28,14 +28,15 @@ async fn main() -> Result<()> {
     );
 
     // Scarica eullm + modelli se assenti, poi avvia eullm in background.
-    bootstrap::ensure_ready(&settings.eullm.url).await?;
+    bootstrap::ensure_ready(&settings.eullm.url, &settings.embeddings.model_id).await?;
 
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
     db::users::seed_admin(&db, settings.auth.admin_default_password.as_deref()).await?;
 
-    // EmbeddingService: caricamento sincrono (bge-m3 ~2.3 GB, GPU/CPU).
     let model_id = settings.embeddings.model_id.clone();
+
+    // EmbeddingService: caricamento sincrono (bge-m3 ~2.3 GB, GPU/CPU).
     let embeddings = tokio::task::spawn_blocking(move || {
         clients::embeddings::EmbeddingService::load(&model_id)
     })
@@ -92,6 +93,7 @@ async fn main() -> Result<()> {
     axum::serve(listener, router).await?;
     Ok(())
 }
+
 
 fn open_browser(port: u16) {
     let url = format!("http://localhost:{port}");
