@@ -64,6 +64,15 @@ impl EmbeddingService {
             //   huggingface-cli download BAAI/bge-m3
             // then this path is taken only on first run.
             tracing::info!(model_id, "modello non in cache, scarico da HuggingFace Hub…");
+            // ureq (hf-hub's HTTP client) fails on proxy URLs without a scheme
+            // (e.g. "localhost:8080" instead of "http://localhost:8080") — common in conda envs.
+            for var in &["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] {
+                if let Ok(val) = std::env::var(var) {
+                    if !val.is_empty() && !val.contains("://") {
+                        std::env::set_var(var, format!("http://{val}"));
+                    }
+                }
+            }
             let api = ApiBuilder::new().build().context("hf_hub init")?;
             let repo = api.model(model_id.to_owned());
             let cfg = repo.get("config.json").context("fetch config.json")?;
@@ -216,14 +225,24 @@ fn resolve_model_dir(dir: &Path) -> Result<(PathBuf, PathBuf, Vec<PathBuf>)> {
 }
 
 fn hf_cache_base() -> PathBuf {
-    if let Ok(home) = std::env::var("HF_HOME") {
-        if Path::new(&home).is_absolute() {
-            return PathBuf::from(home).join("hub");
+    // Mirror huggingface-hub priority order:
+    // HUGGINGFACE_HUB_CACHE > HF_HOME/hub > XDG_CACHE_HOME/huggingface/hub > ~/.cache/huggingface/hub
+    if let Ok(v) = std::env::var("HUGGINGFACE_HUB_CACHE") {
+        let p = PathBuf::from(&v);
+        if p.is_absolute() {
+            return p;
         }
     }
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        if Path::new(&xdg).is_absolute() {
-            return PathBuf::from(xdg).join("huggingface").join("hub");
+    if let Ok(v) = std::env::var("HF_HOME") {
+        let p = PathBuf::from(&v);
+        if p.is_absolute() {
+            return p.join("hub");
+        }
+    }
+    if let Ok(v) = std::env::var("XDG_CACHE_HOME") {
+        let p = PathBuf::from(&v);
+        if p.is_absolute() {
+            return p.join("huggingface").join("hub");
         }
     }
     if let Ok(home) = std::env::var("HOME") {
@@ -233,14 +252,41 @@ fn hf_cache_base() -> PathBuf {
 }
 
 fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
+    // 1. HF hub layout: <cache>/models--BAAI--bge-m3/snapshots/<sha>/
     let model_slug = format!("models--{}", model_id.replace('/', "--"));
     let snapshots = hf_cache_base().join(&model_slug).join("snapshots");
-    std::fs::read_dir(&snapshots)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join("config.json").exists())
-        .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
+    tracing::debug!(path = %snapshots.display(), "ricerca snapshot HF locale");
+    if let Ok(rd) = std::fs::read_dir(&snapshots) {
+        if let Some(p) = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("config.json").exists())
+            .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
+        {
+            return Some(p);
+        }
+    }
+
+    // 2. sentence-transformers layout: ~/.cache/torch/sentence_transformers/BAAI_bge-m3/
+    let st_slug = model_id.replace('/', "_");
+    if let Ok(home) = std::env::var("HOME") {
+        let st_path = PathBuf::from(home)
+            .join(".cache")
+            .join("torch")
+            .join("sentence_transformers")
+            .join(&st_slug);
+        if st_path.join("config.json").exists() {
+            tracing::debug!(path = %st_path.display(), "trovato in cache sentence-transformers");
+            return Some(st_path);
+        }
+    }
+
+    tracing::warn!(
+        model_id,
+        hf_cache = %hf_cache_base().display(),
+        "modello non trovato in cache locale — verrà scaricato (richiede rete)"
+    );
+    None
 }
 
 fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {

@@ -20,7 +20,12 @@ async fn main() -> Result<()> {
     observability::init_tracing();
 
     let settings = config::Settings::load()?;
-    tracing::info!(host = %settings.server.host, port = settings.server.port, "starting i3k-rag-engine");
+    tracing::info!(
+        build = env!("BUILD_GIT_HASH"),
+        host = %settings.server.host,
+        port = settings.server.port,
+        "starting i3k-rag-engine"
+    );
 
     // Scarica eullm + modelli se assenti, poi avvia eullm in background.
     bootstrap::ensure_ready(&settings.eullm.url).await?;
