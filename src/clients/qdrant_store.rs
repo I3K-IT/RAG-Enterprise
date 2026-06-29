@@ -10,13 +10,13 @@
 //! INVARIANTE (CLAUDE.md): delete_document / reindex devono toccare SQLite E Qdrant.
 //! Un solo punto di ingresso per delete/reindex — mai aggirarlo.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use qdrant_client::{
-    Qdrant,
+    Payload, Qdrant,
     qdrant::{
-        CreateCollectionBuilder, Distance, SearchPointsBuilder,
-        VectorParamsBuilder, DeletePointsBuilder,
-        vectors_config::Config, VectorsConfig, Filter, Condition,
+        CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, Condition,
+        PointStruct, SearchPointsBuilder, UpsertPointsBuilder,
+        VectorParamsBuilder, VectorsConfig, vectors_config::Config,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -71,10 +71,47 @@ impl QdrantStore {
         Ok(())
     }
 
-    /// Upsert chunks in batches of 1000.
-    /// TODO Fase 1: implementazione completa con payload serializzato
-    pub async fn upsert(&self, _embeddings: &[Vec<f32>], _payloads: &[ChunkPayload]) -> Result<()> {
-        todo!("upsert — Fase 1: costruzione PointStruct + UpsertPointsBuilder")
+    /// Upsert chunks in batches of 1000 (parità con Python: BATCH_SIZE=1000, wait=true, id=UUID4).
+    pub async fn upsert(&self, embeddings: &[Vec<f32>], payloads: &[ChunkPayload]) -> Result<()> {
+        if embeddings.len() != payloads.len() {
+            anyhow::bail!(
+                "embeddings/payloads length mismatch: {} vs {}",
+                embeddings.len(),
+                payloads.len()
+            );
+        }
+
+        const BATCH: usize = 1000;
+        let mut i = 0;
+        while i < embeddings.len() {
+            let end = (i + BATCH).min(embeddings.len());
+            let points: Vec<PointStruct> = embeddings[i..end]
+                .iter()
+                .zip(payloads[i..end].iter())
+                .map(|(emb, p)| {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    let payload = Payload::try_from(serde_json::json!({
+                        "document_id":   p.document_id,
+                        "chunk_index":   p.chunk_index as i64,
+                        "filename":      p.filename,
+                        "upload_date":   p.upload_date,
+                        "text":          p.text,
+                        "chunk_size":    p.chunk_size as i64,
+                        "document_type": p.document_type,
+                    }))
+                    .expect("static JSON shape is always valid");
+                    PointStruct::new(id, emb.clone(), payload)
+                })
+                .collect();
+
+            self.client
+                .upsert_points(UpsertPointsBuilder::new(&self.collection, points).wait(true))
+                .await
+                .with_context(|| format!("upsert batch {i}..{end}"))?;
+
+            i = end;
+        }
+        Ok(())
     }
 
     /// Vector similarity search.
