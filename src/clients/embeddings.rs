@@ -12,7 +12,6 @@ use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use hf_hub::api::sync::ApiBuilder;
 use std::path::{Path, PathBuf};
 use tokenizers::Tokenizer;
 
@@ -58,25 +57,14 @@ impl EmbeddingService {
             tracing::info!(model_id, cache = %cache_dir.display(), "trovato nella cache HF locale");
             resolve_model_dir(&cache_dir)?
         } else {
-            // No local copy found — attempt download.
-            // Note: ureq reads https_proxy from the environment; if that variable
-            // is set without a scheme (e.g. "localhost:8080") it will fail with
-            // RelativeUrlWithoutBase. Pre-download the model with
-            //   huggingface-cli download BAAI/bge-m3
-            // then this path is taken only on first run.
-            tracing::info!(model_id, "modello non in cache, scarico da HuggingFace Hub…");
-            // ureq (hf-hub's HTTP client) crashes on proxy URLs without a scheme
-            // (e.g. conda sets https_proxy="localhost:8080" → RelativeUrlWithoutBase).
-            // Remove all proxy vars so hf-hub connects directly to huggingface.co.
-            for var in &["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"] {
-                std::env::remove_var(var);
-            }
-            let api = ApiBuilder::new().build().context("hf_hub init")?;
-            let repo = api.model(model_id.to_owned());
-            let cfg = repo.get("config.json").context("fetch config.json")?;
-            let tok = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
-            let weights = fetch_safetensors(&repo)?;
-            (cfg, tok, weights)
+            bail!(
+                "modello '{}' non trovato in cache locale ({}).\n\
+                 Il download avviene all'avvio: se questo errore persiste,\n\
+                 scaricalo manualmente con: huggingface-cli download {}",
+                model_id,
+                hf_cache_base().display(),
+                model_id
+            )
         };
 
         let config: BertConfig =
@@ -280,11 +268,13 @@ fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
         }
     }
 
-    tracing::warn!(
-        model_id,
-        hf_cache = %hf_cache_base().display(),
-        "modello non trovato in cache locale — verrà scaricato (richiede rete)"
-    );
+    // 3. Direct-download layout (placed by ensure_model_downloaded in main.rs)
+    let dl_dir = download_target_dir(model_id);
+    if dl_dir.join("config.json").exists() {
+        tracing::debug!(path = %dl_dir.display(), "trovato in direct-download dir");
+        return Some(dl_dir);
+    }
+
     None
 }
 
@@ -309,27 +299,19 @@ fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
     anyhow::bail!("nessun file safetensors trovato in {}", dir.display())
 }
 
-fn fetch_safetensors(repo: &hf_hub::api::sync::ApiRepo) -> Result<Vec<PathBuf>> {
-    // Prova file singolo
-    if let Ok(p) = repo.get("model.safetensors") {
-        return Ok(vec![p]);
+/// Directory dove il download diretto salva i file del modello.
+/// Struttura piatta (no symlink HF), cercata da find_in_hf_local_cache.
+pub fn download_target_dir(model_id: &str) -> PathBuf {
+    let slug = format!("models--{}", model_id.replace('/', "--"));
+    hf_cache_base().join(slug).join("direct-download")
+}
+
+/// Cerca il modello in tutte le cache locali note.
+/// Usato da main.rs prima del download per evitare download inutili.
+pub fn find_model_in_cache(model_id: &str) -> Option<PathBuf> {
+    let local = Path::new(model_id);
+    if local.is_dir() {
+        return Some(local.to_path_buf());
     }
-    // Sharded: leggi l'indice per la lista esatta dei file
-    if let Ok(idx_path) = repo.get("model.safetensors.index.json") {
-        #[derive(serde::Deserialize)]
-        struct Idx {
-            weight_map: std::collections::HashMap<String, String>,
-        }
-        let idx: Idx = serde_json::from_reader(std::fs::File::open(idx_path)?)
-            .context("parse safetensors.index.json")?;
-        let mut names: Vec<String> = idx.weight_map.into_values().collect();
-        names.sort();
-        names.dedup();
-        let mut files = Vec::with_capacity(names.len());
-        for name in names {
-            files.push(repo.get(&name).with_context(|| format!("shard {name}"))?);
-        }
-        return Ok(files);
-    }
-    bail!("nessun file safetensors trovato nel repo")
+    find_in_hf_local_cache(model_id)
 }
