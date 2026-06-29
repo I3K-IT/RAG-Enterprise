@@ -12,8 +12,8 @@ use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use hf_hub::api::sync::Api;
-use std::path::PathBuf;
+use hf_hub::api::sync::ApiBuilder;
+use std::path::{Path, PathBuf};
 use tokenizers::Tokenizer;
 
 pub const EMBED_DIM: usize = 1024;
@@ -44,11 +44,36 @@ impl EmbeddingService {
     }
 
     fn load_on(model_id: &str, device: &Device) -> Result<Self> {
-        let api = Api::new().context("hf_hub init")?;
-        let repo = api.model(model_id.to_owned());
+        // Support local directory paths (e.g. model_id = "/opt/models/bge-m3").
+        // Falls through to HF Hub for bare model IDs like "BAAI/bge-m3".
+        let local = Path::new(model_id);
+        let (config_path, tokenizer_path, weight_files) = if local.is_dir() {
+            tracing::info!(model_id, "carico embedding da directory locale");
+            let cfg = local.join("config.json");
+            let tok = local.join("tokenizer.json");
+            if !cfg.exists() {
+                anyhow::bail!("config.json non trovato in {}", local.display());
+            }
+            if !tok.exists() {
+                anyhow::bail!("tokenizer.json non trovato in {}", local.display());
+            }
+            let weights = collect_local_safetensors(local)?;
+            (cfg, tok, weights)
+        } else {
+            // ApiBuilder::new() uses the hardcoded default (https://huggingface.co)
+            // and does NOT read HF_ENDPOINT from the environment.
+            // This avoids the "RelativeUrlWithoutBase" error caused by conda or
+            // other tooling setting HF_ENDPOINT to an empty or relative string.
+            let api = ApiBuilder::new()
+                .build()
+                .context("hf_hub init")?;
+            let repo = api.model(model_id.to_owned());
 
-        let config_path = repo.get("config.json").context("fetch config.json")?;
-        let tokenizer_path = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
+            let cfg = repo.get("config.json").context("fetch config.json")?;
+            let tok = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
+            let weights = fetch_safetensors(&repo)?;
+            (cfg, tok, weights)
+        };
 
         let config: BertConfig =
             serde_json::from_reader(std::fs::File::open(&config_path).context("open config")?)
@@ -57,10 +82,8 @@ impl EmbeddingService {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("tokenizer load: {e}"))?;
 
-        tracing::info!(model_id, "recupero pesi (~2.3 GB)…");
-        let weight_files = fetch_safetensors(&repo)?;
-
-        // bge-m3 = XLM-RoBERTa: i weight keys sono prefissati con "roberta."
+        tracing::info!(model_id, "carico pesi embedding (~2.3 GB)…");
+        // bge-m3 = XLM-RoBERTa: weight keys prefissati con "roberta."
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&weight_files, DType::F32, device)
                 .context("VarBuilder mmap")?
@@ -180,6 +203,27 @@ fn device_is_cuda(dev: &Device) -> bool {
         let _ = dev;
         false
     }
+}
+
+fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
+    let single = dir.join("model.safetensors");
+    if single.exists() {
+        return Ok(vec![single]);
+    }
+    let idx_path = dir.join("model.safetensors.index.json");
+    if idx_path.exists() {
+        #[derive(serde::Deserialize)]
+        struct Idx {
+            weight_map: std::collections::HashMap<String, String>,
+        }
+        let idx: Idx = serde_json::from_reader(std::fs::File::open(&idx_path)?)
+            .context("parse safetensors.index.json")?;
+        let mut names: Vec<String> = idx.weight_map.into_values().collect();
+        names.sort();
+        names.dedup();
+        return Ok(names.into_iter().map(|n| dir.join(n)).collect());
+    }
+    anyhow::bail!("nessun file safetensors trovato in {}", dir.display())
 }
 
 fn fetch_safetensors(repo: &hf_hub::api::sync::ApiRepo) -> Result<Vec<PathBuf>> {
