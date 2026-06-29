@@ -29,12 +29,32 @@ async fn main() -> Result<()> {
     db::migrate(&db).await?;
     db::users::seed_admin(&db, settings.auth.admin_default_password.as_deref()).await?;
 
+    // EmbeddingService: caricamento sincrono (bge-m3 ~2.3 GB, GPU/CPU).
+    let model_id = settings.embeddings.model_id.clone();
+    let embeddings = tokio::task::spawn_blocking(move || {
+        clients::embeddings::EmbeddingService::load(&model_id)
+    })
+    .await
+    .context("join embedding load")?
+    .context("embedding service load")?;
+    tracing::info!("embedding service pronto");
+
+    // QdrantStore: connessione + crea collection se assente.
+    let qdrant = clients::qdrant_store::QdrantStore::new(
+        &settings.qdrant.url,
+        &settings.qdrant.collection,
+    )
+    .await
+    .context("qdrant init")?;
+    tracing::info!("qdrant pronto");
+
     let port = settings.server.port;
     let host = settings.server.host.clone();
-    let app_state = state::AppState::new(settings, db);
+    let app_state = state::AppState::new(settings, db, embeddings, qdrant);
 
     let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
         .with_context(|| format!("bind {addr}"))?;
     tracing::info!("server in ascolto su {addr}");
 

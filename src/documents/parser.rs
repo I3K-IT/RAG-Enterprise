@@ -1,62 +1,202 @@
 //! Document text extraction.
 //!
-//! Catena fedele al Python (MAPPA §9 — ocr_service.py):
+//! Catena fedele al Python (ocr_service.py):
 //! 1. .txt/.md/.csv  → lettura diretta UTF-8
-//! 2. PDF            → pdf_oxide se text_ratio > 0.5 E chars > 500
-//! 3. Scansioni      → pdfium-render (rasterizza) → leptess (Tesseract ita+eng)
-//! 4. DOCX/PPTX      → docx-rs / quick-xml
-//! 5. XLSX           → calamine
-//! 6. HTML           → scraper
-//! 7. MD             → pulldown-cmark
-//! 8. CSV            → csv crate
+//! 2. PDF            → pdf_oxide (text_ratio > 0.5 AND len > 500)
+//!                     → OCR opzionale se feature "ocr" attiva
+//! 3. DOCX           → docx-rs
+//! 4. XLSX/XLS       → calamine
+//! 5. HTML           → scraper
 //!
-//! Trigger OCR: text_ratio < 0.5 (come il Python is_scanned = text_ratio < 0.3,
-//! ma la soglia di accettazione è > 0.5 per PyMuPDF).
-//! Il chunking NON avviene qui — avviene in rag::chunker.
-//!
-//! VIETATO: lopdf (produce spazzatura per i PDF testuali).
+//! OCR trigger: text_ratio < 30% pagine con testo (come Python).
+//! Il chunking avviene in rag::chunker, NON qui.
 
 use std::path::Path;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-pub fn extract_text(path: &Path) -> Result<String> {
-    let ext = path.extension()
+/// Estrae il testo e il numero di pagine (None se non applicabile al formato).
+pub fn extract_text(path: &Path) -> Result<(String, Option<u32>)> {
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+
     match ext.as_str() {
-        "txt" | "md" | "csv" => read_utf8(path),
+        "txt" | "md" | "csv" => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("lettura {}", path.display()))?;
+            Ok((text, None))
+        }
         "pdf" => extract_pdf(path),
-        "docx" | "doc" => extract_docx(path),
-        "xlsx" | "xls" => extract_xlsx(path),
-        "html" | "htm" => extract_html(path),
-        _ => Err(anyhow::anyhow!("unsupported format: .{ext}")),
+        "docx" | "doc" => extract_docx(path).map(|t| (t, None)),
+        "xlsx" | "xls" => extract_xlsx(path).map(|t| (t, None)),
+        "html" | "htm" => extract_html(path).map(|t| (t, None)),
+        _ => Err(anyhow::anyhow!("formato non supportato: .{ext}")),
     }
 }
 
-fn read_utf8(path: &Path) -> Result<String> {
-    Ok(std::fs::read_to_string(path)?)
+// ── PDF ───────────────────────────────────────────────────────────────────────
+
+fn extract_pdf(path: &Path) -> Result<(String, Option<u32>)> {
+    let doc = pdf_oxide::PdfDocument::open(path)
+        .with_context(|| format!("pdf_oxide open {}", path.display()))?;
+    let page_count = doc.page_count().context("pdf_oxide page_count")? as u32;
+
+    let pages_to_check = (page_count as usize).min(10);
+    let mut pages_with_text = 0usize;
+    let mut full_text = String::new();
+
+    for i in 0..(page_count as usize) {
+        let page_text = doc.extract_text(i).unwrap_or_default();
+        let has_text = !page_text.trim().is_empty();
+        if has_text && i < pages_to_check {
+            pages_with_text += 1;
+        }
+        if has_text {
+            full_text.push_str(&page_text);
+            full_text.push('\n');
+        }
+    }
+
+    let text_ratio = if pages_to_check > 0 {
+        pages_with_text as f32 / pages_to_check as f32
+    } else {
+        0.0
+    };
+
+    if text_ratio > 0.5 && full_text.trim().len() > 500 {
+        tracing::info!(
+            file = %path.display(),
+            pages = page_count,
+            chars = full_text.len(),
+            "pdf_oxide ok"
+        );
+        return Ok((full_text, Some(page_count)));
+    }
+
+    // Testo insufficiente: OCR opzionale
+    #[cfg(feature = "ocr")]
+    {
+        let ocr_text = ocr_pdf(path, page_count)?;
+        return Ok((ocr_text, Some(page_count)));
+    }
+
+    tracing::warn!(
+        file = %path.display(),
+        text_ratio = format!("{:.0}%", text_ratio * 100.0).as_str(),
+        "PDF probabilmente scansionato — compila con --features ocr"
+    );
+    Ok((full_text, Some(page_count)))
 }
 
-fn extract_pdf(_path: &Path) -> Result<String> {
-    // TODO Fase 1:
-    // 1. pdf_oxide → get text + page_count → compute text_ratio
-    // 2. if text_ratio > 0.5 AND len > 500 → return text
-    // 3. else → pdfium-render rasterize → leptess OCR (ita+eng)
-    todo!("pdf extraction — Fase 1")
+#[cfg(feature = "ocr")]
+fn ocr_pdf(path: &Path, page_count: u32) -> Result<String> {
+    use pdfium_render::prelude::*;
+    use leptess::LepTess;
+
+    let pdfium = Pdfium::new(Pdfium::bind_to_system_library()?);
+    let doc = pdfium.load_pdf_from_file(path, None)?;
+    let mut full_text = String::new();
+
+    for i in 0..(page_count as usize) {
+        let page = doc.pages().get(i as u16)?;
+        let bitmap = page.render_with_config(
+            &PdfRenderConfig::new().set_target_width(1654).set_maximum_height(2339),
+        )?;
+        let raw = bitmap.as_image().to_rgba8().into_raw();
+        let mut lt = LepTess::new(None, "ita+eng")
+            .map_err(|e| anyhow::anyhow!("LepTess init: {e}"))?;
+        lt.set_image_from_mem(&raw)
+            .map_err(|e| anyhow::anyhow!("LepTess set_image: {e}"))?;
+        full_text.push_str(&lt.get_utf8_text().map_err(|e| anyhow::anyhow!("OCR: {e}"))?);
+        full_text.push('\n');
+    }
+    Ok(full_text)
 }
 
-fn extract_docx(_path: &Path) -> Result<String> {
-    // TODO Fase 1: docx-rs
-    todo!("docx extraction — Fase 1")
+// ── DOCX ──────────────────────────────────────────────────────────────────────
+
+fn extract_docx(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("lettura docx {}", path.display()))?;
+    let docx = docx_rs::read_docx(&bytes)
+        .map_err(|e| anyhow::anyhow!("docx parse: {e:?}"))?;
+    Ok(collect_docx_text(&docx))
 }
 
-fn extract_xlsx(_path: &Path) -> Result<String> {
-    // TODO Fase 1: calamine
-    todo!("xlsx extraction — Fase 1")
+fn collect_docx_text(docx: &docx_rs::Docx) -> String {
+    let mut out = String::new();
+    for child in &docx.document.children {
+        match child {
+            docx_rs::DocumentChild::Paragraph(para) => {
+                push_paragraph_text(&mut out, para);
+                out.push('\n');
+            }
+            docx_rs::DocumentChild::Table(table) => {
+                for row_child in &table.rows {
+                    let docx_rs::TableChild::TableRow(row) = row_child;
+                    for cell_child in &row.cells {
+                        let docx_rs::TableRowChild::TableCell(cell) = cell_child;
+                        for cell_content in &cell.children {
+                            if let docx_rs::TableCellContent::Paragraph(para) = cell_content {
+                                push_paragraph_text(&mut out, para);
+                                out.push('\t');
+                            }
+                        }
+                    }
+                    out.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
-fn extract_html(_path: &Path) -> Result<String> {
-    // TODO Fase 1: scraper
-    todo!("html extraction — Fase 1")
+fn push_paragraph_text(out: &mut String, para: &docx_rs::Paragraph) {
+    for pc in para.children() {
+        if let docx_rs::ParagraphChild::Run(run) = pc {
+            for rc in &run.children {
+                if let docx_rs::RunChild::Text(t) = rc {
+                    out.push_str(&t.text);
+                }
+            }
+        }
+    }
+}
+
+// ── XLSX ──────────────────────────────────────────────────────────────────────
+
+fn extract_xlsx(path: &Path) -> Result<String> {
+    use calamine::{open_workbook_auto, Reader};
+    let mut wb = open_workbook_auto(path)
+        .with_context(|| format!("calamine open {}", path.display()))?;
+    let mut out = String::new();
+    for sheet_name in wb.sheet_names().to_vec() {
+        if let Ok(range) = wb.worksheet_range(&sheet_name) {
+            for row in range.rows() {
+                let cells: Vec<String> = row.iter().map(|c| c.to_string()).collect();
+                out.push_str(&cells.join("\t"));
+                out.push('\n');
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ── HTML ──────────────────────────────────────────────────────────────────────
+
+fn extract_html(path: &Path) -> Result<String> {
+    let html = std::fs::read_to_string(path)
+        .with_context(|| format!("lettura html {}", path.display()))?;
+    let document = scraper::Html::parse_document(&html);
+    let selector =
+        scraper::Selector::parse("p, h1, h2, h3, h4, h5, h6, li, td, th").unwrap();
+    let text: Vec<String> = document
+        .select(&selector)
+        .map(|el| el.text().collect::<String>().trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(text.join("\n"))
 }
