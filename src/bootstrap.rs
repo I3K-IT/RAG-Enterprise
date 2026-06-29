@@ -31,27 +31,26 @@ const EULLM_ASSET: &str = "eullm-linux-x64-cuda-12.8";
 const EULLM_FALLBACK_VERSION: &str = "0.6.6";
 
 // URL base per i file del modello embedding (bge-m3).
-// Cambia in "https://i3k.dev/models/bge-m3" quando i file sono caricati su i3k.dev.
-const BGE_M3_BASE_URL: &str = "https://huggingface.co/BAAI/bge-m3/resolve/main";
+const BGE_M3_BASE_URL: &str = "https://i3k.dev/models/bge-m3";
 
 struct ModelInfo {
     /// Nome logico (per logging e path della cartella in ~/.eullm/models/)
     name: &'static str,
     /// Filename del GGUF
     file: &'static str,
-    /// URL HuggingFace (resolve/main)
+    /// URL di download
     url: &'static str,
 }
 
 const MODEL_14B: ModelInfo = ModelInfo {
     name: "qwen3-14b",
     file: "Qwen3-14B-Q4_K_M.gguf",
-    url: "https://huggingface.co/unsloth/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
+    url: "https://i3k.dev/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf",
 };
 const MODEL_8B: ModelInfo = ModelInfo {
     name: "qwen3-8b",
     file: "Qwen3-8B-Q4_K_M.gguf",
-    url: "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+    url: "https://i3k.dev/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf",
 };
 
 /// Connessioni parallele per ogni download (split Range).
