@@ -59,6 +59,19 @@ async fn main() -> Result<()> {
 
     let port = settings.server.port;
     let host = settings.server.host.clone();
+
+    // Start daily backup scheduler in background (non-blocking — errors logged).
+    let db_path = settings.database.url.trim_start_matches("sqlite://").to_owned();
+    let bk_db = db.clone();
+    let bk_qdrant_url = settings.qdrant.url.clone();
+    let bk_qdrant_coll = settings.qdrant.collection.clone();
+    let bk_dir = settings.backup.dir.clone();
+    tokio::spawn(async move {
+        if let Err(e) = backup::scheduler::start(bk_db, db_path, bk_qdrant_url, bk_qdrant_coll, bk_dir).await {
+            tracing::warn!(error = %e, "backup scheduler non avviato");
+        }
+    });
+
     let app_state = state::AppState::new(settings, db, embeddings, qdrant, eullm);
 
     let addr = format!("{host}:{port}");

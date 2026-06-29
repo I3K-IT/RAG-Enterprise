@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod auth;
 pub mod documents;
 pub mod health;
@@ -31,6 +32,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/documents/upload", post(documents::upload))
         .route("/api/documents/{id}", delete(documents::delete));
 
+    let admin_routes = Router::new()
+        .route("/api/admin/backup", post(admin::trigger_backup))
+        .route("/api/admin/backup/list", get(admin::list_backups));
+
     let query_routes = Router::new()
         .route("/api/query", post(query::query))
         .route("/api/query/stream", post(query::query_stream))
@@ -42,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes)
         .merge(doc_routes)
         .merge(query_routes)
+        .merge(admin_routes)
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
