@@ -44,31 +44,28 @@ impl EmbeddingService {
     }
 
     fn load_on(model_id: &str, device: &Device) -> Result<Self> {
-        // Support local directory paths (e.g. model_id = "/opt/models/bge-m3").
-        // Falls through to HF Hub for bare model IDs like "BAAI/bge-m3".
+        // Resolution order:
+        //   1. Explicit local directory (model_id starts with "/" or "./")
+        //   2. HF hub local cache (~/.cache/huggingface/hub) — bypasses HTTP entirely,
+        //      immune to malformed https_proxy / HF_ENDPOINT env vars
+        //   3. Download via hf_hub API (last resort, requires working network)
         let local = Path::new(model_id);
         let (config_path, tokenizer_path, weight_files) = if local.is_dir() {
             tracing::info!(model_id, "carico embedding da directory locale");
-            let cfg = local.join("config.json");
-            let tok = local.join("tokenizer.json");
-            if !cfg.exists() {
-                anyhow::bail!("config.json non trovato in {}", local.display());
-            }
-            if !tok.exists() {
-                anyhow::bail!("tokenizer.json non trovato in {}", local.display());
-            }
-            let weights = collect_local_safetensors(local)?;
-            (cfg, tok, weights)
+            resolve_model_dir(local)?
+        } else if let Some(cache_dir) = find_in_hf_local_cache(model_id) {
+            tracing::info!(model_id, cache = %cache_dir.display(), "trovato nella cache HF locale");
+            resolve_model_dir(&cache_dir)?
         } else {
-            // ApiBuilder::new() uses the hardcoded default (https://huggingface.co)
-            // and does NOT read HF_ENDPOINT from the environment.
-            // This avoids the "RelativeUrlWithoutBase" error caused by conda or
-            // other tooling setting HF_ENDPOINT to an empty or relative string.
-            let api = ApiBuilder::new()
-                .build()
-                .context("hf_hub init")?;
+            // No local copy found — attempt download.
+            // Note: ureq reads https_proxy from the environment; if that variable
+            // is set without a scheme (e.g. "localhost:8080") it will fail with
+            // RelativeUrlWithoutBase. Pre-download the model with
+            //   huggingface-cli download BAAI/bge-m3
+            // then this path is taken only on first run.
+            tracing::info!(model_id, "modello non in cache, scarico da HuggingFace Hub…");
+            let api = ApiBuilder::new().build().context("hf_hub init")?;
             let repo = api.model(model_id.to_owned());
-
             let cfg = repo.get("config.json").context("fetch config.json")?;
             let tok = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
             let weights = fetch_safetensors(&repo)?;
@@ -203,6 +200,47 @@ fn device_is_cuda(dev: &Device) -> bool {
         let _ = dev;
         false
     }
+}
+
+fn resolve_model_dir(dir: &Path) -> Result<(PathBuf, PathBuf, Vec<PathBuf>)> {
+    let config = dir.join("config.json");
+    let tokenizer = dir.join("tokenizer.json");
+    if !config.exists() {
+        anyhow::bail!("config.json non trovato in {}", dir.display());
+    }
+    if !tokenizer.exists() {
+        anyhow::bail!("tokenizer.json non trovato in {}", dir.display());
+    }
+    let weights = collect_local_safetensors(dir)?;
+    Ok((config, tokenizer, weights))
+}
+
+fn hf_cache_base() -> PathBuf {
+    if let Ok(home) = std::env::var("HF_HOME") {
+        if Path::new(&home).is_absolute() {
+            return PathBuf::from(home).join("hub");
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        if Path::new(&xdg).is_absolute() {
+            return PathBuf::from(xdg).join("huggingface").join("hub");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".cache").join("huggingface").join("hub");
+    }
+    PathBuf::from(".")
+}
+
+fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
+    let model_slug = format!("models--{}", model_id.replace('/', "--"));
+    let snapshots = hf_cache_base().join(&model_slug).join("snapshots");
+    std::fs::read_dir(&snapshots)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join("config.json").exists())
+        .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
 }
 
 fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
