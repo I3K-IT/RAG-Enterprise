@@ -30,6 +30,10 @@ const EULLM_REPO: &str = "eullm/eullm";
 const EULLM_ASSET: &str = "eullm-linux-x64-cuda-12.8";
 const EULLM_FALLBACK_VERSION: &str = "0.6.6";
 
+// URL base per i file del modello embedding (bge-m3).
+// Cambia in "https://i3k.dev/models/bge-m3" quando i file sono caricati su i3k.dev.
+const BGE_M3_BASE_URL: &str = "https://huggingface.co/BAAI/bge-m3/resolve/main";
+
 struct ModelInfo {
     /// Nome logico (per logging e path della cartella in ~/.eullm/models/)
     name: &'static str,
@@ -212,7 +216,7 @@ async fn ensure_embedding_model(model_id: &str) -> Result<()> {
         .build()
         .context("reqwest client")?;
 
-    let base = format!("https://huggingface.co/{model_id}/resolve/main");
+    let base = BGE_M3_BASE_URL;
 
     // File di configurazione piccoli: download diretto
     for name in &["config.json", "tokenizer.json"] {
@@ -323,32 +327,31 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         .timeout(Duration::from_secs(3600))
         .build()?;
 
-    // HEAD per ottenere la dimensione totale
-    let head = client
-        .head(url)
-        .send()
-        .await
-        .context("HEAD request")?;
+    // Probe GET (non HEAD): segue i redirect CDN e restituisce l'URL finale con
+    // content-length corretto. I CDN con URL pre-firmati (HuggingFace LFS / S3)
+    // spesso non rispondono correttamente alle HEAD — content-length mancante o 0.
+    let probe = client.get(url).send().await.context("probe GET")?;
+    let final_url = probe.url().to_string();
 
-    let total: u64 = head
+    let total: u64 = probe
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let accepts_ranges = head
+    let accepts_ranges = probe
         .headers()
         .get("accept-ranges")
         .map(|v| v != "none")
-        .unwrap_or(true); // assumiamo supporto a meno di indicazione contraria
+        .unwrap_or(true);
 
     if total == 0 || !accepts_ranges {
-        tracing::info!("{display_name}: download singola connessione (Range non supportato)");
-        let bytes = client.get(url).send().await?.bytes().await?;
-        tokio::fs::write(dest, &bytes).await?;
+        tracing::info!("{display_name}: download streaming (Range non supportato)");
+        download_streaming(probe, dest, display_name).await?;
         return Ok(());
     }
+    drop(probe); // non scarichiamo il body — usiamo Range requests sull'URL finale
 
     // Pre-alloca il file
     {
@@ -409,11 +412,12 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         }
     });
 
-    // Chunk download tasks
+    // Chunk download tasks — usano l'URL finale (post-redirect) per evitare
+    // un redirect per ogni Range request
     let mut tasks = Vec::with_capacity(n);
     for (chunk_start, chunk_end) in ranges {
         let client = client.clone();
-        let url = url.to_owned();
+        let url = final_url.clone();
         let file = Arc::clone(&file);
         let dl = Arc::clone(&downloaded);
         tasks.push(tokio::spawn(async move {
@@ -431,6 +435,47 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     tracing::info!(
         "{display_name}: completato  {}  in {}",
         fmt_bytes(total),
+        fmt_eta(start.elapsed().as_secs()),
+    );
+    Ok(())
+}
+
+/// Streaming download (fallback quando il server non supporta Range o non fornisce content-length).
+/// Mostra progress ogni 10%.
+async fn download_streaming(
+    resp: reqwest::Response,
+    dest: &Path,
+    display_name: &str,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = tokio::fs::File::create(dest).await.context("crea file")?;
+    let mut downloaded: u64 = 0;
+    let mut stream = resp;
+    let start = Instant::now();
+    let mut last_pct = 0u64;
+    while let Some(chunk) = stream.chunk().await.context("chunk")? {
+        file.write_all(&chunk).await.context("write")?;
+        downloaded += chunk.len() as u64;
+        if total > 0 {
+            let pct = downloaded * 100 / total;
+            if pct / 10 != last_pct / 10 {
+                let elapsed = start.elapsed().as_secs_f64().max(0.001);
+                let rate = downloaded as f64 / elapsed;
+                let eta = fmt_eta(((total - downloaded) as f64 / rate) as u64);
+                tracing::info!(
+                    "{display_name}: {pct:.0}%  ({} / {})  ETA {eta}",
+                    fmt_bytes(downloaded),
+                    fmt_bytes(total),
+                );
+                last_pct = pct;
+            }
+        }
+    }
+    file.flush().await.context("flush")?;
+    tracing::info!(
+        "{display_name}: completato  {}  in {}",
+        fmt_bytes(downloaded.max(total)),
         fmt_eta(start.elapsed().as_secs()),
     );
     Ok(())
