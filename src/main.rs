@@ -13,6 +13,7 @@ mod rag;
 mod state;
 
 use anyhow::Result;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,8 +28,22 @@ async fn main() -> Result<()> {
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
 
+    let port = settings.server.port;
     let _state = state::AppState::new(settings, db);
+
+    // Apre il browser dopo che il server è in ascolto (500 ms di margine).
+    // Il tokio::spawn viene schedulato ora; la chiamata xdg-open parte dopo il bind axum.
+    open_browser(port);
 
     // TODO Fase 1: build router + bind axum server
     todo!("axum router + server bind — Fase 1")
+}
+
+fn open_browser(port: u16) {
+    let url = format!("http://localhost:{port}");
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        tracing::info!("apertura browser: {url}");
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    });
 }
