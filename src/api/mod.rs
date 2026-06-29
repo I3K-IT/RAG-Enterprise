@@ -9,6 +9,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::AppState;
 
@@ -43,6 +44,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chat/history", get(query::chat_history))
         .route("/api/chat/history", delete(query::delete_chat_history));
 
+    // SPA fallback: serve frontend/dist for all non-API routes
+    let spa = ServeDir::new("frontend/dist")
+        .not_found_service(ServeFile::new("frontend/dist/index.html"));
+
     Router::new()
         .merge(public)
         .merge(auth_routes)
@@ -51,4 +56,5 @@ pub fn router(state: AppState) -> Router {
         .merge(admin_routes)
         .layer(CorsLayer::permissive())
         .with_state(state)
+        .fallback_service(spa)
 }
