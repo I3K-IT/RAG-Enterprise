@@ -20,7 +20,7 @@ use sqlx::SqlitePool;
 /// Returns the path of the `.tar.gz` file created.
 pub async fn create_backup(
     db: &SqlitePool,
-    db_path: &str,
+    _db_path: &str,
     qdrant_url: &str,
     qdrant_collection: &str,
     backup_dir: &str,

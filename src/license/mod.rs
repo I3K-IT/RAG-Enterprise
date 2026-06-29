@@ -12,6 +12,7 @@
 
 /// Check if the page limit allows ingesting `new_pages` more pages.
 /// Community always returns Ok.
+#[allow(dead_code)]
 pub fn check_page_limit(_current_pages: u64, _new_pages: u64) -> anyhow::Result<()> {
     // Community: unlimited
     Ok(())

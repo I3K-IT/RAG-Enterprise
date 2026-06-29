@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DocumentMeta {
     pub document_id: String,

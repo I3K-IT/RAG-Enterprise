@@ -16,6 +16,7 @@ use hf_hub::api::sync::ApiBuilder;
 use std::path::{Path, PathBuf};
 use tokenizers::Tokenizer;
 
+#[allow(dead_code)]
 pub const EMBED_DIM: usize = 1024;
 const GPU_BATCH: usize = 4;
 const CPU_BATCH: usize = 2;
@@ -64,14 +65,11 @@ impl EmbeddingService {
             //   huggingface-cli download BAAI/bge-m3
             // then this path is taken only on first run.
             tracing::info!(model_id, "modello non in cache, scarico da HuggingFace Hub…");
-            // ureq (hf-hub's HTTP client) fails on proxy URLs without a scheme
-            // (e.g. "localhost:8080" instead of "http://localhost:8080") — common in conda envs.
-            for var in &["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] {
-                if let Ok(val) = std::env::var(var) {
-                    if !val.is_empty() && !val.contains("://") {
-                        std::env::set_var(var, format!("http://{val}"));
-                    }
-                }
+            // ureq (hf-hub's HTTP client) crashes on proxy URLs without a scheme
+            // (e.g. conda sets https_proxy="localhost:8080" → RelativeUrlWithoutBase).
+            // Remove all proxy vars so hf-hub connects directly to huggingface.co.
+            for var in &["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"] {
+                std::env::remove_var(var);
             }
             let api = ApiBuilder::new().build().context("hf_hub init")?;
             let repo = api.model(model_id.to_owned());
@@ -181,6 +179,7 @@ impl EmbeddingService {
 }
 
 /// L2-normalizza un vettore di embedding in place.
+#[allow(dead_code)]
 pub fn l2_normalize(v: &mut Vec<f32>) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-12 {

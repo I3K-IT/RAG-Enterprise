@@ -2,6 +2,7 @@ use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
 use serde_json::json;
 use thiserror::Error;
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("authentication failed")]
@@ -38,4 +39,5 @@ impl IntoResponse for AppError {
     }
 }
 
+#[allow(dead_code)]
 pub type AppResult<T> = Result<T, AppError>;

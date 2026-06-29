@@ -20,6 +20,7 @@ pub struct UserRow {
     pub role: String,
     pub created_at: String,
     pub last_login: Option<String>,
+    #[allow(dead_code)]
     pub is_active: i64,
 }
 

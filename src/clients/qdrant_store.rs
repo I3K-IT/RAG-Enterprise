@@ -21,6 +21,7 @@ use qdrant_client::{
 };
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 pub const COLLECTION: &str = "rag_documents";
 pub const VECTOR_DIM: u64 = 1024;
 
@@ -37,6 +38,7 @@ pub struct ChunkPayload {
 
 #[derive(Debug)]
 pub struct SearchHit {
+    #[allow(dead_code)]
     pub id: String,
     pub similarity: f32,
     pub payload: ChunkPayload,

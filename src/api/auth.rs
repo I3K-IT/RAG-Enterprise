@@ -50,6 +50,7 @@ pub struct PasswordChangeRequest {
     pub new_password: String,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub struct UserCreateRequest {
     pub username: String,

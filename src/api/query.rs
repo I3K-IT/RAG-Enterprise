@@ -24,6 +24,7 @@ use crate::db;
 use crate::rag::{prompt, retrieval, sources::Source};
 use crate::state::AppState;
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub struct QueryRequest {
     pub query: String,
