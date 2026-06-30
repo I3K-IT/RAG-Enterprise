@@ -63,30 +63,68 @@ fn load_manifest() -> Result<Manifest> {
     toml::from_str(MANIFEST_STR).context("manifest.toml non valido — bug di compilazione")
 }
 
-// ── Target detection (compile-time) ──────────────────────────────────────────
+// ── Target detection (runtime) ────────────────────────────────────────────────
 
-/// Elenco di target supportati dal binario corrente.
-/// I componenti con target non presente qui vengono saltati.
-fn current_targets() -> &'static [&'static str] {
-    #[cfg(all(target_arch = "x86_64", target_os = "linux", feature = "cuda"))]
+/// Target supportati, ordinati dal più specifico al più generico.
+/// L'ordine è importante: `select_components` prende il PRIMO match per dest.
+///
+/// Schema target:
+///   linux-x86_64-cuda   — Linux x86_64 con GPU NVIDIA (driver caricato)
+///   linux-x86_64        — Linux x86_64 CPU-only / fallback
+///   (future: darwin-arm64, darwin-x86_64, windows-x86_64, linux-aarch64…)
+fn current_targets() -> Vec<&'static str> {
+    #[cfg(target_os = "linux")]
     {
-        &["linux-x86_64", "linux-x86_64-cuda"]
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut t = Vec::new();
+            // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
+            if std::path::Path::new("/dev/nvidia0").exists() {
+                t.push("linux-x86_64-cuda");
+            }
+            t.push("linux-x86_64");
+            return t;
+        }
+        #[cfg(target_arch = "aarch64")]
+        return vec!["linux-aarch64"];
     }
-    #[cfg(all(target_arch = "x86_64", target_os = "linux", not(feature = "cuda")))]
+    #[cfg(target_os = "macos")]
     {
-        &["linux-x86_64"]
+        #[cfg(target_arch = "aarch64")]
+        return vec!["darwin-arm64"];
+        #[cfg(target_arch = "x86_64")]
+        return vec!["darwin-x86_64"];
     }
-    #[cfg(not(any(all(target_arch = "x86_64", target_os = "linux"))))]
-    {
-        &[]
-    }
+    #[cfg(target_os = "windows")]
+    return vec!["windows-x86_64"];
+    vec![]
 }
 
-fn component_selected(comp: &Component) -> bool {
-    match &comp.target {
-        None => true, // modello — sempre
-        Some(t) => current_targets().contains(&t.as_str()),
+/// Seleziona i componenti da scaricare/verificare.
+///
+/// Regola: per ogni `dest`, vince il componente col target PIÙ SPECIFICO
+/// (primo in `targets`). I modelli (nessun target) vengono sempre inclusi.
+/// Questo garantisce che su una macchina CUDA si scarichi la variante CUDA
+/// e non anche quella CPU-only, anche se entrambe sono nel manifest.
+fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Component> {
+    let mut selected: Vec<&'a Component> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1. Binari: in ordine di priorità (più specifico prima)
+    for &tgt in targets {
+        for comp in &manifest.component {
+            if comp.target.as_deref() == Some(tgt) && seen.insert(comp.dest.clone()) {
+                selected.push(comp);
+            }
+        }
     }
+    // 2. Modelli (nessun target — universali)
+    for comp in &manifest.component {
+        if comp.target.is_none() && seen.insert(comp.dest.clone()) {
+            selected.push(comp);
+        }
+    }
+    selected
 }
 
 // ── Risoluzione path ──────────────────────────────────────────────────────────
@@ -117,6 +155,8 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
+    let targets = current_targets();
+    let selected = select_components(&manifest, &targets);
 
     // Struttura directory
     for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {
@@ -126,10 +166,10 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     }
 
     // Pre-check spazio disco
-    check_disk_space(&manifest, &data_dir)?;
+    check_disk_space(&selected, &data_dir)?;
 
     // Scarica/verifica ogni componente selezionato
-    for comp in manifest.component.iter().filter(|c| component_selected(c)) {
+    for comp in &selected {
         let dest = resolve_dest(&comp.dest, &data_dir);
         ensure_component(comp, &dest).await?;
     }
@@ -142,7 +182,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         if probe_url(&format!("{qdrant_url}/healthz")).await {
             tracing::info!("qdrant già in ascolto su {qdrant_url}");
         } else {
-            match find_component(&manifest, "qdrant", &data_dir) {
+            match find_component(&manifest, "qdrant", &data_dir, &targets) {
                 Some(bin) => {
                     let storage = data_dir.join("storage/qdrant");
                     children.push(spawn_qdrant(&bin, &storage)?);
@@ -152,19 +192,22 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
             }
         }
 
-        // eullm
-        let eullm_url = &settings.eullm.url;
-        if probe_url(&format!("{eullm_url}/api/tags")).await {
-            tracing::info!("eullm già in ascolto su {eullm_url}");
-        } else {
-            match (find_component(&manifest, "eullm", &data_dir),
-                   find_component(&manifest, "qwen3-14b", &data_dir)) {
-                (Some(bin), Some(gguf)) => {
-                    children.push(spawn_eullm(&bin, &gguf)?);
-                    tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
-                }
-                _ => tracing::warn!("eullm non selezionato per questa piattaforma (no CUDA?)"),
+        // eullm — decisione di avvio basata su presenza su disco, non sul target.
+        // Il target filtra i DOWNLOAD (non scaricare CUDA binary su CPU);
+        // ma se il file c'è, lo avviamo — il RAG dipende da eullm.
+        match (
+            find_by_name(&manifest, "eullm", &data_dir),
+            find_by_name(&manifest, "qwen3-14b", &data_dir),
+        ) {
+            (Some(bin), Some(gguf)) => {
+                kill_stale_process(&bin).await;
+                children.push(spawn_eullm(&bin, &gguf)?);
+                tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
             }
+            _ => tracing::warn!(
+                "eullm o qwen3-14b non trovati in {} — RAG senza LLM",
+                data_dir.display()
+            ),
         }
     } else {
         tracing::info!("manage_subprocesses=false — processi esterni attesi");
@@ -327,14 +370,14 @@ fn sha256_file(path: &Path) -> Result<String> {
 
 // ── Spazio disco ──────────────────────────────────────────────────────────────
 
-fn check_disk_space(manifest: &Manifest, data_dir: &Path) -> Result<()> {
+fn check_disk_space(selected: &[&Component], data_dir: &Path) -> Result<()> {
     struct Item<'a> {
         label: &'a str,
         size: u64,
     }
 
     let mut needed: Vec<Item> = Vec::new();
-    for comp in manifest.component.iter().filter(|c| component_selected(c)) {
+    for comp in selected {
         let dest = resolve_dest(&comp.dest, data_dir);
         if comp.size > 0 && !dest.exists() {
             needed.push(Item { label: &comp.name, size: comp.size });
@@ -399,13 +442,46 @@ fn free_space_bytes(path: &Path) -> u64 {
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
 
-fn find_component(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<PathBuf> {
+/// Cerca per nome con priorità target (usato per decidere cosa avviare come qdrant).
+/// Itera i target dal più specifico: prende il primo match.
+fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&str]) -> Option<PathBuf> {
+    for &tgt in targets {
+        if let Some(comp) = manifest.component.iter()
+            .find(|c| c.name == name && c.target.as_deref() == Some(tgt))
+        {
+            return Some(resolve_dest(&comp.dest, data_dir));
+        }
+    }
+    None
+}
+
+/// Cerca per nome senza filtro target (usato per decidere cosa AVVIARE).
+/// Il binario potrebbe essere già su disco anche se il target non combacia
+/// (es. scaricato in una sessione precedente, o trasferito manualmente).
+fn find_by_name(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<PathBuf> {
     manifest
         .component
         .iter()
-        .filter(|c| component_selected(c))
         .find(|c| c.name == name)
         .map(|c| resolve_dest(&c.dest, data_dir))
+        .filter(|p| p.exists()) // avvia solo se il file è effettivamente presente
+}
+
+/// Termina eventuali istanze stantie identificate dal percorso del binario.
+/// Usata prima di spawn_eullm: garantisce che solo la nostra istanza (con il
+/// nostro modello) sia in ascolto. Best-effort: errori ignorati.
+async fn kill_stale_process(bin: &Path) {
+    let bin_str = bin.display().to_string();
+    tracing::debug!("kill_stale_process: pkill -f {bin_str}");
+    let _ = Command::new("pkill")
+        .arg("-f")
+        .arg(&bin_str)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    // Breve attesa affinché la porta venga liberata dal kernel
+    tokio::time::sleep(Duration::from_millis(800)).await;
 }
 
 fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
