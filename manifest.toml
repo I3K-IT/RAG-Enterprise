@@ -1,10 +1,20 @@
 # Componenti pinned — sha256 verificato, target per i binari.
 #
 # Modelli (kind="model"): nessun campo target — scaricati su ogni piattaforma.
-# Binari (kind="binary"): campo target obbligatorio — il bootstrap scarica
-#   solo quelli che corrispondono alla piattaforma corrente.
-#   Piattaforme note: "linux-x86_64", "linux-x86_64-cuda".
-#   Piattaforme future (Windows, macOS) = entry aggiuntive, nessun redesign.
+#
+# Binari (kind="binary"): campo target obbligatorio.
+#   Il bootstrap rileva la piattaforma a runtime e scarica la variante più
+#   specifica disponibile. Per ogni dest, vince il target più specifico:
+#     linux-x86_64-cuda  →  Linux x86_64 con GPU NVIDIA (driver caricato)
+#     linux-x86_64       →  Linux x86_64 CPU/fallback
+#     linux-aarch64      →  Linux ARM64 (futuro)
+#     darwin-arm64       →  macOS Apple Silicon (futuro)
+#     darwin-x86_64      →  macOS Intel (futuro)
+#     windows-x86_64     →  Windows 64-bit (futuro)
+#
+#   eullm è SEMPRE richiesto (senza di lui il RAG non funziona).
+#   Aggiungere una entry per ogni variante disponibile; il bootstrap
+#   seleziona automaticamente quella giusta.
 #
 # dest: usa il placeholder {data} (risolto a runtime come data_dir).
 # Pre-check disco = somma delle size dei componenti mancanti (nessun archivio).

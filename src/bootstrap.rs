@@ -65,26 +65,66 @@ fn load_manifest() -> Result<Manifest> {
 
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
-/// Rileva i target supportati a runtime (non a compile-time).
-/// CUDA: controlla /dev/nvidia0 — esiste se il driver NVIDIA è caricato.
-/// Così funziona sia con `cargo build` sia con `cargo build --features cuda`.
+/// Target supportati, ordinati dal più specifico al più generico.
+/// L'ordine è importante: `select_components` prende il PRIMO match per dest.
+///
+/// Schema target:
+///   linux-x86_64-cuda   — Linux x86_64 con GPU NVIDIA (driver caricato)
+///   linux-x86_64        — Linux x86_64 CPU-only / fallback
+///   (future: darwin-arm64, darwin-x86_64, windows-x86_64, linux-aarch64…)
 fn current_targets() -> Vec<&'static str> {
-    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
-    return vec![];
-
-    let mut t = vec!["linux-x86_64"];
-    if std::path::Path::new("/dev/nvidia0").exists() {
-        t.push("linux-x86_64-cuda");
-        tracing::debug!("CUDA rilevata (/dev/nvidia0 presente) — target linux-x86_64-cuda abilitato");
+    #[cfg(target_os = "linux")]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut t = Vec::new();
+            // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
+            if std::path::Path::new("/dev/nvidia0").exists() {
+                t.push("linux-x86_64-cuda");
+            }
+            t.push("linux-x86_64");
+            return t;
+        }
+        #[cfg(target_arch = "aarch64")]
+        return vec!["linux-aarch64"];
     }
-    t
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "aarch64")]
+        return vec!["darwin-arm64"];
+        #[cfg(target_arch = "x86_64")]
+        return vec!["darwin-x86_64"];
+    }
+    #[cfg(target_os = "windows")]
+    return vec!["windows-x86_64"];
+    vec![]
 }
 
-fn component_selected(comp: &Component, targets: &[&str]) -> bool {
-    match &comp.target {
-        None => true, // modello — sempre
-        Some(t) => targets.contains(&t.as_str()),
+/// Seleziona i componenti da scaricare/verificare.
+///
+/// Regola: per ogni `dest`, vince il componente col target PIÙ SPECIFICO
+/// (primo in `targets`). I modelli (nessun target) vengono sempre inclusi.
+/// Questo garantisce che su una macchina CUDA si scarichi la variante CUDA
+/// e non anche quella CPU-only, anche se entrambe sono nel manifest.
+fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Component> {
+    let mut selected: Vec<&'a Component> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1. Binari: in ordine di priorità (più specifico prima)
+    for &tgt in targets {
+        for comp in &manifest.component {
+            if comp.target.as_deref() == Some(tgt) && seen.insert(comp.dest.clone()) {
+                selected.push(comp);
+            }
+        }
     }
+    // 2. Modelli (nessun target — universali)
+    for comp in &manifest.component {
+        if comp.target.is_none() && seen.insert(comp.dest.clone()) {
+            selected.push(comp);
+        }
+    }
+    selected
 }
 
 // ── Risoluzione path ──────────────────────────────────────────────────────────
@@ -116,6 +156,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
     let targets = current_targets();
+    let selected = select_components(&manifest, &targets);
 
     // Struttura directory
     for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {
@@ -125,10 +166,10 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     }
 
     // Pre-check spazio disco
-    check_disk_space(&manifest, &data_dir, &targets)?;
+    check_disk_space(&selected, &data_dir)?;
 
     // Scarica/verifica ogni componente selezionato
-    for comp in manifest.component.iter().filter(|c| component_selected(c, &targets)) {
+    for comp in &selected {
         let dest = resolve_dest(&comp.dest, &data_dir);
         ensure_component(comp, &dest).await?;
     }
@@ -329,14 +370,14 @@ fn sha256_file(path: &Path) -> Result<String> {
 
 // ── Spazio disco ──────────────────────────────────────────────────────────────
 
-fn check_disk_space(manifest: &Manifest, data_dir: &Path, targets: &[&str]) -> Result<()> {
+fn check_disk_space(selected: &[&Component], data_dir: &Path) -> Result<()> {
     struct Item<'a> {
         label: &'a str,
         size: u64,
     }
 
     let mut needed: Vec<Item> = Vec::new();
-    for comp in manifest.component.iter().filter(|c| component_selected(c, targets)) {
+    for comp in selected {
         let dest = resolve_dest(&comp.dest, data_dir);
         if comp.size > 0 && !dest.exists() {
             needed.push(Item { label: &comp.name, size: comp.size });
@@ -401,14 +442,17 @@ fn free_space_bytes(path: &Path) -> u64 {
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
 
-/// Cerca per nome E target (usato per decidere cosa scaricare).
+/// Cerca per nome con priorità target (usato per decidere cosa avviare come qdrant).
+/// Itera i target dal più specifico: prende il primo match.
 fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&str]) -> Option<PathBuf> {
-    manifest
-        .component
-        .iter()
-        .filter(|c| component_selected(c, targets))
-        .find(|c| c.name == name)
-        .map(|c| resolve_dest(&c.dest, data_dir))
+    for &tgt in targets {
+        if let Some(comp) = manifest.component.iter()
+            .find(|c| c.name == name && c.target.as_deref() == Some(tgt))
+        {
+            return Some(resolve_dest(&comp.dest, data_dir));
+        }
+    }
+    None
 }
 
 /// Cerca per nome senza filtro target (usato per decidere cosa AVVIARE).
