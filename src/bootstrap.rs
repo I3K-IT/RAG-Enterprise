@@ -151,20 +151,22 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
             }
         }
 
-        // eullm — bootstrap possiede il ciclo di vita: kill del processo stantio
-        // (sessione precedente crashata/SIGKILL'd), poi spawn con il nostro GGUF.
-        // NON si fa probe "già in ascolto": un eullm stantio potrebbe usare il
-        // modello sbagliato. Bootstrap è l'UNICA autorità che avvia eullm.
+        // eullm — decisione di avvio basata su presenza su disco, non sul target.
+        // Il target filtra i DOWNLOAD (non scaricare CUDA binary su CPU);
+        // ma se il file c'è, lo avviamo — il RAG dipende da eullm.
         match (
-            find_component(&manifest, "eullm", &data_dir, &targets),
-            find_component(&manifest, "qwen3-14b", &data_dir, &targets),
+            find_by_name(&manifest, "eullm", &data_dir),
+            find_by_name(&manifest, "qwen3-14b", &data_dir),
         ) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
                 children.push(spawn_eullm(&bin, &gguf)?);
                 tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
             }
-            _ => tracing::warn!("eullm non selezionato per questa piattaforma (no CUDA?)"),
+            _ => tracing::warn!(
+                "eullm o qwen3-14b non trovati in {} — RAG senza LLM",
+                data_dir.display()
+            ),
         }
     } else {
         tracing::info!("manage_subprocesses=false — processi esterni attesi");
@@ -399,6 +401,7 @@ fn free_space_bytes(path: &Path) -> u64 {
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
 
+/// Cerca per nome E target (usato per decidere cosa scaricare).
 fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&str]) -> Option<PathBuf> {
     manifest
         .component
@@ -406,6 +409,18 @@ fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&
         .filter(|c| component_selected(c, targets))
         .find(|c| c.name == name)
         .map(|c| resolve_dest(&c.dest, data_dir))
+}
+
+/// Cerca per nome senza filtro target (usato per decidere cosa AVVIARE).
+/// Il binario potrebbe essere già su disco anche se il target non combacia
+/// (es. scaricato in una sessione precedente, o trasferito manualmente).
+fn find_by_name(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<PathBuf> {
+    manifest
+        .component
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| resolve_dest(&c.dest, data_dir))
+        .filter(|p| p.exists()) // avvia solo se il file è effettivamente presente
 }
 
 /// Termina eventuali istanze stantie identificate dal percorso del binario.
