@@ -2,7 +2,7 @@
 //!
 //! Strategia download:
 //!  - HTTP Range multiconnessione (N chunk paralleli) con progress % + ETA.
-//!  - I GGUF vengono scaricati direttamente da HuggingFace — nessun doppio download.
+//!  - I GGUF vengono scaricati da i3k.dev — nessun doppio download.
 //!  - eullm viene avviato con il PATH del file (non il nome modello), così non serve
 //!    creare manifest.json manualmente.
 //!
@@ -106,7 +106,7 @@ async fn ensure_gguf(m: &ModelInfo) -> Result<PathBuf> {
             .with_context(|| format!("mkdir {}", parent.display()))?;
     }
 
-    tracing::info!("{}: avvio download da HuggingFace → {}", m.name, dest.display());
+    tracing::info!("{}: avvio download → {}", m.name, dest.display());
     parallel_download(m.url, &dest, m.file, DOWNLOAD_CONNECTIONS).await?;
     Ok(dest)
 }
