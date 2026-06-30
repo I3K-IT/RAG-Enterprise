@@ -984,30 +984,38 @@ function App() {
                   }`}>
                     <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
-                    {msg.sources && msg.sources.length > 0 && (
-                      <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
-                        <p className="text-sm font-semibold text-slate-300">
-                          Sources ({msg.sources.length}):
-                        </p>
-                        {msg.sources.map((source, sidx) => (
-                          <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
-                            <div className="flex justify-between items-center gap-2">
-                              <a
-                                href={`${API_URL}/api/documents/${source.document_id}/download`}
-                                download
-                                className="text-blue-300 hover:text-blue-200 underline truncate flex-1"
-                                title={source.filename || source.document_id}
-                              >
-                                {source.filename || source.document_id}
-                              </a>
-                              <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold flex-shrink-0">
-                                {source.similarity != null ? (source.similarity * 100).toFixed(1) : 'N/A'}%
-                              </span>
+                    {msg.sources && msg.sources.length > 0 && (() => {
+                      const byDoc = {}
+                      msg.sources.forEach(s => {
+                        const id = s.document_id
+                        if (!byDoc[id] || (s.similarity ?? 0) > (byDoc[id].similarity ?? 0)) byDoc[id] = s
+                      })
+                      const unique = Object.values(byDoc)
+                      return (
+                        <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
+                          <p className="text-sm font-semibold text-slate-300">
+                            Fonti ({unique.length} {unique.length === 1 ? 'documento' : 'documenti'}):
+                          </p>
+                          {unique.map((source, sidx) => (
+                            <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
+                              <div className="flex justify-between items-center gap-2">
+                                <a
+                                  href={`${API_URL}/api/documents/${source.document_id}/download`}
+                                  download
+                                  className="text-blue-300 hover:text-blue-200 underline truncate flex-1"
+                                  title={source.filename || source.document_id}
+                                >
+                                  {source.filename || source.document_id}
+                                </a>
+                                <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold flex-shrink-0">
+                                  {source.similarity != null ? (source.similarity * 100).toFixed(1) : 'N/A'}%
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          ))}
+                        </div>
+                      )
+                    })()}
 
                     <p className="text-xs text-slate-400 mt-2">
                       {new Date(msg.timestamp).toLocaleTimeString()}
