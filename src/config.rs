@@ -46,8 +46,12 @@ pub struct AuthSettings {
 
 #[derive(Debug, Deserialize)]
 pub struct QdrantSettings {
+    /// REST endpoint (HTTP/1.1) — usato per healthcheck in bootstrap.
     #[serde(default = "default_qdrant_url")]
     pub url: String,
+    /// gRPC endpoint (HTTP/2, tonic) — usato da QdrantStore (qdrant-client).
+    #[serde(default = "default_qdrant_grpc_url")]
+    pub grpc_url: String,
     #[serde(default = "default_collection")]
     pub collection: String,
 }
@@ -123,7 +127,13 @@ impl Default for DatabaseSettings {
     fn default() -> Self { Self { url: default_db_url() } }
 }
 impl Default for QdrantSettings {
-    fn default() -> Self { Self { url: default_qdrant_url(), collection: default_collection() } }
+    fn default() -> Self {
+        Self {
+            url: default_qdrant_url(),
+            grpc_url: default_qdrant_grpc_url(),
+            collection: default_collection(),
+        }
+    }
 }
 impl Default for EmbeddingsSettings {
     fn default() -> Self { Self { model_id: default_embedding_model() } }
@@ -145,6 +155,7 @@ fn default_port() -> u16 { 8000 }
 fn default_db_url() -> String { "sqlite://rag_users.db".into() }
 fn default_jwt_expiry() -> u64 { 480 }
 fn default_qdrant_url() -> String { "http://localhost:6333".into() }
+fn default_qdrant_grpc_url() -> String { "http://localhost:6334".into() }
 fn default_collection() -> String { "rag_documents".into() }
 fn default_eullm_url() -> String { "http://localhost:11434".into() }
 fn default_num_ctx() -> u32 { 16384 }

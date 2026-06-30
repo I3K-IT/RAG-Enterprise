@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     tracing::info!("embedding service pronto");
 
     let qdrant = clients::qdrant_store::QdrantStore::new(
-        &settings.qdrant.url,
+        &settings.qdrant.grpc_url,
         &settings.qdrant.collection,
     )
     .await
