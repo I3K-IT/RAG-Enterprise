@@ -180,7 +180,15 @@ fn default_manage_subprocesses() -> bool { true }
 
 impl Settings {
     pub fn load() -> Result<Self> {
-        dotenvy::dotenv().ok();
+        // Cerca .env prima nella CWD (dev: cargo run dalla root),
+        // poi nella cartella dell'eseguibile (produzione: binary dir).
+        if dotenvy::dotenv().is_err() {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    dotenvy::from_path(dir.join(".env")).ok();
+                }
+            }
+        }
         let cfg = ::config::Config::builder()
             .add_source(::config::Environment::default().separator("__"))
             .build()?;

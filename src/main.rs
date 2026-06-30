@@ -28,6 +28,8 @@ async fn main() -> Result<()> {
         "starting i3k-rag-engine"
     );
 
+    tracing::info!(data_dir = %settings.data.data_path().display(), "data directory");
+
     // Rende data_dir disponibile al modulo embeddings (find_model_in_cache).
     std::env::set_var("I3K_DATA_DIR", settings.data.data_path());
 

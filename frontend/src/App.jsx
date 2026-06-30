@@ -83,11 +83,27 @@ function App() {
   useEffect(() => {
     const savedToken = localStorage.getItem('rag_auth_token')
     const savedUser = localStorage.getItem('rag_auth_user')
-    if (savedToken && savedUser) {
+    if (!savedToken || !savedUser) return
+    // Valida il token con il server e controlla se l'utente è stato ricreato
+    axios.get(`${API_URL}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${savedToken}` }
+    }).then(res => {
+      const freshUser = res.data
+      const storedUser = JSON.parse(savedUser)
+      // Se created_at è cambiato (DB ricreato), pulisce le conversazioni stale
+      if (storedUser.created_at !== freshUser.created_at) {
+        localStorage.removeItem(`rag_conversations_${storedUser.id}`)
+        localStorage.removeItem(`rag_current_conversation_${storedUser.id}`)
+      }
+      localStorage.setItem('rag_auth_user', JSON.stringify(freshUser))
       setToken(savedToken)
-      setUser(JSON.parse(savedUser))
+      setUser(freshUser)
       setIsAuthenticated(true)
-    }
+    }).catch(() => {
+      // Token scaduto o non valido — logout
+      localStorage.removeItem('rag_auth_token')
+      localStorage.removeItem('rag_auth_user')
+    })
   }, [])
 
   useEffect(() => {
