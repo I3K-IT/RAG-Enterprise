@@ -319,7 +319,7 @@ async fn download_small_file(client: &reqwest::Client, url: &str, dest: &Path) -
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
 
 /// Scarica `url` in `dest` usando `n` connessioni parallele con Range requests.
-/// Stampa progress % + ETA ogni 3 secondi via tracing::info!.
+/// Aggiorna una singola riga di progress su TTY (via \r); su log non-interattivo usa tracing.
 /// Fallback a singola connessione se il server non supporta Range.
 async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize) -> Result<()> {
     let client = reqwest::Client::builder()
@@ -385,7 +385,9 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         })
         .collect();
 
-    // Task progress
+    // Task progress — riga singola su TTY (\r), tracing altrove
+    use std::io::IsTerminal;
+    let is_tty = std::io::stderr().is_terminal();
     let dl_ref = Arc::clone(&downloaded);
     let name_str = display_name.to_owned();
     let progress_task = tokio::spawn(async move {
@@ -397,17 +399,27 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
             }
             let pct = done as f64 / total as f64 * 100.0;
             let elapsed = start.elapsed().as_secs_f64();
-            let rate = done as f64 / elapsed; // byte/s
+            let rate = done as f64 / elapsed;
             let eta = if rate > 0.0 {
                 fmt_eta(((total - done) as f64 / rate) as u64)
             } else {
                 "…".to_owned()
             };
-            tracing::info!(
-                "{name_str}: {pct:.1}%  ({} / {})  ETA {eta}",
-                fmt_bytes(done),
-                fmt_bytes(total),
-            );
+            if is_tty {
+                use std::io::Write;
+                eprint!(
+                    "\r  {name_str}: {pct:.1}%  ({} / {})  ETA {eta}     ",
+                    fmt_bytes(done),
+                    fmt_bytes(total),
+                );
+                let _ = std::io::stderr().flush();
+            } else {
+                tracing::info!(
+                    "{name_str}: {pct:.1}%  ({} / {})  ETA {eta}",
+                    fmt_bytes(done),
+                    fmt_bytes(total),
+                );
+            }
             if done >= total {
                 break;
             }
@@ -434,22 +446,31 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     }
 
     progress_task.abort();
-    tracing::info!(
-        "{display_name}: completato  {}  in {}",
-        fmt_bytes(total),
-        fmt_eta(start.elapsed().as_secs()),
-    );
+    if is_tty {
+        use std::io::Write;
+        let elapsed = fmt_eta(start.elapsed().as_secs());
+        eprintln!("\r  {display_name}: completato  {}  in {elapsed}                    ", fmt_bytes(total));
+        let _ = std::io::stderr().flush();
+    } else {
+        tracing::info!(
+            "{display_name}: completato  {}  in {}",
+            fmt_bytes(total),
+            fmt_eta(start.elapsed().as_secs()),
+        );
+    }
     Ok(())
 }
 
 /// Streaming download (fallback quando il server non supporta Range o non fornisce content-length).
-/// Mostra progress ogni 10%.
+/// Aggiorna una singola riga su TTY; su log non-interattivo logga ogni 10%.
 async fn download_streaming(
     resp: reqwest::Response,
     dest: &Path,
     display_name: &str,
 ) -> Result<()> {
+    use std::io::IsTerminal;
     use tokio::io::AsyncWriteExt;
+    let is_tty = std::io::stderr().is_terminal();
     let total = resp.content_length().unwrap_or(0);
     let mut file = tokio::fs::File::create(dest).await.context("crea file")?;
     let mut downloaded: u64 = 0;
@@ -461,12 +482,23 @@ async fn download_streaming(
         downloaded += chunk.len() as u64;
         if total > 0 {
             let pct = downloaded * 100 / total;
-            if pct / 10 != last_pct / 10 {
+            if is_tty {
+                use std::io::Write;
+                let elapsed = start.elapsed().as_secs_f64().max(0.001);
+                let rate = downloaded as f64 / elapsed;
+                let eta = fmt_eta(((total - downloaded) as f64 / rate) as u64);
+                eprint!(
+                    "\r  {display_name}: {pct}%  ({} / {})  ETA {eta}     ",
+                    fmt_bytes(downloaded),
+                    fmt_bytes(total),
+                );
+                let _ = std::io::stderr().flush();
+            } else if pct / 10 != last_pct / 10 {
                 let elapsed = start.elapsed().as_secs_f64().max(0.001);
                 let rate = downloaded as f64 / elapsed;
                 let eta = fmt_eta(((total - downloaded) as f64 / rate) as u64);
                 tracing::info!(
-                    "{display_name}: {pct:.0}%  ({} / {})  ETA {eta}",
+                    "{display_name}: {pct}%  ({} / {})  ETA {eta}",
                     fmt_bytes(downloaded),
                     fmt_bytes(total),
                 );
@@ -475,11 +507,17 @@ async fn download_streaming(
         }
     }
     file.flush().await.context("flush")?;
-    tracing::info!(
-        "{display_name}: completato  {}  in {}",
-        fmt_bytes(downloaded.max(total)),
-        fmt_eta(start.elapsed().as_secs()),
-    );
+    if is_tty {
+        use std::io::Write;
+        eprintln!("\r  {display_name}: completato  {}  in {}                    ", fmt_bytes(downloaded.max(total)), fmt_eta(start.elapsed().as_secs()));
+        let _ = std::io::stderr().flush();
+    } else {
+        tracing::info!(
+            "{display_name}: completato  {}  in {}",
+            fmt_bytes(downloaded.max(total)),
+            fmt_eta(start.elapsed().as_secs()),
+        );
+    }
     Ok(())
 }
 

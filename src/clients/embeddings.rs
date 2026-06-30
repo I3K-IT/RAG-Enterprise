@@ -238,6 +238,19 @@ fn hf_cache_base() -> PathBuf {
     PathBuf::from(".")
 }
 
+/// Verifica che la directory contenga almeno un file safetensors di dimensione ragionevole.
+/// Scarta file spazzatura (es. download interrotti, 0-byte, 29-byte, ecc.).
+fn model_weights_valid(dir: &Path) -> bool {
+    const MIN_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — bge-m3 è ~2.3 GB
+    let single = dir.join("model.safetensors");
+    if single.exists() {
+        return std::fs::metadata(&single).map(|m| m.len() >= MIN_BYTES).unwrap_or(false);
+    }
+    // Sharded: basta che l'index.json esista e sia non-triviale (i shard vengono validati al mmap)
+    let idx = dir.join("model.safetensors.index.json");
+    std::fs::metadata(&idx).map(|m| m.len() > 200).unwrap_or(false)
+}
+
 fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
     // 1. HF hub layout: <cache>/models--BAAI--bge-m3/snapshots/<sha>/
     let model_slug = format!("models--{}", model_id.replace('/', "--"));
@@ -247,7 +260,7 @@ fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
         if let Some(p) = rd
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.is_dir() && p.join("config.json").exists())
+            .filter(|p| p.is_dir() && p.join("config.json").exists() && model_weights_valid(p))
             .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
         {
             return Some(p);
@@ -262,15 +275,15 @@ fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
             .join("torch")
             .join("sentence_transformers")
             .join(&st_slug);
-        if st_path.join("config.json").exists() {
+        if st_path.join("config.json").exists() && model_weights_valid(&st_path) {
             tracing::debug!(path = %st_path.display(), "trovato in cache sentence-transformers");
             return Some(st_path);
         }
     }
 
-    // 3. Direct-download layout (placed by ensure_model_downloaded in main.rs)
+    // 3. Direct-download layout (placed by bootstrap::ensure_embedding_model)
     let dl_dir = download_target_dir(model_id);
-    if dl_dir.join("config.json").exists() {
+    if dl_dir.join("config.json").exists() && model_weights_valid(&dl_dir) {
         tracing::debug!(path = %dl_dir.display(), "trovato in direct-download dir");
         return Some(dl_dir);
     }
