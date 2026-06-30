@@ -152,19 +152,20 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
             }
         }
 
-        // eullm
-        let eullm_url = &settings.eullm.url;
-        if probe_url(&format!("{eullm_url}/api/tags")).await {
-            tracing::info!("eullm già in ascolto su {eullm_url}");
-        } else {
-            match (find_component(&manifest, "eullm", &data_dir),
-                   find_component(&manifest, "qwen3-14b", &data_dir)) {
-                (Some(bin), Some(gguf)) => {
-                    children.push(spawn_eullm(&bin, &gguf)?);
-                    tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
-                }
-                _ => tracing::warn!("eullm non selezionato per questa piattaforma (no CUDA?)"),
+        // eullm — bootstrap possiede il ciclo di vita: kill del processo stantio
+        // (sessione precedente crashata/SIGKILL'd), poi spawn con il nostro GGUF.
+        // NON si fa probe "già in ascolto": un eullm stantio potrebbe usare il
+        // modello sbagliato. Bootstrap è l'UNICA autorità che avvia eullm.
+        match (
+            find_component(&manifest, "eullm", &data_dir),
+            find_component(&manifest, "qwen3-14b", &data_dir),
+        ) {
+            (Some(bin), Some(gguf)) => {
+                kill_stale_process(&bin).await;
+                children.push(spawn_eullm(&bin, &gguf)?);
+                tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
             }
+            _ => tracing::warn!("eullm non selezionato per questa piattaforma (no CUDA?)"),
         }
     } else {
         tracing::info!("manage_subprocesses=false — processi esterni attesi");
@@ -406,6 +407,23 @@ fn find_component(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<Pa
         .filter(|c| component_selected(c))
         .find(|c| c.name == name)
         .map(|c| resolve_dest(&c.dest, data_dir))
+}
+
+/// Termina eventuali istanze stantie identificate dal percorso del binario.
+/// Usata prima di spawn_eullm: garantisce che solo la nostra istanza (con il
+/// nostro modello) sia in ascolto. Best-effort: errori ignorati.
+async fn kill_stale_process(bin: &Path) {
+    let bin_str = bin.display().to_string();
+    tracing::debug!("kill_stale_process: pkill -f {bin_str}");
+    let _ = Command::new("pkill")
+        .arg("-f")
+        .arg(&bin_str)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    // Breve attesa affinché la porta venga liberata dal kernel
+    tokio::time::sleep(Duration::from_millis(800)).await;
 }
 
 fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
