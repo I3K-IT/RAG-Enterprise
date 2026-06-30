@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
     // _guard tiene in vita i processi figlio supervisionati (drop → SIGKILL).
     let _guard = bootstrap::ensure_ready(&settings).await?;
 
+    tracing::info!(path = %settings.database.url, "database SQLite");
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
     db::users::seed_admin(&db, settings.auth.admin_default_password.as_deref()).await?;
