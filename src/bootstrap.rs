@@ -408,9 +408,10 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
             if is_tty {
                 use std::io::Write;
                 eprint!(
-                    "\r  {name_str}: {pct:.1}%  ({} / {})  ETA {eta}     ",
+                    "\r  {name_str}: {pct:.1}%  ({} / {})  {}/s  ETA {eta}     ",
                     fmt_bytes(done),
                     fmt_bytes(total),
+                    fmt_bytes(rate as u64),
                 );
                 let _ = std::io::stderr().flush();
             } else {
@@ -488,9 +489,10 @@ async fn download_streaming(
                 let rate = downloaded as f64 / elapsed;
                 let eta = fmt_eta(((total - downloaded) as f64 / rate) as u64);
                 eprint!(
-                    "\r  {display_name}: {pct}%  ({} / {})  ETA {eta}     ",
+                    "\r  {display_name}: {pct}%  ({} / {})  {}/s  ETA {eta}     ",
                     fmt_bytes(downloaded),
                     fmt_bytes(total),
+                    fmt_bytes(rate as u64),
                 );
                 let _ = std::io::stderr().flush();
             } else if pct / 10 != last_pct / 10 {
