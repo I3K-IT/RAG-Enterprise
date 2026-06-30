@@ -1,13 +1,23 @@
 //! Bootstrap: scarica, verifica (SHA256) e avvia i componenti (manifest.toml).
 //!
+//! Manifest (embedded):
+//!  - `[[component]]` con kind="model" (universale) o kind="binary" (per-target).
+//!  - dest contiene il placeholder "{data}" → risolto a runtime con data_dir.
+//!  - sha256 verificato su OGNI download. Per file già presenti: stamp file
+//!    ({dest}.sha2) — evita di ricalcolare sha256 di file da GB a ogni avvio.
+//!
+//! Target detection (compile-time):
+//!  - linux-x86_64:       qdrant (sempre su Linux x86_64)
+//!  - linux-x86_64-cuda:  eullm  (solo con --features cuda)
+//!
 //! Flusso:
-//!  1. Carica manifest embedded (include_str!).
-//!  2. Crea struttura directory {data_dir}/{bin,models,storage/qdrant,db,uploads,backups}.
-//!  3. Pre-check spazio disco (2x margine sulle dimensioni totali mancanti).
-//!  4. Per ogni componente: controlla presenza + sha256; se manca/errato → download atomico.
-//!  5. Se manage_subprocesses=true: avvia qdrant ed eullm come processi figlio supervisionati.
-//!  6. Attende API ready di entrambi.
-//!  7. Ritorna ProcessGuard: al drop, i figli ricevono SIGKILL (kill_on_drop).
+//!  1. Carica manifest + rileva target.
+//!  2. Crea struttura directory in data_dir.
+//!  3. Pre-check disco = somma size dei componenti mancanti.
+//!  4. Scarica/verifica ogni componente selezionato.
+//!  5. Se manage_subprocesses=true: avvia qdrant + eullm (kill_on_drop).
+//!  6. Attende /healthz (qdrant) e /api/tags (eullm).
+//!  7. Ritorna ProcessGuard — al drop i figli ricevono SIGKILL.
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -29,23 +39,60 @@ const MANIFEST_STR: &str = include_str!("../manifest.toml");
 #[derive(Debug, Deserialize, Clone)]
 struct Component {
     name: String,
-    version: String,
+    #[serde(default)]
+    version: Option<String>,
     #[allow(dead_code)]
     kind: String,
+    /// Solo per i binari. None = modello (scaricato sempre).
+    #[serde(default)]
+    target: Option<String>,
     url: String,
     sha256: String,
     size: u64,
+    /// Percorso con placeholder "{data}" (risolto a runtime).
     dest: String,
     exec: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct Manifest {
-    components: Vec<Component>,
+    component: Vec<Component>,
 }
 
 fn load_manifest() -> Result<Manifest> {
     toml::from_str(MANIFEST_STR).context("manifest.toml non valido — bug di compilazione")
+}
+
+// ── Target detection (compile-time) ──────────────────────────────────────────
+
+/// Elenco di target supportati dal binario corrente.
+/// I componenti con target non presente qui vengono saltati.
+fn current_targets() -> &'static [&'static str] {
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", feature = "cuda"))]
+    {
+        &["linux-x86_64", "linux-x86_64-cuda"]
+    }
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", not(feature = "cuda")))]
+    {
+        &["linux-x86_64"]
+    }
+    #[cfg(not(any(all(target_arch = "x86_64", target_os = "linux"))))]
+    {
+        &[]
+    }
+}
+
+fn component_selected(comp: &Component) -> bool {
+    match &comp.target {
+        None => true, // modello — sempre
+        Some(t) => current_targets().contains(&t.as_str()),
+    }
+}
+
+// ── Risoluzione path ──────────────────────────────────────────────────────────
+
+fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
+    PathBuf::from(dest.replace("{data}", &data_dir.display().to_string()))
 }
 
 // ── Guardia processi supervisionati ───────────────────────────────────────────
@@ -71,19 +118,19 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
 
-    // 1. Struttura directory
+    // Struttura directory
     for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {
         tokio::fs::create_dir_all(data_dir.join(subdir))
             .await
             .with_context(|| format!("mkdir {}/{subdir}", data_dir.display()))?;
     }
 
-    // 2. Pre-check spazio disco
+    // Pre-check spazio disco
     check_disk_space(&manifest, &data_dir)?;
 
-    // 3. Scarica / verifica ogni componente
-    for comp in &manifest.components {
-        let dest = data_dir.join(&comp.dest);
+    // Scarica/verifica ogni componente selezionato
+    for comp in manifest.component.iter().filter(|c| component_selected(c)) {
+        let dest = resolve_dest(&comp.dest, &data_dir);
         ensure_component(comp, &dest).await?;
     }
 
@@ -95,11 +142,14 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         if probe_url(&format!("{qdrant_url}/healthz")).await {
             tracing::info!("qdrant già in ascolto su {qdrant_url}");
         } else {
-            let qdrant_bin = component_path(&manifest, "qdrant", &data_dir)?;
-            let qdrant_storage = data_dir.join("storage/qdrant");
-            let child = spawn_qdrant(&qdrant_bin, &qdrant_storage)?;
-            children.push(child);
-            tracing::info!("qdrant avviato: {}", qdrant_bin.display());
+            match find_component(&manifest, "qdrant", &data_dir) {
+                Some(bin) => {
+                    let storage = data_dir.join("storage/qdrant");
+                    children.push(spawn_qdrant(&bin, &storage)?);
+                    tracing::info!("qdrant avviato: {}", bin.display());
+                }
+                None => tracing::warn!("qdrant non selezionato per questa piattaforma"),
+            }
         }
 
         // eullm
@@ -107,17 +157,20 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         if probe_url(&format!("{eullm_url}/api/tags")).await {
             tracing::info!("eullm già in ascolto su {eullm_url}");
         } else {
-            let eullm_bin = component_path(&manifest, "eullm", &data_dir)?;
-            let gguf_14b = component_path(&manifest, "qwen3-14b", &data_dir)?;
-            let child = spawn_eullm(&eullm_bin, &gguf_14b)?;
-            children.push(child);
-            tracing::info!("eullm avviato: {} {}", eullm_bin.display(), gguf_14b.display());
+            match (find_component(&manifest, "eullm", &data_dir),
+                   find_component(&manifest, "qwen3-14b", &data_dir)) {
+                (Some(bin), Some(gguf)) => {
+                    children.push(spawn_eullm(&bin, &gguf)?);
+                    tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
+                }
+                _ => tracing::warn!("eullm non selezionato per questa piattaforma (no CUDA?)"),
+            }
         }
     } else {
-        tracing::info!("manage_subprocesses=false: attendo processi esterni");
+        tracing::info!("manage_subprocesses=false — processi esterni attesi");
     }
 
-    // Attendi API (sempre — sia managed che external)
+    // Attendi API (sempre)
     wait_for_url(
         &format!("{}/healthz", settings.qdrant.url),
         QDRANT_READY_TIMEOUT_SECS,
@@ -139,31 +192,38 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
 async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
     if dest.exists() {
         if verify_component(comp, dest).await? {
-            tracing::info!("{} ({}): presente", comp.name, comp.version);
+            let ver = comp.version.as_deref().map(|v| format!(" ({v})")).unwrap_or_default();
+            tracing::info!("{}{ver}: presente e verificato", comp.name);
             return Ok(());
         }
-        tracing::warn!("{}: verifica fallita, ri-scarico", comp.name);
+        tracing::warn!("{}: verifica sha256 fallita, ri-scarico", comp.name);
         tokio::fs::remove_file(dest).await.ok();
+        remove_stamp(dest).await;
     }
 
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    // Download atomico: scarica in .partial, verifica sha256, rinomina
+    // Download atomico: .partial → verifica sha256 → rename → stamp
     let partial = dest.with_extension("partial");
     tokio::fs::remove_file(&partial).await.ok();
 
     parallel_download(&comp.url, &partial, &comp.name, DOWNLOAD_CONNECTIONS).await?;
 
-    // Verifica sha256 dopo download
-    if !comp.sha256.is_empty() {
+    // SHA256 dopo download (obbligatorio)
+    {
         let expected = comp.sha256.clone();
         let p = partial.clone();
-        let got = tokio::task::spawn_blocking(move || sha256_file(&p))
-            .await
-            .context("spawn_blocking sha256")?
-            .context("sha256 calcolo")?;
+        let name = comp.name.clone();
+        let got = tokio::task::spawn_blocking(move || {
+            tracing::info!("{name}: verifica sha256 post-download…");
+            sha256_file(&p)
+        })
+        .await
+        .context("spawn_blocking sha256")?
+        .context("sha256 calcolo")?;
+
         if got != expected {
             tokio::fs::remove_file(&partial).await.ok();
             bail!(
@@ -173,44 +233,79 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
                 got
             );
         }
-        tracing::info!("{}: sha256 ok", comp.name);
+        // Rinomina atomico
+        tokio::fs::rename(&partial, dest)
+            .await
+            .with_context(|| format!("rename {}", dest.display()))?;
+        // Scrivi stamp
+        write_stamp(dest, &got).await;
     }
-
-    tokio::fs::rename(&partial, dest)
-        .await
-        .with_context(|| format!("rename {}", dest.display()))?;
 
     if comp.exec {
         use std::os::unix::fs::PermissionsExt;
         tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))
             .await
             .with_context(|| format!("chmod +x {}", dest.display()))?;
-        tracing::info!("{}: chmod +x", comp.name);
     }
 
+    tracing::info!("{}: installato in {}", comp.name, dest.display());
     Ok(())
 }
 
-/// Verifica un componente già su disco.
-/// sha256 non vuoto → calcola e confronta il digest.
-/// sha256 vuoto     → solo controllo esistenza (nessun sha256 nel manifest).
+/// Verifica un componente già presente su disco.
+///
+/// Fast path: se esiste lo stamp `{dest}.sha2` con il digest atteso → ok.
+/// Slow path: ricalcola sha256 (può richiedere decine di secondi su file grandi).
+///            Se ok → scrive lo stamp per i prossimi avvii.
 async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
-    if comp.sha256.is_empty() {
-        return Ok(true);
+    // Fast path: stamp file
+    let stamp_path = stamp_path(dest);
+    if stamp_path.exists() {
+        if let Ok(stamped) = tokio::fs::read_to_string(&stamp_path).await {
+            if stamped.trim() == comp.sha256 {
+                return Ok(true);
+            }
+        }
     }
 
+    // Slow path: calcola sha256
     let expected = comp.sha256.clone();
     let p = dest.to_owned();
     let name = comp.name.clone();
     let got = tokio::task::spawn_blocking(move || {
-        tracing::info!("{name}: verifica sha256 in corso…");
+        tracing::info!("{name}: verifica sha256 (prima verifica, può richiedere tempo)…");
         sha256_file(&p)
     })
     .await
     .context("spawn_blocking sha256 verify")?
     .context("sha256 verify")?;
 
-    Ok(got == expected)
+    if got == expected {
+        write_stamp(dest, &got).await;
+        Ok(true)
+    } else {
+        tracing::warn!(
+            "{}: sha256 mismatch — atteso {} trovato {}",
+            comp.name,
+            &expected[..8],
+            &got[..8]
+        );
+        Ok(false)
+    }
+}
+
+fn stamp_path(dest: &Path) -> PathBuf {
+    let mut p = dest.to_owned().into_os_string();
+    p.push(".sha2");
+    PathBuf::from(p)
+}
+
+async fn write_stamp(dest: &Path, hash: &str) {
+    let _ = tokio::fs::write(stamp_path(dest), hash).await;
+}
+
+async fn remove_stamp(dest: &Path) {
+    let _ = tokio::fs::remove_file(stamp_path(dest)).await;
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -219,7 +314,7 @@ fn sha256_file(path: &Path) -> Result<String> {
     let mut file =
         std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = [0u8; 256 * 1024]; // 256 KB per read
     loop {
         let n = file.read(&mut buf).context("read")?;
         if n == 0 {
@@ -239,8 +334,9 @@ fn check_disk_space(manifest: &Manifest, data_dir: &Path) -> Result<()> {
     }
 
     let mut needed: Vec<Item> = Vec::new();
-    for comp in &manifest.components {
-        if comp.size > 0 && !data_dir.join(&comp.dest).exists() {
+    for comp in manifest.component.iter().filter(|c| component_selected(c)) {
+        let dest = resolve_dest(&comp.dest, data_dir);
+        if comp.size > 0 && !dest.exists() {
             needed.push(Item { label: &comp.name, size: comp.size });
         }
     }
@@ -259,19 +355,18 @@ fn check_disk_space(manifest: &Manifest, data_dir: &Path) -> Result<()> {
     }
     eprintln!("  ─────────────────────────────────────────────────────────────────");
     eprintln!(
-        "  Totale stimato:  {:>8}   ·   Server: i3k.dev (Europa, IT)",
+        "  Totale:  {:>8}   ·   Server: i3k.dev (Europa, IT)",
         fmt_bytes(total)
     );
 
     if free != u64::MAX {
         eprintln!("  Spazio libero:  {}", fmt_bytes(free));
-        let required = total.saturating_mul(2);
-        if free < required {
+        if free < total {
             eprintln!();
             bail!(
-                "Spazio su disco insufficiente: {} liberi, {} necessari (margine 2x).",
+                "Spazio su disco insufficiente: {} liberi, {} necessari.",
                 fmt_bytes(free),
-                fmt_bytes(required)
+                fmt_bytes(total)
             );
         }
     }
@@ -304,13 +399,13 @@ fn free_space_bytes(path: &Path) -> u64 {
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
 
-fn component_path(manifest: &Manifest, name: &str, data_dir: &Path) -> Result<PathBuf> {
+fn find_component(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<PathBuf> {
     manifest
-        .components
+        .component
         .iter()
+        .filter(|c| component_selected(c))
         .find(|c| c.name == name)
-        .map(|c| data_dir.join(&c.dest))
-        .with_context(|| format!("componente '{name}' non trovato nel manifest"))
+        .map(|c| resolve_dest(&c.dest, data_dir))
 }
 
 fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
@@ -374,9 +469,6 @@ async fn wait_for_url(url: &str, timeout_secs: u64, label: &str) -> Result<()> {
 
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
 
-/// Scarica `url` in `dest` usando `n` connessioni Range parallele.
-/// Progress su riga singola (TTY) o tracing (non-TTY).
-/// Fallback a streaming se il server non supporta Range.
 async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize) -> Result<()> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(3600)).build()?;
 
@@ -480,9 +572,9 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         let url = final_url.clone();
         let file = Arc::clone(&file);
         let dl = Arc::clone(&downloaded);
-        tasks.push(tokio::spawn(
-            async move { download_chunk(client, url, file, cs, ce, dl).await },
-        ));
+        tasks.push(tokio::spawn(async move {
+            download_chunk(client, url, file, cs, ce, dl).await
+        }));
     }
 
     for t in tasks {
