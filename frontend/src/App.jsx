@@ -569,9 +569,8 @@ function App() {
           </form>
 
           <div className="mt-6 pt-6 border-t border-slate-700 text-center text-xs text-slate-400">
-            <p>Default credentials:</p>
-            <p className="mt-1">Username: <span className="text-white font-mono">admin</span></p>
-            <p>Password: <span className="text-white font-mono">admin123</span></p>
+            <p>Username: <span className="text-white font-mono">admin</span></p>
+            <p className="mt-1">Password: check startup logs or set <span className="text-white font-mono">AUTH__ADMIN_DEFAULT_PASSWORD</span></p>
           </div>
         </div>
       </div>
