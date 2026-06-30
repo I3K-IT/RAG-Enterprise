@@ -1,0 +1,81 @@
+# Componenti pinned — sha256 verificato, target per i binari.
+#
+# Modelli (kind="model"): nessun campo target — scaricati su ogni piattaforma.
+# Binari (kind="binary"): campo target obbligatorio — il bootstrap scarica
+#   solo quelli che corrispondono alla piattaforma corrente.
+#   Piattaforme note: "linux-x86_64", "linux-x86_64-cuda".
+#   Piattaforme future (Windows, macOS) = entry aggiuntive, nessun redesign.
+#
+# dest: usa il placeholder {data} (risolto a runtime come data_dir).
+# Pre-check disco = somma delle size dei componenti mancanti (nessun archivio).
+
+# === MODELLI (universali) ======================================================
+
+[[component]]
+name   = "bge-m3-weights"
+kind   = "model"
+url    = "https://www.i3k.dev/models/bge-m3/model.safetensors"
+sha256 = "993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e"
+size   = 2271064456
+dest   = "{data}/models/bge-m3/model.safetensors"
+exec   = false
+
+[[component]]
+name   = "bge-m3-tokenizer"
+kind   = "model"
+url    = "https://www.i3k.dev/models/bge-m3/tokenizer.json"
+sha256 = "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08"
+size   = 17098108
+dest   = "{data}/models/bge-m3/tokenizer.json"
+exec   = false
+
+[[component]]
+name   = "bge-m3-config"
+kind   = "model"
+url    = "https://www.i3k.dev/models/bge-m3/config.json"
+sha256 = "26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa"
+size   = 687
+dest   = "{data}/models/bge-m3/config.json"
+exec   = false
+
+[[component]]
+name   = "qwen3-14b"
+kind   = "model"
+url    = "https://www.i3k.dev/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
+sha256 = "5eaa0870bd81ed3b58a630a271234cfa604e43ffb3a19cd68e54a80dd9d52a66"
+size   = 9001753984
+dest   = "{data}/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
+exec   = false
+
+[[component]]
+name   = "qwen3-8b"
+kind   = "model"
+url    = "https://www.i3k.dev/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
+sha256 = "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4"
+size   = 5027784512
+dest   = "{data}/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
+exec   = false
+
+# === BINARI (per-piattaforma) ==================================================
+
+[[component]]
+name    = "qdrant"
+version = "1.18.2"
+kind    = "binary"
+target  = "linux-x86_64"
+url     = "https://www.i3k.dev/bin/qdrant-1.18.2-x86_64-linux-musl"
+sha256  = "a8e6b18430f2f4c43156c0992464648b989caf3f2b15d201456364f5656dd598"
+size    = 85331816
+dest    = "{data}/bin/qdrant"
+exec    = true
+
+[[component]]
+name    = "eullm"
+version = "0.6.6"
+kind    = "binary"
+target  = "linux-x86_64-cuda"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.6/eullm-linux-x64-cuda-12.8"
+sha256  = "3642149cea0b66d2dcb0c3ef411986bca9bee22982146cb435843bae2bb2a649"
+size    = 905274848
+dest    = "{data}/bin/eullm"
+exec    = true

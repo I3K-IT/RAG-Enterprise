@@ -31,7 +31,8 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 url = "2"
 
 # --- Vector DB ---
-qdrant-client = "1"
+qdrant-client = "1"          # testato con Qdrant 1.18.2
+async-trait = "0.1"          # VectorStore trait object-safe
 
 # --- Embedding: bge-m3 via Candle (in-process, GPU/CPU, NO cuDNN) ---
 candle-core = "0.11"
@@ -81,6 +82,11 @@ tokio-cron-scheduler = "0.13"
 # --- Config ---
 config = "0.14"
 dotenvy = "0.15"
+
+# --- Sistema (disk space, sha256) ---
+libc = "0.2"
+sha2 = "0.10"
+toml = "0.8"
 
 # --- Logging / errori ---
 tracing = "0.1"

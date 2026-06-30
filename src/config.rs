@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
@@ -17,6 +18,8 @@ pub struct Settings {
     pub backup: BackupSettings,
     #[serde(default)]
     pub storage: StorageSettings,
+    #[serde(default)]
+    pub data: DataSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,8 +46,12 @@ pub struct AuthSettings {
 
 #[derive(Debug, Deserialize)]
 pub struct QdrantSettings {
+    /// REST endpoint (HTTP/1.1) — usato per healthcheck in bootstrap.
     #[serde(default = "default_qdrant_url")]
     pub url: String,
+    /// gRPC endpoint (HTTP/2, tonic) — usato da QdrantStore (qdrant-client).
+    #[serde(default = "default_qdrant_grpc_url")]
+    pub grpc_url: String,
     #[serde(default = "default_collection")]
     pub collection: String,
 }
@@ -82,6 +89,37 @@ pub struct StorageSettings {
     pub documents_dir: String,
 }
 
+/// Radice dati: binari, modelli, storage Qdrant, db SQLite, uploads.
+/// Layout: {dir}/bin/  {dir}/models/  {dir}/storage/  {dir}/db/  {dir}/uploads/
+#[derive(Debug, Deserialize)]
+pub struct DataSettings {
+    /// Percorso radice (default: cartella dell'eseguibile — portable app dir).
+    /// Override dev: DATA__DIR=/percorso/cartella/lavoro (il binario sta in target/debug/).
+    #[serde(default = "default_data_dir")]
+    pub dir: String,
+    /// Se true: bootstrap avvia e supervisiona qdrant ed eullm come processi figlio.
+    /// Se false: si aspetta che i processi siano già in ascolto (dev/compose).
+    #[serde(default = "default_manage_subprocesses")]
+    pub manage_subprocesses: bool,
+}
+
+impl DataSettings {
+    pub fn data_path(&self) -> PathBuf {
+        expand_tilde(&self.dir)
+    }
+}
+
+fn expand_tilde(s: &str) -> PathBuf {
+    if s == "~" {
+        std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
+    } else if let Some(rest) = s.strip_prefix("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(rest)
+    } else {
+        PathBuf::from(s)
+    }
+}
+
 impl Default for ServerSettings {
     fn default() -> Self { Self { host: default_host(), port: default_port() } }
 }
@@ -89,7 +127,13 @@ impl Default for DatabaseSettings {
     fn default() -> Self { Self { url: default_db_url() } }
 }
 impl Default for QdrantSettings {
-    fn default() -> Self { Self { url: default_qdrant_url(), collection: default_collection() } }
+    fn default() -> Self {
+        Self {
+            url: default_qdrant_url(),
+            grpc_url: default_qdrant_grpc_url(),
+            collection: default_collection(),
+        }
+    }
 }
 impl Default for EmbeddingsSettings {
     fn default() -> Self { Self { model_id: default_embedding_model() } }
@@ -100,12 +144,18 @@ impl Default for BackupSettings {
 impl Default for StorageSettings {
     fn default() -> Self { Self { documents_dir: default_documents_dir() } }
 }
+impl Default for DataSettings {
+    fn default() -> Self {
+        Self { dir: default_data_dir(), manage_subprocesses: default_manage_subprocesses() }
+    }
+}
 
 fn default_host() -> String { "0.0.0.0".into() }
 fn default_port() -> u16 { 8000 }
 fn default_db_url() -> String { "sqlite://rag_users.db".into() }
 fn default_jwt_expiry() -> u64 { 480 }
 fn default_qdrant_url() -> String { "http://localhost:6333".into() }
+fn default_qdrant_grpc_url() -> String { "http://localhost:6334".into() }
 fn default_collection() -> String { "rag_documents".into() }
 fn default_eullm_url() -> String { "http://localhost:11434".into() }
 fn default_num_ctx() -> u32 { 16384 }
@@ -115,6 +165,18 @@ fn default_keep_alive() -> i32 { -1 }
 fn default_embedding_model() -> String { "BAAI/bge-m3".into() }
 fn default_backup_dir() -> String { "./backups".into() }
 fn default_documents_dir() -> String { "./documents".into() }
+fn default_data_dir() -> String {
+    // Exe-relative: la cartella che contiene il binario è la portable app dir.
+    // In produzione: /install/dir/i3k-rag-engine → data = /install/dir/
+    // In dev (cargo run): target/debug/ → override con DATA__DIR=./data
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .display()
+        .to_string()
+}
+fn default_manage_subprocesses() -> bool { true }
 
 impl Settings {
     pub fn load() -> Result<Self> {
@@ -122,6 +184,21 @@ impl Settings {
         let cfg = ::config::Config::builder()
             .add_source(::config::Environment::default().separator("__"))
             .build()?;
-        Ok(cfg.try_deserialize()?)
+        let mut s: Self = cfg.try_deserialize()?;
+
+        // Deriva i path da data_dir se sono ancora ai valori di default.
+        // Permette di impostare solo DATA__DIR per spostare tutto.
+        let data = s.data.data_path();
+        if s.database.url == default_db_url() {
+            s.database.url = format!("sqlite://{}", data.join("db").join("rag_users.db").display());
+        }
+        if s.storage.documents_dir == default_documents_dir() {
+            s.storage.documents_dir = data.join("uploads").display().to_string();
+        }
+        if s.backup.dir == default_backup_dir() {
+            s.backup.dir = data.join("backups").display().to_string();
+        }
+
+        Ok(s)
     }
 }
