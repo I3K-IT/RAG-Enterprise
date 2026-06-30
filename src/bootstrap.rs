@@ -63,29 +63,27 @@ fn load_manifest() -> Result<Manifest> {
     toml::from_str(MANIFEST_STR).context("manifest.toml non valido — bug di compilazione")
 }
 
-// ── Target detection (compile-time) ──────────────────────────────────────────
+// ── Target detection (runtime) ────────────────────────────────────────────────
 
-/// Elenco di target supportati dal binario corrente.
-/// I componenti con target non presente qui vengono saltati.
-fn current_targets() -> &'static [&'static str] {
-    #[cfg(all(target_arch = "x86_64", target_os = "linux", feature = "cuda"))]
-    {
-        &["linux-x86_64", "linux-x86_64-cuda"]
+/// Rileva i target supportati a runtime (non a compile-time).
+/// CUDA: controlla /dev/nvidia0 — esiste se il driver NVIDIA è caricato.
+/// Così funziona sia con `cargo build` sia con `cargo build --features cuda`.
+fn current_targets() -> Vec<&'static str> {
+    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
+    return vec![];
+
+    let mut t = vec!["linux-x86_64"];
+    if std::path::Path::new("/dev/nvidia0").exists() {
+        t.push("linux-x86_64-cuda");
+        tracing::debug!("CUDA rilevata (/dev/nvidia0 presente) — target linux-x86_64-cuda abilitato");
     }
-    #[cfg(all(target_arch = "x86_64", target_os = "linux", not(feature = "cuda")))]
-    {
-        &["linux-x86_64"]
-    }
-    #[cfg(not(any(all(target_arch = "x86_64", target_os = "linux"))))]
-    {
-        &[]
-    }
+    t
 }
 
-fn component_selected(comp: &Component) -> bool {
+fn component_selected(comp: &Component, targets: &[&str]) -> bool {
     match &comp.target {
         None => true, // modello — sempre
-        Some(t) => current_targets().contains(&t.as_str()),
+        Some(t) => targets.contains(&t.as_str()),
     }
 }
 
@@ -117,6 +115,7 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
+    let targets = current_targets();
 
     // Struttura directory
     for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {
@@ -126,10 +125,10 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     }
 
     // Pre-check spazio disco
-    check_disk_space(&manifest, &data_dir)?;
+    check_disk_space(&manifest, &data_dir, &targets)?;
 
     // Scarica/verifica ogni componente selezionato
-    for comp in manifest.component.iter().filter(|c| component_selected(c)) {
+    for comp in manifest.component.iter().filter(|c| component_selected(c, &targets)) {
         let dest = resolve_dest(&comp.dest, &data_dir);
         ensure_component(comp, &dest).await?;
     }
@@ -142,7 +141,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         if probe_url(&format!("{qdrant_url}/healthz")).await {
             tracing::info!("qdrant già in ascolto su {qdrant_url}");
         } else {
-            match find_component(&manifest, "qdrant", &data_dir) {
+            match find_component(&manifest, "qdrant", &data_dir, &targets) {
                 Some(bin) => {
                     let storage = data_dir.join("storage/qdrant");
                     children.push(spawn_qdrant(&bin, &storage)?);
@@ -157,8 +156,8 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         // NON si fa probe "già in ascolto": un eullm stantio potrebbe usare il
         // modello sbagliato. Bootstrap è l'UNICA autorità che avvia eullm.
         match (
-            find_component(&manifest, "eullm", &data_dir),
-            find_component(&manifest, "qwen3-14b", &data_dir),
+            find_component(&manifest, "eullm", &data_dir, &targets),
+            find_component(&manifest, "qwen3-14b", &data_dir, &targets),
         ) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
@@ -328,14 +327,14 @@ fn sha256_file(path: &Path) -> Result<String> {
 
 // ── Spazio disco ──────────────────────────────────────────────────────────────
 
-fn check_disk_space(manifest: &Manifest, data_dir: &Path) -> Result<()> {
+fn check_disk_space(manifest: &Manifest, data_dir: &Path, targets: &[&str]) -> Result<()> {
     struct Item<'a> {
         label: &'a str,
         size: u64,
     }
 
     let mut needed: Vec<Item> = Vec::new();
-    for comp in manifest.component.iter().filter(|c| component_selected(c)) {
+    for comp in manifest.component.iter().filter(|c| component_selected(c, targets)) {
         let dest = resolve_dest(&comp.dest, data_dir);
         if comp.size > 0 && !dest.exists() {
             needed.push(Item { label: &comp.name, size: comp.size });
@@ -400,11 +399,11 @@ fn free_space_bytes(path: &Path) -> u64 {
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
 
-fn find_component(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<PathBuf> {
+fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&str]) -> Option<PathBuf> {
     manifest
         .component
         .iter()
-        .filter(|c| component_selected(c))
+        .filter(|c| component_selected(c, targets))
         .find(|c| c.name == name)
         .map(|c| resolve_dest(&c.dest, data_dir))
 }
