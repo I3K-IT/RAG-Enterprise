@@ -80,7 +80,7 @@ impl EmbeddingService {
             VarBuilder::from_mmaped_safetensors(&weight_files, DType::F32, device)
                 .context("VarBuilder mmap")?
         };
-        let model = BertModel::load(vb.pp("roberta"), &config).context("BertModel::load")?;
+        let model = BertModel::load(vb, &config).context("BertModel::load")?;
 
         tracing::info!(model_id, "embedding model pronto su {device:?}");
         Ok(Self { model, tokenizer, device: device.clone() })
