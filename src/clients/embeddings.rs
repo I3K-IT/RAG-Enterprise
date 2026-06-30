@@ -281,7 +281,7 @@ fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
         }
     }
 
-    // 3. Direct-download layout (placed by bootstrap::ensure_embedding_model)
+    // 3. ~/.eullm/models/<basename>/ — dove bootstrap::ensure_embedding_model salva i pesi
     let dl_dir = download_target_dir(model_id);
     if dl_dir.join("config.json").exists() && model_weights_valid(&dl_dir) {
         tracing::debug!(path = %dl_dir.display(), "trovato in direct-download dir");
@@ -312,11 +312,12 @@ fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
     anyhow::bail!("nessun file safetensors trovato in {}", dir.display())
 }
 
-/// Directory dove il download diretto salva i file del modello.
-/// Struttura piatta (no symlink HF), cercata da find_in_hf_local_cache.
+/// Directory dove bootstrap salva i file del modello embedding.
+/// Stessa root dei modelli GGUF (~/.eullm/models/<basename>/).
 pub fn download_target_dir(model_id: &str) -> PathBuf {
-    let slug = format!("models--{}", model_id.replace('/', "--"));
-    hf_cache_base().join(slug).join("direct-download")
+    let basename = model_id.rsplit('/').next().unwrap_or(model_id);
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".eullm").join("models").join(basename)
 }
 
 /// Cerca il modello in tutte le cache locali note.
