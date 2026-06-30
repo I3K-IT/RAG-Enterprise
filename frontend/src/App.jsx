@@ -34,6 +34,12 @@ function App() {
   const [localBackups, setLocalBackups] = useState([])
   const [backupRunning, setBackupRunning] = useState(false)
 
+  const [qdrantStats, setQdrantStats] = useState(null)
+  const [qdrantDocs, setQdrantDocs] = useState([])
+  const [loadingQdrant, setLoadingQdrant] = useState(false)
+  const [sqliteDocs, setSqliteDocs] = useState([])
+  const [loadingSqlite, setLoadingSqlite] = useState(false)
+
   // Change password state
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' })
@@ -223,6 +229,44 @@ function App() {
       setLocalBackups(res.data.backups || [])
     } catch (error) {
       console.error('Error fetching backups:', error)
+    }
+  }
+
+  const fetchQdrantInfo = async () => {
+    setLoadingQdrant(true)
+    try {
+      const [stats, docs] = await Promise.all([
+        axios.get(`${API_URL}/api/admin/qdrant/stats`),
+        axios.get(`${API_URL}/api/admin/qdrant/documents`),
+      ])
+      setQdrantStats(stats.data.result || null)
+      setQdrantDocs(docs.data.documents || [])
+    } catch (e) {
+      console.error('Qdrant fetch error:', e)
+    } finally {
+      setLoadingQdrant(false)
+    }
+  }
+
+  const fetchSqliteInfo = async () => {
+    setLoadingSqlite(true)
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/sqlite/documents`)
+      setSqliteDocs(res.data.documents || [])
+    } catch (e) {
+      console.error('SQLite fetch error:', e)
+    } finally {
+      setLoadingSqlite(false)
+    }
+  }
+
+  const handleQdrantDeleteDocument = async (docId, filename) => {
+    if (!window.confirm(`Eliminare tutti i vettori di "${filename}" da Qdrant?`)) return
+    try {
+      await axios.delete(`${API_URL}/api/admin/qdrant/document/${docId}`)
+      fetchQdrantInfo()
+    } catch (e) {
+      alert('Errore: ' + (e.response?.data?.error || e.message))
     }
   }
 
@@ -605,6 +649,18 @@ function App() {
                 >
                   Backup
                 </button>
+                <button
+                  onClick={() => { setAdminTab('qdrant'); fetchQdrantInfo() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'qdrant' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  Qdrant
+                </button>
+                <button
+                  onClick={() => { setAdminTab('sqlite'); fetchSqliteInfo() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'sqlite' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  SQLite
+                </button>
               </div>
               <button onClick={toggleAdminPanel} className="text-slate-400 hover:text-white text-2xl">
                 ✕
@@ -761,6 +817,138 @@ function App() {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* TAB QDRANT */}
+              {adminTab === 'qdrant' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-white">Qdrant Vector Store</h3>
+                    <button onClick={fetchQdrantInfo} className="text-sm text-blue-400 hover:text-blue-300">Aggiorna</button>
+                  </div>
+
+                  {loadingQdrant ? (
+                    <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                  ) : (
+                    <>
+                      {qdrantStats && (
+                        <div className="grid grid-cols-3 gap-3">
+                          {[
+                            ['Punti totali', qdrantStats.points_count ?? '—'],
+                            ['Vettori indicizzati', qdrantStats.indexed_vectors_count ?? '—'],
+                            ['Stato', qdrantStats.status ?? '—'],
+                          ].map(([label, val]) => (
+                            <div key={label} className="bg-slate-700 rounded-lg p-3 text-center">
+                              <p className="text-xs text-slate-400">{label}</p>
+                              <p className="text-white font-bold text-lg">{String(val)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {qdrantDocs.length === 0 ? (
+                        <p className="text-slate-400 text-sm text-center py-4">Nessun documento in Qdrant</p>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-sm text-slate-400">{qdrantDocs.length} document{qdrantDocs.length !== 1 ? 'i' : 'o'} nel vector store</p>
+                          <div className="max-h-80 overflow-y-auto space-y-2">
+                            {qdrantDocs.map((doc) => (
+                              <div key={doc.document_id} className="bg-slate-700 rounded-lg p-3 flex items-center justify-between gap-3">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white text-sm font-medium truncate">{doc.filename}</p>
+                                  <p className="text-xs text-slate-400 font-mono truncate">{doc.document_id}</p>
+                                  <p className="text-xs text-slate-400">{doc.chunk_count} chunk · {doc.upload_date ? new Date(doc.upload_date).toLocaleString('it-IT') : '—'}</p>
+                                </div>
+                                <button
+                                  onClick={() => handleQdrantDeleteDocument(doc.document_id, doc.filename)}
+                                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition flex-shrink-0"
+                                >
+                                  Elimina vettori
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Sync check */}
+                      {sqliteDocs.length > 0 && (() => {
+                        const sqliteIds = new Set(sqliteDocs.filter(d => d.is_deleted === 0).map(d => d.id))
+                        const qdrantIds = new Set(qdrantDocs.map(d => d.document_id))
+                        const orphansQdrant = qdrantDocs.filter(d => !sqliteIds.has(d.document_id))
+                        const orphansSqlite = sqliteDocs.filter(d => d.is_deleted === 0 && !qdrantIds.has(d.id))
+                        if (orphansQdrant.length === 0 && orphansSqlite.length === 0) return (
+                          <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 text-sm text-green-300">
+                            SQLite e Qdrant sono sincronizzati.
+                          </div>
+                        )
+                        return (
+                          <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-3 space-y-2">
+                            {orphansQdrant.length > 0 && (
+                              <div>
+                                <p className="text-yellow-300 text-sm font-semibold">Orfani in Qdrant (non in SQLite):</p>
+                                {orphansQdrant.map(d => (
+                                  <div key={d.document_id} className="flex items-center justify-between mt-1">
+                                    <span className="text-xs text-slate-300 font-mono truncate">{d.filename} ({d.document_id.slice(0,8)}…)</span>
+                                    <button onClick={() => handleQdrantDeleteDocument(d.document_id, d.filename)}
+                                      className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded ml-2 flex-shrink-0">
+                                      Pulisci
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {orphansSqlite.length > 0 && (
+                              <div>
+                                <p className="text-yellow-300 text-sm font-semibold">In SQLite ma non in Qdrant:</p>
+                                {orphansSqlite.map(d => (
+                                  <p key={d.id} className="text-xs text-slate-300 font-mono mt-1 truncate">{d.filename} ({d.id.slice(0,8)}…)</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* TAB SQLITE */}
+              {adminTab === 'sqlite' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-white">SQLite — tabella documenti</h3>
+                    <button onClick={fetchSqliteInfo} className="text-sm text-blue-400 hover:text-blue-300">Aggiorna</button>
+                  </div>
+
+                  {loadingSqlite ? (
+                    <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                  ) : sqliteDocs.length === 0 ? (
+                    <p className="text-slate-400 text-sm text-center py-4">Nessun documento nel database</p>
+                  ) : (
+                    <div className="max-h-[60vh] overflow-y-auto space-y-2">
+                      <p className="text-sm text-slate-400">{sqliteDocs.length} righe totali ({sqliteDocs.filter(d => d.is_deleted === 0).length} attive, {sqliteDocs.filter(d => d.is_deleted !== 0).length} cancellate)</p>
+                      {sqliteDocs.map((doc) => (
+                        <div key={doc.id} className={`rounded-lg p-3 border ${doc.is_deleted ? 'bg-slate-700/50 border-slate-600 opacity-60' : 'bg-slate-700 border-slate-600'}`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${doc.is_deleted ? 'bg-red-800 text-red-200' : 'bg-green-700 text-green-100'}`}>
+                              {doc.is_deleted ? 'ELIMINATO' : 'ATTIVO'}
+                            </span>
+                            <span className="text-white text-sm font-medium truncate">{doc.filename}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 text-xs text-slate-400 mt-1">
+                            <span>ID: <span className="font-mono">{doc.id.slice(0,8)}…</span></span>
+                            <span>Tipo: {doc.doc_type}</span>
+                            <span>Pagine: {doc.page_count ?? '—'}</span>
+                            <span>Chunk: {doc.chunk_count}</span>
+                            <span className="col-span-2">Caricato: {doc.upload_date ? new Date(doc.upload_date).toLocaleString('it-IT') : '—'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

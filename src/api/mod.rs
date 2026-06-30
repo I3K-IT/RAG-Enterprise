@@ -36,7 +36,11 @@ pub fn router(state: AppState) -> Router {
 
     let admin_routes = Router::new()
         .route("/api/admin/backup", post(admin::trigger_backup))
-        .route("/api/admin/backup/list", get(admin::list_backups));
+        .route("/api/admin/backup/list", get(admin::list_backups))
+        .route("/api/admin/qdrant/stats", get(admin::qdrant_stats))
+        .route("/api/admin/qdrant/documents", get(admin::qdrant_documents))
+        .route("/api/admin/qdrant/document/{id}", delete(admin::qdrant_delete_document))
+        .route("/api/admin/sqlite/documents", get(admin::sqlite_documents));
 
     let query_routes = Router::new()
         .route("/api/query", post(query::query))

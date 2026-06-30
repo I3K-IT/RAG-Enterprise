@@ -62,6 +62,16 @@ pub async fn soft_delete(pool: &SqlitePool, document_id: &str) -> Result<bool> {
     Ok(affected > 0)
 }
 
+pub async fn list_all(pool: &SqlitePool) -> Result<Vec<DocumentRow>> {
+    let rows = sqlx::query_as::<_, DocumentRow>(
+        "SELECT id, filename, upload_date, page_count, doc_type, chunk_count, is_deleted
+         FROM documents ORDER BY upload_date DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn find_by_id(pool: &SqlitePool, document_id: &str) -> Result<Option<DocumentRow>> {
     let row = sqlx::query_as::<_, DocumentRow>(
         "SELECT id, filename, upload_date, page_count, doc_type, chunk_count, is_deleted
