@@ -89,7 +89,8 @@ pub struct StorageSettings {
 /// Layout: {dir}/bin/  {dir}/models/  {dir}/storage/  {dir}/db/  {dir}/uploads/
 #[derive(Debug, Deserialize)]
 pub struct DataSettings {
-    /// Percorso radice (default: ~/.eullm). Supporta "~/" come prefisso.
+    /// Percorso radice (default: cartella dell'eseguibile — portable app dir).
+    /// Override dev: DATA__DIR=/percorso/cartella/lavoro (il binario sta in target/debug/).
     #[serde(default = "default_data_dir")]
     pub dir: String,
     /// Se true: bootstrap avvia e supervisiona qdrant ed eullm come processi figlio.
@@ -154,8 +155,15 @@ fn default_embedding_model() -> String { "BAAI/bge-m3".into() }
 fn default_backup_dir() -> String { "./backups".into() }
 fn default_documents_dir() -> String { "./documents".into() }
 fn default_data_dir() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    format!("{home}/.eullm")
+    // Exe-relative: la cartella che contiene il binario è la portable app dir.
+    // In produzione: /install/dir/i3k-rag-engine → data = /install/dir/
+    // In dev (cargo run): target/debug/ → override con DATA__DIR=./data
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .display()
+        .to_string()
 }
 fn default_manage_subprocesses() -> bool { true }
 
