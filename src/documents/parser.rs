@@ -78,7 +78,7 @@ fn extract_pdf(path: &Path) -> Result<(String, Option<u32>)> {
     // Testo insufficiente: OCR opzionale
     #[cfg(feature = "ocr")]
     {
-        let ocr_text = ocr_pdf(path, page_count)?;
+        let ocr_text = super::ocr::ocr_pdf(path, page_count)?;
         return Ok((ocr_text, Some(page_count)));
     }
 
@@ -88,31 +88,6 @@ fn extract_pdf(path: &Path) -> Result<(String, Option<u32>)> {
         "PDF probabilmente scansionato — compila con --features ocr"
     );
     Ok((full_text, Some(page_count)))
-}
-
-#[cfg(feature = "ocr")]
-fn ocr_pdf(path: &Path, page_count: u32) -> Result<String> {
-    use pdfium_render::prelude::*;
-    use leptess::LepTess;
-
-    let pdfium = Pdfium::new(Pdfium::bind_to_system_library()?);
-    let doc = pdfium.load_pdf_from_file(path, None)?;
-    let mut full_text = String::new();
-
-    for i in 0..(page_count as usize) {
-        let page = doc.pages().get(i as u16)?;
-        let bitmap = page.render_with_config(
-            &PdfRenderConfig::new().set_target_width(1654).set_maximum_height(2339),
-        )?;
-        let raw = bitmap.as_image().to_rgba8().into_raw();
-        let mut lt = LepTess::new(None, "ita+eng")
-            .map_err(|e| anyhow::anyhow!("LepTess init: {e}"))?;
-        lt.set_image_from_mem(&raw)
-            .map_err(|e| anyhow::anyhow!("LepTess set_image: {e}"))?;
-        full_text.push_str(&lt.get_utf8_text().map_err(|e| anyhow::anyhow!("OCR: {e}"))?);
-        full_text.push('\n');
-    }
-    Ok(full_text)
 }
 
 // ── DOCX ──────────────────────────────────────────────────────────────────────

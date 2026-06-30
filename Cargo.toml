@@ -47,6 +47,7 @@ pdf_oxide = "0.3"
 # OCR (sistema libs: leptonica + pdfium — abilita con --features ocr):
 pdfium-render = { version = "0.8", features = ["sync"], optional = true }
 leptess = { version = "0.14", optional = true }
+image = { version = "0.25", optional = true }  # usata da ocr.rs per encode PNG
 # Altri formati (no Tika nel Community core):
 calamine = "0.26"
 docx-rs = "0.4"
@@ -97,7 +98,7 @@ anyhow = "1"
 [features]
 # "ocr"  — richiede leptonica + pdfium installati sul sistema.
 #           cargo build --features ocr
-ocr = ["leptess", "pdfium-render"]
+ocr = ["leptess", "pdfium-render", "image"]
 
 # "cuda" — abilita GPU per Candle (bge-m3 in VRAM). NO cuDNN: usa cudarc+cuBLAS.
 #           Richiede CUDA Toolkit (nvcc + libcublas-dev). NON richiede cuDNN.

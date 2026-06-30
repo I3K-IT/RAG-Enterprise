@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod conversations;
 pub mod documents;
 pub mod health;
 pub mod query;
@@ -48,6 +49,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chat/history", get(query::chat_history))
         .route("/api/chat/history", delete(query::delete_chat_history));
 
+    let conv_routes = Router::new()
+        .route("/api/conversations", get(conversations::list))
+        .route("/api/conversations", post(conversations::create))
+        .route("/api/conversations/{id}", put(conversations::rename))
+        .route("/api/conversations/{id}", delete(conversations::delete))
+        .route("/api/conversations/{id}/messages", get(conversations::messages));
+
     // SPA fallback: serve frontend/dist for all non-API routes
     let spa = ServeDir::new("frontend/dist")
         .not_found_service(ServeFile::new("frontend/dist/index.html"));
@@ -57,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes)
         .merge(doc_routes)
         .merge(query_routes)
+        .merge(conv_routes)
         .merge(admin_routes)
         .layer(CorsLayer::permissive())
         .with_state(state)

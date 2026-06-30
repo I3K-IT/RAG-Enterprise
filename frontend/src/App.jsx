@@ -84,23 +84,14 @@ function App() {
     const savedToken = localStorage.getItem('rag_auth_token')
     const savedUser = localStorage.getItem('rag_auth_user')
     if (!savedToken || !savedUser) return
-    // Valida il token con il server e controlla se l'utente è stato ricreato
     axios.get(`${API_URL}/api/auth/me`, {
       headers: { Authorization: `Bearer ${savedToken}` }
     }).then(res => {
-      const freshUser = res.data
-      const storedUser = JSON.parse(savedUser)
-      // Se created_at è cambiato (DB ricreato), pulisce le conversazioni stale
-      if (storedUser.created_at !== freshUser.created_at) {
-        localStorage.removeItem(`rag_conversations_${storedUser.id}`)
-        localStorage.removeItem(`rag_current_conversation_${storedUser.id}`)
-      }
-      localStorage.setItem('rag_auth_user', JSON.stringify(freshUser))
+      localStorage.setItem('rag_auth_user', JSON.stringify(res.data))
       setToken(savedToken)
-      setUser(freshUser)
+      setUser(res.data)
       setIsAuthenticated(true)
     }).catch(() => {
-      // Token scaduto o non valido — logout
       localStorage.removeItem('rag_auth_token')
       localStorage.removeItem('rag_auth_user')
     })
@@ -108,7 +99,7 @@ function App() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      loadConversationsFromStorage()
+      fetchConversationsFromApi()
       checkBackendHealth()
       fetchDocuments()
       const interval = setInterval(checkBackendHealth, 30000)
@@ -337,92 +328,82 @@ function App() {
   }
 
   // ============================================================================
-  // CONVERSATIONS (localStorage)
+  // CONVERSATIONS (SQLite via API)
   // ============================================================================
 
-  const loadConversationsFromStorage = () => {
-    if (!user) return
+  const fetchConversationsFromApi = async () => {
     try {
-      const stored = localStorage.getItem(`rag_conversations_${user.id}`)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        setConversations(parsed)
-        const lastId = localStorage.getItem(`rag_current_conversation_${user.id}`)
-        if (lastId && parsed.find(c => c.id === lastId)) {
-          loadConversation(lastId, parsed)
-        } else if (parsed.length > 0) {
-          loadConversation(parsed[0].id, parsed)
-        }
+      const res = await axios.get(`${API_URL}/api/conversations`)
+      const convs = res.data.conversations || []
+      setConversations(convs)
+      if (convs.length > 0) {
+        await switchConversation(convs[0].id)
       } else {
-        createNewConversation([])
+        await createNewConversation()
       }
-    } catch {
-      createNewConversation([])
+    } catch (e) {
+      console.error('Errore caricamento conversazioni:', e)
+      setConversations([])
+      setMessages([])
     }
   }
 
-  const saveConversationsToStorage = (convs) => {
-    if (!user) return
-    localStorage.setItem(`rag_conversations_${user.id}`, JSON.stringify(convs))
-  }
-
-  const createNewConversation = (existingConvs) => {
-    const base = existingConvs !== undefined ? existingConvs : conversations
-    const newConv = {
-      id: Date.now().toString(),
-      title: 'New Conversation',
-      messages: [],
-      createdAt: new Date().toISOString()
-    }
-    const updated = [newConv, ...base]
-    setConversations(updated)
-    saveConversationsToStorage(updated)
-    setCurrentConversationId(newConv.id)
-    setMessages([])
-  }
-
-  const loadConversation = (convId, convList) => {
-    const list = convList || conversations
-    const conv = list.find(c => c.id === convId)
-    if (conv && user) {
-      setCurrentConversationId(convId)
-      setMessages(conv.messages || [])
-      localStorage.setItem(`rag_current_conversation_${user.id}`, convId)
+  const createNewConversation = async () => {
+    try {
+      const res = await axios.post(`${API_URL}/api/conversations`)
+      const conv = res.data
+      setConversations(prev => [conv, ...prev])
+      setCurrentConversationId(conv.id)
+      setMessages([])
+      return conv.id
+    } catch (e) {
+      console.error('Errore creazione conversazione:', e)
+      return null
     }
   }
 
-  const deleteConversation = (convId) => {
-    if (conversations.length === 1) {
-      alert('Cannot delete the last conversation')
-      return
-    }
-    const updated = conversations.filter(c => c.id !== convId)
-    setConversations(updated)
-    saveConversationsToStorage(updated)
-    if (currentConversationId === convId) {
-      loadConversation(updated[0].id, updated)
+  const switchConversation = async (convId) => {
+    setCurrentConversationId(convId)
+    try {
+      const res = await axios.get(`${API_URL}/api/conversations/${convId}/messages`)
+      const msgs = (res.data.messages || []).map(m => ({
+        role: m.role,
+        content: m.content,
+        sources: m.sources ? (() => { try { return JSON.parse(m.sources) } catch { return [] } })() : [],
+        timestamp: m.timestamp,
+      }))
+      setMessages(msgs)
+    } catch (e) {
+      console.error('Errore caricamento messaggi:', e)
+      setMessages([])
     }
   }
 
-  const updateConversationTitle = (convId, firstMessage) => {
-    setConversations(prev => {
-      const updated = prev.map(c => {
-        if (c.id === convId && c.title === 'New Conversation') {
-          return { ...c, title: firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '') }
+  const deleteConversation = async (convId) => {
+    try {
+      await axios.delete(`${API_URL}/api/conversations/${convId}`)
+      const updated = conversations.filter(c => c.id !== convId)
+      setConversations(updated)
+      if (currentConversationId === convId) {
+        if (updated.length > 0) {
+          await switchConversation(updated[0].id)
+        } else {
+          await createNewConversation()
         }
-        return c
-      })
-      saveConversationsToStorage(updated)
-      return updated
-    })
+      }
+    } catch (e) {
+      alert('Errore eliminazione: ' + (e.response?.data?.error || e.message))
+    }
   }
 
-  const updateConversationMessages = (convId, newMessages) => {
-    setConversations(prev => {
-      const updated = prev.map(c => c.id === convId ? { ...c, messages: newMessages } : c)
-      saveConversationsToStorage(updated)
-      return updated
-    })
+  const updateConversationTitleApi = async (convId, firstMessage) => {
+    const title = firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '')
+    try {
+      await axios.put(`${API_URL}/api/conversations/${convId}`, { title })
+      setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c))
+    } catch (e) {
+      console.error('Errore rinomina conversazione:', e)
+    }
   }
 
   // ============================================================================
@@ -520,8 +501,8 @@ function App() {
     const userMessage = { role: 'user', content: query, timestamp: new Date().toISOString() }
     const updatedMessages = [...messages, userMessage]
     setMessages(updatedMessages)
-    updateConversationMessages(currentConversationId, updatedMessages)
-    if (updatedMessages.length === 1) updateConversationTitle(currentConversationId, query)
+    // Primo messaggio → rinomina la conversazione
+    if (updatedMessages.length === 1) updateConversationTitleApi(currentConversationId, query)
 
     setQuery('')
     setQuerying(true)
@@ -532,7 +513,9 @@ function App() {
     try {
       const response = await axios.post(`${API_URL}/api/query`, {
         query: userMessage.content,
-        top_k: 5
+        top_k: 5,
+        use_history: true,
+        conversation_id: currentConversationId,
       }, { timeout: 630000 })
 
       const assistantMessage = {
@@ -541,19 +524,13 @@ function App() {
         sources: response.data.sources || [],
         timestamp: new Date().toISOString()
       }
-      const finalMessages = [...updatedMessages, assistantMessage]
-      setMessages(finalMessages)
-      updateConversationMessages(currentConversationId, finalMessages)
+      setMessages(prev => [...prev, assistantMessage])
     } catch (error) {
       const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
       const errorContent = isTimeout
-        ? 'The model took too long to respond. Please try again.'
-        : `Error: ${error.response?.data?.error || error.message}`
-
-      const errorMessage = { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }
-      const finalMessages = [...updatedMessages, errorMessage]
-      setMessages(finalMessages)
-      updateConversationMessages(currentConversationId, finalMessages)
+        ? 'Il modello ha impiegato troppo tempo. Riprova.'
+        : `Errore: ${error.response?.data?.error || error.message}`
+      setMessages(prev => [...prev, { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }])
     } finally {
       if (modelLoadingTimerRef.current) {
         clearTimeout(modelLoadingTimerRef.current)
@@ -1115,10 +1092,10 @@ function App() {
           <aside className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col">
             <div className="p-4 border-b border-slate-700">
               <button
-                onClick={() => createNewConversation(undefined)}
+                onClick={() => createNewConversation()}
                 className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
               >
-                + New Chat
+                + Nuova chat
               </button>
             </div>
 
@@ -1131,17 +1108,15 @@ function App() {
                       ? 'bg-slate-700 text-white'
                       : 'text-slate-300 hover:bg-slate-700/50'
                   }`}
-                  onClick={() => loadConversation(conv.id, undefined)}
+                  onClick={() => switchConversation(conv.id)}
                 >
                   <span className="truncate flex-1 text-sm">{conv.title}</span>
-                  {conversations.length > 1 && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
-                      className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs ml-2"
-                    >
-                      ✕
-                    </button>
-                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
+                    className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs ml-2"
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>

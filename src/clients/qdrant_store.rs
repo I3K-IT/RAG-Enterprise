@@ -137,8 +137,14 @@ impl VectorStore for QdrantStore {
         let filter =
             Filter::must([Condition::matches("document_id", document_id.to_owned())]);
         self.client
-            .delete_points(DeletePointsBuilder::new(&self.collection).points(filter))
-            .await?;
+            .delete_points(
+                DeletePointsBuilder::new(&self.collection)
+                    .points(filter)
+                    .wait(true),
+            )
+            .await
+            .with_context(|| format!("qdrant delete_document {document_id}"))?;
+        tracing::info!(document_id = %document_id, "vettori Qdrant eliminati");
         Ok(())
     }
 }
