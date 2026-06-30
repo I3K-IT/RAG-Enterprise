@@ -33,6 +33,10 @@ const EULLM_FALLBACK_VERSION: &str = "0.6.6";
 // URL base per i file del modello embedding (bge-m3).
 const BGE_M3_BASE_URL: &str = "https://i3k.dev/models/bge-m3";
 
+// Dimensioni attese (usate solo per il pre-check spazio disco — non bloccanti se sbagliate).
+const BGE_M3_SIZE_BYTES: u64 = 2_400_000_000;  // ~2.3 GB model.safetensors
+const EULLM_SIZE_BYTES: u64 = 950_000_000;      // ~863 MB binario
+
 struct ModelInfo {
     /// Nome logico (per logging e path della cartella in ~/.eullm/models/)
     name: &'static str,
@@ -40,17 +44,21 @@ struct ModelInfo {
     file: &'static str,
     /// URL di download
     url: &'static str,
+    /// Dimensione attesa in byte (stima per il pre-check spazio disco)
+    size_bytes: u64,
 }
 
 const MODEL_14B: ModelInfo = ModelInfo {
     name: "qwen3-14b",
     file: "Qwen3-14B-Q4_K_M.gguf",
     url: "https://i3k.dev/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf",
+    size_bytes: 8_700_000_000, // ~8.4 GB
 };
 const MODEL_8B: ModelInfo = ModelInfo {
     name: "qwen3-8b",
     file: "Qwen3-8B-Q4_K_M.gguf",
     url: "https://i3k.dev/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf",
+    size_bytes: 4_900_000_000, // ~4.7 GB
 };
 
 /// Connessioni parallele per ogni download (split Range).
@@ -65,6 +73,9 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn ensure_ready(eullm_url: &str, embedding_model_id: &str) -> Result<()> {
+    // Pre-check: mostra cosa verrà scaricato e verifica spazio disco
+    check_disk_space_ahead(eullm_url, embedding_model_id).await?;
+
     // Embedding model: sempre necessario, scarica prima di avviare eullm
     ensure_embedding_model(embedding_model_id).await?;
 
@@ -630,6 +641,109 @@ async fn wait_for_api(url: &str, timeout_secs: u64) -> Result<()> {
 }
 
 // ── Formattatori ─────────────────────────────────────────────────────────────
+
+/// Spazio libero in byte sulla partizione che contiene `path`.
+/// Risale ai genitori fino a trovare una directory esistente.
+/// Restituisce u64::MAX se non riesce (silenzioso — non blocca il boot).
+fn free_space_bytes(path: &Path) -> u64 {
+    use std::ffi::CString;
+    let mut p = path.to_path_buf();
+    loop {
+        if p.exists() {
+            break;
+        }
+        match p.parent() {
+            Some(par) => p = par.to_path_buf(),
+            None => return u64::MAX,
+        }
+    }
+    let Ok(cpath) = CString::new(p.as_os_str().as_encoded_bytes()) else {
+        return u64::MAX;
+    };
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) } == 0 {
+        (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
+    } else {
+        u64::MAX
+    }
+}
+
+/// Verifica se eullm è già installato (senza scaricarlo).
+fn eullm_installed() -> bool {
+    let mut candidates = vec![PathBuf::from("./eullm")];
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/bin/eullm"));
+    }
+    candidates.iter().any(|p| p.exists())
+        || std::process::Command::new("eullm")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+}
+
+/// Prima di qualsiasi download: elenca cosa manca, la dimensione totale e
+/// lo spazio disponibile. Esce con errore se lo spazio è insufficiente.
+async fn check_disk_space_ahead(eullm_url: &str, embedding_model_id: &str) -> Result<()> {
+    struct Item {
+        label: &'static str,
+        size: u64,
+    }
+    let mut needed: Vec<Item> = Vec::new();
+
+    // bge-m3
+    if crate::clients::embeddings::find_model_in_cache(embedding_model_id).is_none() {
+        needed.push(Item { label: "bge-m3  (embedding model)", size: BGE_M3_SIZE_BYTES });
+    }
+
+    // eullm (solo se non in ascolto e non installato)
+    if !probe_api(eullm_url).await && !eullm_installed() {
+        needed.push(Item { label: "eullm   (motore LLM)", size: EULLM_SIZE_BYTES });
+    }
+
+    // GGUF 14B
+    if gguf_path(&MODEL_14B).map(|p| !p.exists()).unwrap_or(true) {
+        needed.push(Item { label: "Qwen3-14B-Q4_K_M.gguf  (chat)", size: MODEL_14B.size_bytes });
+    }
+
+    // GGUF 8B
+    if gguf_path(&MODEL_8B).map(|p| !p.exists()).unwrap_or(true) {
+        needed.push(Item { label: "Qwen3-8B-Q4_K_M.gguf   (extraction)", size: MODEL_8B.size_bytes });
+    }
+
+    if needed.is_empty() {
+        return Ok(());
+    }
+
+    let total: u64 = needed.iter().map(|i| i.size).sum();
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let models_dir = PathBuf::from(&home).join(".eullm").join("models");
+    let free = free_space_bytes(&models_dir);
+
+    eprintln!();
+    eprintln!("  Primo avvio — download necessari:");
+    for item in &needed {
+        eprintln!("    • {:<42}  {:>8}", item.label, fmt_bytes(item.size));
+    }
+    eprintln!("  ─────────────────────────────────────────────────────────");
+    eprintln!("  Totale:  {:>8}   ·   Server: i3k.dev (Europa, IT)", fmt_bytes(total));
+    if free != u64::MAX {
+        eprintln!("  Spazio libero:  {}", fmt_bytes(free));
+        let margin = 1_000_000_000u64; // 1 GB di margine
+        if free < total.saturating_add(margin) {
+            eprintln!();
+            bail!(
+                "Spazio su disco insufficiente: {} liberi, {} necessari (+ 1 GB margine).",
+                fmt_bytes(free),
+                fmt_bytes(total)
+            );
+        }
+    }
+    eprintln!();
+
+    Ok(())
+}
 
 fn fmt_bytes(b: u64) -> String {
     const GB: u64 = 1 << 30;

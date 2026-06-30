@@ -82,6 +82,9 @@ tokio-cron-scheduler = "0.13"
 config = "0.14"
 dotenvy = "0.15"
 
+# --- Sistema (disk space) ---
+libc = "0.2"
+
 # --- Logging / errori ---
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
