@@ -1,20 +1,16 @@
-//! Startup bootstrap: scarica eullm + GGUF, poi avvia eullm in serving.
-//!
-//! Strategia download:
-//!  - HTTP Range multiconnessione (N chunk paralleli) con progress % + ETA.
-//!  - I GGUF vengono scaricati da i3k.dev — nessun doppio download.
-//!  - eullm viene avviato con il PATH del file (non il nome modello), così non serve
-//!    creare manifest.json manualmente.
+//! Bootstrap: scarica, verifica (SHA256) e avvia i componenti (manifest.toml).
 //!
 //! Flusso:
-//!  1. eullm già in ascolto → skip.
-//!  2. Trova o scarica il binario eullm (parallel, progress).
-//!  3. Scarica Qwen3-14B-Q4_K_M.gguf se assente (parallel, progress).
-//!  4. Scarica Qwen3-8B-Q4_K_M.gguf  se assente (parallel, progress).
-//!  5. `eullm run <path-14b> --fit --cli` in background.
-//!  6. Attendi /api/tags ready.
+//!  1. Carica manifest embedded (include_str!).
+//!  2. Crea struttura directory {data_dir}/{bin,models,storage/qdrant,db,uploads,backups}.
+//!  3. Pre-check spazio disco (2x margine sulle dimensioni totali mancanti).
+//!  4. Per ogni componente: controlla presenza + sha256; se manca/errato → download atomico.
+//!  5. Se manage_subprocesses=true: avvia qdrant ed eullm come processi figlio supervisionati.
+//!  6. Attende API ready di entrambi.
+//!  7. Ritorna ProcessGuard: al drop, i figli ricevono SIGKILL (kill_on_drop).
 
 use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -24,322 +20,366 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 
-// ── Costanti ──────────────────────────────────────────────────────────────────
+use crate::config::Settings;
 
-const EULLM_REPO: &str = "eullm/eullm";
-const EULLM_ASSET: &str = "eullm-linux-x64-cuda-12.8";
-const EULLM_FALLBACK_VERSION: &str = "0.6.6";
+// ── Manifest ──────────────────────────────────────────────────────────────────
 
-// URL base per i file del modello embedding (bge-m3).
-const BGE_M3_BASE_URL: &str = "https://i3k.dev/models/bge-m3";
+const MANIFEST_STR: &str = include_str!("../manifest.toml");
 
-// Dimensioni attese (usate solo per il pre-check spazio disco — non bloccanti se sbagliate).
-const BGE_M3_SIZE_BYTES: u64 = 2_400_000_000;  // ~2.3 GB model.safetensors
-const EULLM_SIZE_BYTES: u64 = 950_000_000;      // ~863 MB binario
-
-struct ModelInfo {
-    /// Nome logico (per logging e path della cartella in ~/.eullm/models/)
-    name: &'static str,
-    /// Filename del GGUF
-    file: &'static str,
-    /// URL di download
-    url: &'static str,
-    /// Dimensione attesa in byte (stima per il pre-check spazio disco)
-    size_bytes: u64,
+#[derive(Debug, Deserialize, Clone)]
+struct Component {
+    name: String,
+    version: String,
+    #[allow(dead_code)]
+    kind: String,
+    url: String,
+    sha256: String,
+    size: u64,
+    dest: String,
+    exec: bool,
 }
 
-const MODEL_14B: ModelInfo = ModelInfo {
-    name: "qwen3-14b",
-    file: "Qwen3-14B-Q4_K_M.gguf",
-    url: "https://i3k.dev/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf",
-    size_bytes: 8_700_000_000, // ~8.4 GB
-};
-const MODEL_8B: ModelInfo = ModelInfo {
-    name: "qwen3-8b",
-    file: "Qwen3-8B-Q4_K_M.gguf",
-    url: "https://i3k.dev/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf",
-    size_bytes: 4_900_000_000, // ~4.7 GB
-};
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    components: Vec<Component>,
+}
 
-/// Connessioni parallele per ogni download (split Range).
+fn load_manifest() -> Result<Manifest> {
+    toml::from_str(MANIFEST_STR).context("manifest.toml non valido — bug di compilazione")
+}
+
+// ── Guardia processi supervisionati ───────────────────────────────────────────
+
+/// Tiene in vita i processi figli. Al drop: SIGKILL (kill_on_drop=true).
+pub struct ProcessGuard {
+    _children: Vec<tokio::process::Child>,
+}
+
+// ── Costanti ──────────────────────────────────────────────────────────────────
+
 const DOWNLOAD_CONNECTIONS: usize = 8;
-/// Buffer per scrittura su disco: 1 MB per non fare spawn_blocking a ogni chunk HTTP.
-const WRITE_BUFFER_BYTES: usize = 1 << 20;
+const WRITE_BUFFER_BYTES: usize = 1 << 20; // 1 MB
 
-const READY_TIMEOUT_SECS: u64 = 600;
+const QDRANT_READY_TIMEOUT_SECS: u64 = 60;
+const EULLM_READY_TIMEOUT_SECS: u64 = 600;
 const POLL_INTERVAL_MS: u64 = 2_000;
 const PROBE_TIMEOUT_SECS: u64 = 3;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub async fn ensure_ready(eullm_url: &str, embedding_model_id: &str) -> Result<()> {
-    // Pre-check: mostra cosa verrà scaricato e verifica spazio disco
-    check_disk_space_ahead(eullm_url, embedding_model_id).await?;
+pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
+    let manifest = load_manifest()?;
+    let data_dir = settings.data.data_path();
 
-    // Embedding model: sempre necessario, scarica prima di avviare eullm
-    ensure_embedding_model(embedding_model_id).await?;
-
-    if probe_api(eullm_url).await {
-        tracing::info!("eullm già in ascolto su {eullm_url}");
-        return Ok(());
+    // 1. Struttura directory
+    for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {
+        tokio::fs::create_dir_all(data_dir.join(subdir))
+            .await
+            .with_context(|| format!("mkdir {}/{subdir}", data_dir.display()))?;
     }
 
-    // 1. Binario eullm
-    let bin = find_or_install_eullm().await?;
+    // 2. Pre-check spazio disco
+    check_disk_space(&manifest, &data_dir)?;
 
-    // 2. Modello principale (inference + ingestione)
-    let gguf_14b = ensure_gguf(&MODEL_14B).await?;
+    // 3. Scarica / verifica ogni componente
+    for comp in &manifest.components {
+        let dest = data_dir.join(&comp.dest);
+        ensure_component(comp, &dest).await?;
+    }
 
-    // 3. Modello extraction SQL (schedulato / on-demand)
-    let _gguf_8b = ensure_gguf(&MODEL_8B).await?;
+    let mut children: Vec<tokio::process::Child> = Vec::new();
 
-    // 4. Avvia eullm con il path del GGUF (--cli: no chat embedding; --fit: auto VRAM)
-    spawn_eullm_background(&bin, &gguf_14b);
+    if settings.data.manage_subprocesses {
+        // Qdrant
+        let qdrant_url = &settings.qdrant.url;
+        if probe_url(&format!("{qdrant_url}/healthz")).await {
+            tracing::info!("qdrant già in ascolto su {qdrant_url}");
+        } else {
+            let qdrant_bin = component_path(&manifest, "qdrant", &data_dir)?;
+            let qdrant_storage = data_dir.join("storage/qdrant");
+            let child = spawn_qdrant(&qdrant_bin, &qdrant_storage)?;
+            children.push(child);
+            tracing::info!("qdrant avviato: {}", qdrant_bin.display());
+        }
 
-    // 5. Attendi API ready
-    wait_for_api(eullm_url, READY_TIMEOUT_SECS).await
+        // eullm
+        let eullm_url = &settings.eullm.url;
+        if probe_url(&format!("{eullm_url}/api/tags")).await {
+            tracing::info!("eullm già in ascolto su {eullm_url}");
+        } else {
+            let eullm_bin = component_path(&manifest, "eullm", &data_dir)?;
+            let gguf_14b = component_path(&manifest, "qwen3-14b", &data_dir)?;
+            let child = spawn_eullm(&eullm_bin, &gguf_14b)?;
+            children.push(child);
+            tracing::info!("eullm avviato: {} {}", eullm_bin.display(), gguf_14b.display());
+        }
+    } else {
+        tracing::info!("manage_subprocesses=false: attendo processi esterni");
+    }
+
+    // Attendi API (sempre — sia managed che external)
+    wait_for_url(
+        &format!("{}/healthz", settings.qdrant.url),
+        QDRANT_READY_TIMEOUT_SECS,
+        "qdrant",
+    )
+    .await?;
+    wait_for_url(
+        &format!("{}/api/tags", settings.eullm.url),
+        EULLM_READY_TIMEOUT_SECS,
+        "eullm",
+    )
+    .await?;
+
+    Ok(ProcessGuard { _children: children })
 }
 
-// ── GGUF: controlla / scarica ─────────────────────────────────────────────────
+// ── Componente: verifica / download atomico ───────────────────────────────────
 
-async fn ensure_gguf(m: &ModelInfo) -> Result<PathBuf> {
-    let dest = gguf_path(m)?;
-
+async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
     if dest.exists() {
-        tracing::info!("{}: già in cache ({})", m.name, dest.display());
-        return Ok(dest);
+        if verify_component(comp, dest).await? {
+            tracing::info!("{} ({}): presente", comp.name, comp.version);
+            return Ok(());
+        }
+        tracing::warn!("{}: verifica fallita, ri-scarico", comp.name);
+        tokio::fs::remove_file(dest).await.ok();
     }
 
-    // Crea la directory del modello
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    // Download atomico: scarica in .partial, verifica sha256, rinomina
+    let partial = dest.with_extension("partial");
+    tokio::fs::remove_file(&partial).await.ok();
+
+    parallel_download(&comp.url, &partial, &comp.name, DOWNLOAD_CONNECTIONS).await?;
+
+    // Verifica sha256 dopo download
+    if !comp.sha256.is_empty() {
+        let expected = comp.sha256.clone();
+        let p = partial.clone();
+        let got = tokio::task::spawn_blocking(move || sha256_file(&p))
             .await
-            .with_context(|| format!("mkdir {}", parent.display()))?;
-    }
-
-    tracing::info!("{}: avvio download → {}", m.name, dest.display());
-    parallel_download(m.url, &dest, m.file, DOWNLOAD_CONNECTIONS).await?;
-    Ok(dest)
-}
-
-fn gguf_path(m: &ModelInfo) -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("$HOME non definita")?;
-    Ok(PathBuf::from(home)
-        .join(".eullm/models")
-        .join(m.name)
-        .join(m.file))
-}
-
-// ── Binario eullm: controlla / scarica ───────────────────────────────────────
-
-async fn find_or_install_eullm() -> Result<PathBuf> {
-    let candidates = {
-        let mut v = vec![PathBuf::from("./eullm")];
-        if let Ok(home) = std::env::var("HOME") {
-            v.push(PathBuf::from(&home).join(".local/bin/eullm"));
+            .context("spawn_blocking sha256")?
+            .context("sha256 calcolo")?;
+        if got != expected {
+            tokio::fs::remove_file(&partial).await.ok();
+            bail!(
+                "{}: sha256 errato dopo download\n  atteso:  {}\n  trovato: {}",
+                comp.name,
+                expected,
+                got
+            );
         }
-        v
-    };
-
-    for p in &candidates {
-        if p.exists() {
-            tracing::info!("eullm trovato: {}", p.display());
-            return Ok(p.clone());
-        }
+        tracing::info!("{}: sha256 ok", comp.name);
     }
 
-    // Controlla PATH
-    if std::process::Command::new("eullm")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        tracing::info!("eullm trovato nel PATH");
-        return Ok(PathBuf::from("eullm"));
-    }
-
-    download_eullm().await
-}
-
-async fn download_eullm() -> Result<PathBuf> {
-    let version = latest_eullm_version().await;
-    let url = format!(
-        "https://github.com/{EULLM_REPO}/releases/download/EuLLM-v{version}/{EULLM_ASSET}"
-    );
-    let dest = PathBuf::from("./eullm");
-
-    tracing::info!("download eullm v{version}: {url}");
-    parallel_download(&url, &dest, "eullm", DOWNLOAD_CONNECTIONS).await?;
-
-    use std::os::unix::fs::PermissionsExt;
-    tokio::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+    tokio::fs::rename(&partial, dest)
         .await
-        .context("chmod +x ./eullm")?;
+        .with_context(|| format!("rename {}", dest.display()))?;
 
-    tracing::info!("eullm v{version} installato: {}", dest.display());
-    Ok(dest)
-}
-
-async fn latest_eullm_version() -> String {
-    let url = format!("https://api.github.com/repos/{EULLM_REPO}/releases/latest");
-    let ver: Option<String> = async {
-        let v: serde_json::Value = reqwest::Client::new()
-            .get(&url)
-            .header("User-Agent", "i3k-rag-engine")
-            .timeout(Duration::from_secs(15))
-            .send()
+    if comp.exec {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))
             .await
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        v["tag_name"]
-            .as_str()?
-            .strip_prefix("EuLLM-v")
-            .map(str::to_owned)
+            .with_context(|| format!("chmod +x {}", dest.display()))?;
+        tracing::info!("{}: chmod +x", comp.name);
     }
-    .await;
-    ver.unwrap_or_else(|| {
-        tracing::warn!(fallback = EULLM_FALLBACK_VERSION, "versione eullm non verificabile");
-        EULLM_FALLBACK_VERSION.to_owned()
-    })
+
+    Ok(())
 }
 
-// ── Embedding model: controlla / scarica ─────────────────────────────────────
+/// Verifica un componente già su disco.
+/// sha256 non vuoto → calcola e confronta il digest.
+/// sha256 vuoto     → solo controllo esistenza (nessun sha256 nel manifest).
+async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
+    if comp.sha256.is_empty() {
+        return Ok(true);
+    }
 
-async fn ensure_embedding_model(model_id: &str) -> Result<()> {
-    if crate::clients::embeddings::find_model_in_cache(model_id).is_some() {
-        tracing::info!("{model_id}: già in cache locale");
+    let expected = comp.sha256.clone();
+    let p = dest.to_owned();
+    let name = comp.name.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        tracing::info!("{name}: verifica sha256 in corso…");
+        sha256_file(&p)
+    })
+    .await
+    .context("spawn_blocking sha256 verify")?
+    .context("sha256 verify")?;
+
+    Ok(got == expected)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).context("read")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+// ── Spazio disco ──────────────────────────────────────────────────────────────
+
+fn check_disk_space(manifest: &Manifest, data_dir: &Path) -> Result<()> {
+    struct Item<'a> {
+        label: &'a str,
+        size: u64,
+    }
+
+    let mut needed: Vec<Item> = Vec::new();
+    for comp in &manifest.components {
+        if comp.size > 0 && !data_dir.join(&comp.dest).exists() {
+            needed.push(Item { label: &comp.name, size: comp.size });
+        }
+    }
+
+    if needed.is_empty() {
         return Ok(());
     }
 
-    let dest = crate::clients::embeddings::download_target_dir(model_id);
-    tracing::info!("{model_id}: non in cache, avvio download → {}", dest.display());
-    tokio::fs::create_dir_all(&dest)
-        .await
-        .with_context(|| format!("mkdir {}", dest.display()))?;
+    let total: u64 = needed.iter().map(|i| i.size).sum();
+    let free = free_space_bytes(data_dir);
 
-    let client = reqwest::Client::builder()
-        .user_agent("i3k-rag-engine/0.1")
-        .timeout(Duration::from_secs(300))
-        .build()
-        .context("reqwest client")?;
+    eprintln!();
+    eprintln!("  Primo avvio — download necessari:");
+    for item in &needed {
+        eprintln!("    • {:<44}  {:>8}", item.label, fmt_bytes(item.size));
+    }
+    eprintln!("  ─────────────────────────────────────────────────────────────────");
+    eprintln!(
+        "  Totale stimato:  {:>8}   ·   Server: i3k.dev (Europa, IT)",
+        fmt_bytes(total)
+    );
 
-    let base = BGE_M3_BASE_URL;
-
-    // File di configurazione piccoli: download diretto
-    for name in &["config.json", "tokenizer.json"] {
-        let path = dest.join(name);
-        if !path.exists() {
-            tracing::info!("{model_id}/{name}: download…");
-            download_small_file(&client, &format!("{base}/{name}"), &path)
-                .await
-                .with_context(|| format!("download {name}"))?;
+    if free != u64::MAX {
+        eprintln!("  Spazio libero:  {}", fmt_bytes(free));
+        let required = total.saturating_mul(2);
+        if free < required {
+            eprintln!();
+            bail!(
+                "Spazio su disco insufficiente: {} liberi, {} necessari (margine 2x).",
+                fmt_bytes(free),
+                fmt_bytes(required)
+            );
         }
     }
-
-    // Pesi: download parallelo (8 connessioni) con temp file + rename atomico
-    let single = dest.join("model.safetensors");
-    if !single.exists() {
-        let tmp = dest.join("model.safetensors.tmp");
-        let _ = tokio::fs::remove_file(&tmp).await; // pulisce residui precedenti
-        match parallel_download(
-            &format!("{base}/model.safetensors"),
-            &tmp,
-            &format!("{model_id}/model.safetensors"),
-            DOWNLOAD_CONNECTIONS,
-        )
-        .await
-        {
-            Ok(()) => {
-                tokio::fs::rename(&tmp, &single)
-                    .await
-                    .context("rename model.safetensors")?;
-            }
-            Err(e) => {
-                let _ = tokio::fs::remove_file(&tmp).await;
-                tracing::warn!("model.safetensors non disponibile ({e:#}), provo sharded…");
-                download_sharded_model(&client, &base, &dest).await?;
-            }
-        }
-    }
-
-    tracing::info!("{model_id}: download completato");
+    eprintln!();
     Ok(())
 }
 
-async fn download_sharded_model(client: &reqwest::Client, base: &str, dest: &Path) -> Result<()> {
-    let idx_name = "model.safetensors.index.json";
-    let idx_path = dest.join(idx_name);
-    download_small_file(client, &format!("{base}/{idx_name}"), &idx_path)
-        .await
-        .context("download safetensors index")?;
-
-    let idx: serde_json::Value =
-        serde_json::from_reader(std::fs::File::open(&idx_path)?)
-            .context("parse safetensors.index.json")?;
-
-    let mut shards: Vec<String> = idx["weight_map"]
-        .as_object()
-        .context("weight_map mancante")?
-        .values()
-        .filter_map(|v| v.as_str())
-        .map(String::from)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    shards.sort();
-
-    for shard in shards {
-        let path = dest.join(&shard);
-        if !path.exists() {
-            let tmp = dest.join(format!("{shard}.tmp"));
-            let _ = tokio::fs::remove_file(&tmp).await;
-            parallel_download(
-                &format!("{base}/{shard}"),
-                &tmp,
-                &shard,
-                DOWNLOAD_CONNECTIONS,
-            )
-            .await
-            .with_context(|| format!("download shard {shard}"))?;
-            tokio::fs::rename(&tmp, &path)
-                .await
-                .with_context(|| format!("rename {shard}"))?;
+fn free_space_bytes(path: &Path) -> u64 {
+    use std::ffi::CString;
+    let mut p = path.to_path_buf();
+    loop {
+        if p.exists() {
+            break;
+        }
+        match p.parent() {
+            Some(par) => p = par.to_path_buf(),
+            None => return u64::MAX,
         }
     }
-    Ok(())
+    let Ok(cpath) = CString::new(p.as_os_str().as_encoded_bytes()) else {
+        return u64::MAX;
+    };
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) } == 0 {
+        (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
+    } else {
+        u64::MAX
+    }
 }
 
-async fn download_small_file(client: &reqwest::Client, url: &str, dest: &Path) -> Result<()> {
-    let bytes = client
+// ── Avvio processi ────────────────────────────────────────────────────────────
+
+fn component_path(manifest: &Manifest, name: &str, data_dir: &Path) -> Result<PathBuf> {
+    manifest
+        .components
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| data_dir.join(&c.dest))
+        .with_context(|| format!("componente '{name}' non trovato nel manifest"))
+}
+
+fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
+    Command::new(bin)
+        .env("QDRANT__STORAGE__STORAGE_PATH", storage)
+        .env("QDRANT__SERVICE__HTTP_PORT", "6333")
+        .env("QDRANT__SERVICE__GRPC_PORT", "6334")
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("avvio qdrant: {}", bin.display()))
+}
+
+fn spawn_eullm(bin: &Path, model_path: &Path) -> Result<tokio::process::Child> {
+    Command::new(bin)
+        .arg("run")
+        .arg(model_path)
+        .arg("--fit")
+        .arg("--cli")
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("avvio eullm: {}", bin.display()))
+}
+
+// ── Attesa API ────────────────────────────────────────────────────────────────
+
+async fn probe_url(url: &str) -> bool {
+    reqwest::Client::new()
         .get(url)
+        .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
         .send()
         .await
-        .context("GET")?
-        .error_for_status()
-        .context("HTTP")?
-        .bytes()
-        .await
-        .context("bytes")?;
-    tokio::fs::write(dest, &bytes).await.context("write")?;
-    Ok(())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+async fn wait_for_url(url: &str, timeout_secs: u64, label: &str) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut tick: u32 = 0;
+    tracing::info!("attendo {label} su {url} (max {timeout_secs}s)");
+    loop {
+        if probe_url(url).await {
+            tracing::info!("{label} pronto");
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("{label} non risponde dopo {timeout_secs}s — URL: {url}");
+        }
+        if tick > 0 && tick % 15 == 0 {
+            tracing::info!(elapsed_s = tick * 2, "ancora in attesa di {label}…");
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+        tick += 1;
+    }
 }
 
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
 
-/// Scarica `url` in `dest` usando `n` connessioni parallele con Range requests.
-/// Aggiorna una singola riga di progress su TTY (via \r); su log non-interattivo usa tracing.
-/// Fallback a singola connessione se il server non supporta Range.
+/// Scarica `url` in `dest` usando `n` connessioni Range parallele.
+/// Progress su riga singola (TTY) o tracing (non-TTY).
+/// Fallback a streaming se il server non supporta Range.
 async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3600))
-        .build()?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(3600)).build()?;
 
-    // Probe GET (non HEAD): segue i redirect CDN e restituisce l'URL finale con
-    // content-length corretto. I CDN con URL pre-firmati (HuggingFace LFS / S3)
-    // spesso non rispondono correttamente alle HEAD — content-length mancante o 0.
     let probe = client.get(url).send().await.context("probe GET")?;
     if !probe.status().is_success() {
         bail!("HTTP {} — {display_name} ({url})", probe.status());
@@ -361,12 +401,10 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
 
     if total == 0 || !accepts_ranges {
         tracing::info!("{display_name}: download streaming (Range non supportato)");
-        download_streaming(probe, dest, display_name).await?;
-        return Ok(());
+        return download_streaming(probe, dest, display_name).await;
     }
-    drop(probe); // non scarichiamo il body — usiamo Range requests sull'URL finale
+    drop(probe);
 
-    // Pre-alloca il file
     {
         let f = std::fs::OpenOptions::new()
             .write(true)
@@ -386,7 +424,6 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     let downloaded = Arc::new(AtomicU64::new(0));
     let start = Instant::now();
 
-    // Chunk boundaries
     let chunk_size = (total + n as u64 - 1) / n as u64;
     let ranges: Vec<(u64, u64)> = (0..n as u64)
         .map(|i| {
@@ -396,7 +433,6 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         })
         .collect();
 
-    // Task progress — riga singola su TTY (\r), tracing altrove
     use std::io::IsTerminal;
     let is_tty = std::io::stderr().is_terminal();
     let dl_ref = Arc::clone(&downloaded);
@@ -409,7 +445,7 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
                 continue;
             }
             let pct = done as f64 / total as f64 * 100.0;
-            let elapsed = start.elapsed().as_secs_f64();
+            let elapsed = start.elapsed().as_secs_f64().max(0.001);
             let rate = done as f64 / elapsed;
             let eta = if rate > 0.0 {
                 fmt_eta(((total - done) as f64 / rate) as u64)
@@ -438,30 +474,29 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         }
     });
 
-    // Chunk download tasks — usano l'URL finale (post-redirect) per evitare
-    // un redirect per ogni Range request
     let mut tasks = Vec::with_capacity(n);
-    for (chunk_start, chunk_end) in ranges {
+    for (cs, ce) in ranges {
         let client = client.clone();
         let url = final_url.clone();
         let file = Arc::clone(&file);
         let dl = Arc::clone(&downloaded);
-        tasks.push(tokio::spawn(async move {
-            download_chunk(client, url, file, chunk_start, chunk_end, dl).await
-        }));
+        tasks.push(tokio::spawn(
+            async move { download_chunk(client, url, file, cs, ce, dl).await },
+        ));
     }
 
     for t in tasks {
-        t.await
-            .context("join chunk task")?
-            .context("chunk download")?;
+        t.await.context("join chunk task")?.context("chunk download")?;
     }
 
     progress_task.abort();
     if is_tty {
         use std::io::Write;
-        let elapsed = fmt_eta(start.elapsed().as_secs());
-        eprintln!("\r  {display_name}: completato  {}  in {elapsed}                    ", fmt_bytes(total));
+        eprintln!(
+            "\r  {display_name}: completato  {}  in {}                    ",
+            fmt_bytes(total),
+            fmt_eta(start.elapsed().as_secs())
+        );
         let _ = std::io::stderr().flush();
     } else {
         tracing::info!(
@@ -473,8 +508,6 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     Ok(())
 }
 
-/// Streaming download (fallback quando il server non supporta Range o non fornisce content-length).
-/// Aggiorna una singola riga su TTY; su log non-interattivo logga ogni 10%.
 async fn download_streaming(
     resp: reqwest::Response,
     dest: &Path,
@@ -522,7 +555,11 @@ async fn download_streaming(
     file.flush().await.context("flush")?;
     if is_tty {
         use std::io::Write;
-        eprintln!("\r  {display_name}: completato  {}  in {}                    ", fmt_bytes(downloaded.max(total)), fmt_eta(start.elapsed().as_secs()));
+        eprintln!(
+            "\r  {display_name}: completato  {}  in {}                    ",
+            fmt_bytes(downloaded.max(total)),
+            fmt_eta(start.elapsed().as_secs())
+        );
         let _ = std::io::stderr().flush();
     } else {
         tracing::info!(
@@ -534,8 +571,6 @@ async fn download_streaming(
     Ok(())
 }
 
-/// Scarica il range `[start, end]` e lo scrive nel file alla posizione corretta.
-/// Bufferizza le scritture a 1 MB per ridurre le chiamate spawn_blocking.
 async fn download_chunk(
     client: reqwest::Client,
     url: String,
@@ -570,7 +605,6 @@ async fn download_chunk(
         }
     }
 
-    // Flush remainder
     if !buf.is_empty() {
         let f = Arc::clone(&file);
         let off = write_offset;
@@ -583,167 +617,7 @@ async fn download_chunk(
     Ok(())
 }
 
-// ── Avvio eullm ───────────────────────────────────────────────────────────────
-
-fn spawn_eullm_background(bin: &Path, model_path: &Path) {
-    let bin = bin.to_owned();
-    let model_path = model_path.to_owned();
-    tokio::spawn(async move {
-        tracing::info!("avvio eullm: {} {}", bin.display(), model_path.display());
-        let result = Command::new(&bin)
-            .arg("run")
-            .arg(&model_path)
-            .arg("--fit")
-            .arg("--cli")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .status()
-            .await;
-        match result {
-            Ok(s) if !s.success() => tracing::error!(code = ?s.code(), "eullm terminato con errore"),
-            Err(e) => tracing::error!(err = %e, "errore avvio processo eullm"),
-            Ok(_) => tracing::info!("eullm terminato"),
-        }
-    });
-}
-
-// ── Attesa API ────────────────────────────────────────────────────────────────
-
-async fn probe_api(url: &str) -> bool {
-    reqwest::Client::new()
-        .get(format!("{url}/api/tags"))
-        .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
-}
-
-async fn wait_for_api(url: &str, timeout_secs: u64) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let mut tick: u32 = 0;
-    tracing::info!("attendo eullm su {url} (max {timeout_secs}s)");
-    loop {
-        if probe_api(url).await {
-            tracing::info!("eullm API ready");
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!("eullm non risponde dopo {timeout_secs}s");
-        }
-        if tick > 0 && tick % 15 == 0 {
-            tracing::info!(elapsed_s = tick * 2, "ancora in attesa di eullm...");
-        }
-        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
-        tick += 1;
-    }
-}
-
 // ── Formattatori ─────────────────────────────────────────────────────────────
-
-/// Spazio libero in byte sulla partizione che contiene `path`.
-/// Risale ai genitori fino a trovare una directory esistente.
-/// Restituisce u64::MAX se non riesce (silenzioso — non blocca il boot).
-fn free_space_bytes(path: &Path) -> u64 {
-    use std::ffi::CString;
-    let mut p = path.to_path_buf();
-    loop {
-        if p.exists() {
-            break;
-        }
-        match p.parent() {
-            Some(par) => p = par.to_path_buf(),
-            None => return u64::MAX,
-        }
-    }
-    let Ok(cpath) = CString::new(p.as_os_str().as_encoded_bytes()) else {
-        return u64::MAX;
-    };
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) } == 0 {
-        (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
-    } else {
-        u64::MAX
-    }
-}
-
-/// Verifica se eullm è già installato (senza scaricarlo).
-fn eullm_installed() -> bool {
-    let mut candidates = vec![PathBuf::from("./eullm")];
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/bin/eullm"));
-    }
-    candidates.iter().any(|p| p.exists())
-        || std::process::Command::new("eullm")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-}
-
-/// Prima di qualsiasi download: elenca cosa manca, la dimensione totale e
-/// lo spazio disponibile. Esce con errore se lo spazio è insufficiente.
-async fn check_disk_space_ahead(eullm_url: &str, embedding_model_id: &str) -> Result<()> {
-    struct Item {
-        label: &'static str,
-        size: u64,
-    }
-    let mut needed: Vec<Item> = Vec::new();
-
-    // bge-m3
-    if crate::clients::embeddings::find_model_in_cache(embedding_model_id).is_none() {
-        needed.push(Item { label: "bge-m3  (embedding model)", size: BGE_M3_SIZE_BYTES });
-    }
-
-    // eullm (solo se non in ascolto e non installato)
-    if !probe_api(eullm_url).await && !eullm_installed() {
-        needed.push(Item { label: "eullm   (motore LLM)", size: EULLM_SIZE_BYTES });
-    }
-
-    // GGUF 14B
-    if gguf_path(&MODEL_14B).map(|p| !p.exists()).unwrap_or(true) {
-        needed.push(Item { label: "Qwen3-14B-Q4_K_M.gguf  (chat)", size: MODEL_14B.size_bytes });
-    }
-
-    // GGUF 8B
-    if gguf_path(&MODEL_8B).map(|p| !p.exists()).unwrap_or(true) {
-        needed.push(Item { label: "Qwen3-8B-Q4_K_M.gguf   (extraction)", size: MODEL_8B.size_bytes });
-    }
-
-    if needed.is_empty() {
-        return Ok(());
-    }
-
-    let total: u64 = needed.iter().map(|i| i.size).sum();
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let models_dir = PathBuf::from(&home).join(".eullm").join("models");
-    let free = free_space_bytes(&models_dir);
-
-    eprintln!();
-    eprintln!("  Primo avvio — download necessari:");
-    for item in &needed {
-        eprintln!("    • {:<42}  {:>8}", item.label, fmt_bytes(item.size));
-    }
-    eprintln!("  ─────────────────────────────────────────────────────────");
-    eprintln!("  Totale:  {:>8}   ·   Server: i3k.dev (Europa, IT)", fmt_bytes(total));
-    if free != u64::MAX {
-        eprintln!("  Spazio libero:  {}", fmt_bytes(free));
-        let margin = 1_000_000_000u64; // 1 GB di margine
-        if free < total.saturating_add(margin) {
-            eprintln!();
-            bail!(
-                "Spazio su disco insufficiente: {} liberi, {} necessari (+ 1 GB margine).",
-                fmt_bytes(free),
-                fmt_bytes(total)
-            );
-        }
-    }
-    eprintln!();
-
-    Ok(())
-}
 
 fn fmt_bytes(b: u64) -> String {
     const GB: u64 = 1 << 30;
@@ -763,6 +637,6 @@ fn fmt_eta(secs: u64) -> String {
     } else if secs >= 60 {
         format!("{}m{:02}s", secs / 60, secs % 60)
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }

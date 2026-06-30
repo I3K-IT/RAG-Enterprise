@@ -313,11 +313,16 @@ fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Directory dove bootstrap salva i file del modello embedding.
-/// Stessa root dei modelli GGUF (~/.eullm/models/<basename>/).
+/// Usa I3K_DATA_DIR se impostato, altrimenti ~/.eullm (default storico).
 pub fn download_target_dir(model_id: &str) -> PathBuf {
     let basename = model_id.rsplit('/').next().unwrap_or(model_id);
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".eullm").join("models").join(basename)
+    let root = std::env::var("I3K_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".eullm")
+        });
+    root.join("models").join(basename)
 }
 
 /// Cerca il modello in tutte le cache locali note.

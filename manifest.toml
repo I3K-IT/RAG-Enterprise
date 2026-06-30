@@ -1,0 +1,80 @@
+# Componenti pinned — scaricati, verificati e gestiti al primo avvio.
+#
+# sha256 = "" → verifica sha256 SALTATA (riempi per hardening in produzione).
+# size        → stima in byte usata SOLO per il pre-check spazio disco.
+#               0 = non incluso nel totale (componente piccolo o sconosciuto).
+# dest        → percorso relativo a data_dir ({data_dir}/{dest}).
+# exec        → true: chmod +x dopo il download (solo binari).
+#
+# Mirror EU:  i3k.dev  (server IT, gestito da i3k.it)
+# eullm:      GitHub releases (upstream ufficiale)
+
+[[components]]
+name    = "qdrant"
+version = "1.18.2"
+kind    = "bin"
+url     = "https://i3k.dev/bin/qdrant-1.18.2-linux-x86_64"
+sha256  = ""
+size    = 0
+dest    = "bin/qdrant"
+exec    = true
+
+[[components]]
+name    = "eullm"
+version = "0.6.6"
+kind    = "bin"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.6/eullm-linux-x64-cuda-12.8"
+sha256  = ""
+size    = 950000000
+dest    = "bin/eullm"
+exec    = true
+
+[[components]]
+name    = "bge-m3-config"
+version = "1"
+kind    = "model_file"
+url     = "https://i3k.dev/models/bge-m3/config.json"
+sha256  = ""
+size    = 0
+dest    = "models/bge-m3/config.json"
+exec    = false
+
+[[components]]
+name    = "bge-m3-tokenizer"
+version = "1"
+kind    = "model_file"
+url     = "https://i3k.dev/models/bge-m3/tokenizer.json"
+sha256  = ""
+size    = 0
+dest    = "models/bge-m3/tokenizer.json"
+exec    = false
+
+[[components]]
+name    = "bge-m3-weights"
+version = "1"
+kind    = "model_weights"
+url     = "https://i3k.dev/models/bge-m3/model.safetensors"
+sha256  = ""
+size    = 2400000000
+dest    = "models/bge-m3/model.safetensors"
+exec    = false
+
+[[components]]
+name    = "qwen3-14b"
+version = "Q4_K_M"
+kind    = "gguf"
+url     = "https://i3k.dev/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
+sha256  = ""
+size    = 8700000000
+dest    = "models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
+exec    = false
+
+[[components]]
+name    = "qwen3-8b"
+version = "Q4_K_M"
+kind    = "gguf"
+url     = "https://i3k.dev/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
+sha256  = ""
+size    = 4900000000
+dest    = "models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
+exec    = false

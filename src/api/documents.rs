@@ -13,8 +13,8 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::auth::jwt::Claims;
-use crate::clients::qdrant_store::ChunkPayload;
 use crate::db;
+use crate::rag::vector_store::ChunkPayload;
 use crate::documents::parser;
 use crate::rag::chunker;
 use crate::state::AppState;
@@ -133,6 +133,7 @@ pub async fn upload(
             text: chunk.clone(),
             chunk_size: chunk.len(),
             document_type: ext.clone(),
+            structured_fields: None,
         })
         .collect();
 

@@ -13,6 +13,7 @@ mod rag;
 mod state;
 
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
@@ -27,8 +28,12 @@ async fn main() -> Result<()> {
         "starting i3k-rag-engine"
     );
 
-    // Scarica eullm + modelli se assenti, poi avvia eullm in background.
-    bootstrap::ensure_ready(&settings.eullm.url, &settings.embeddings.model_id).await?;
+    // Rende data_dir disponibile al modulo embeddings (find_model_in_cache).
+    std::env::set_var("I3K_DATA_DIR", settings.data.data_path());
+
+    // Bootstrap: scarica componenti, avvia qdrant + eullm, attende API ready.
+    // _guard tiene in vita i processi figlio supervisionati (drop → SIGKILL).
+    let _guard = bootstrap::ensure_ready(&settings).await?;
 
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
@@ -36,7 +41,6 @@ async fn main() -> Result<()> {
 
     let model_id = settings.embeddings.model_id.clone();
 
-    // EmbeddingService: caricamento sincrono (bge-m3 ~2.3 GB, GPU/CPU).
     let embeddings = tokio::task::spawn_blocking(move || {
         clients::embeddings::EmbeddingService::load(&model_id)
     })
@@ -45,7 +49,6 @@ async fn main() -> Result<()> {
     .context("embedding service load")?;
     tracing::info!("embedding service pronto");
 
-    // QdrantStore: connessione + crea collection se assente.
     let qdrant = clients::qdrant_store::QdrantStore::new(
         &settings.qdrant.url,
         &settings.qdrant.collection,
@@ -66,19 +69,21 @@ async fn main() -> Result<()> {
     let port = settings.server.port;
     let host = settings.server.host.clone();
 
-    // Start daily backup scheduler in background (non-blocking — errors logged).
     let db_path = settings.database.url.trim_start_matches("sqlite://").to_owned();
     let bk_db = db.clone();
     let bk_qdrant_url = settings.qdrant.url.clone();
     let bk_qdrant_coll = settings.qdrant.collection.clone();
     let bk_dir = settings.backup.dir.clone();
     tokio::spawn(async move {
-        if let Err(e) = backup::scheduler::start(bk_db, db_path, bk_qdrant_url, bk_qdrant_coll, bk_dir).await {
+        if let Err(e) =
+            backup::scheduler::start(bk_db, db_path, bk_qdrant_url, bk_qdrant_coll, bk_dir).await
+        {
             tracing::warn!(error = %e, "backup scheduler non avviato");
         }
     });
 
-    let app_state = state::AppState::new(settings, db, embeddings, qdrant, eullm);
+    let app_state =
+        state::AppState::new(settings, db, embeddings, Arc::new(qdrant), eullm);
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -86,14 +91,32 @@ async fn main() -> Result<()> {
         .with_context(|| format!("bind {addr}"))?;
     tracing::info!("server in ascolto su {addr}");
 
-    // Apre il browser dopo che il server è in ascolto (500 ms di margine).
     open_browser(port);
 
     let router = api::router(app_state);
-    axum::serve(listener, router).await?;
+
+    // Shutdown graceful: SIGINT (Ctrl+C) o SIGTERM → drop _guard → SIGKILL figli.
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = signal(SignalKind::terminate()).context("SIGTERM handler")?;
+        tokio::select! {
+            r = axum::serve(listener, router) => r?,
+            _ = tokio::signal::ctrl_c() => { tracing::info!("SIGINT ricevuto, shutdown"); }
+            _ = sigterm.recv() => { tracing::info!("SIGTERM ricevuto, shutdown"); }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::select! {
+            r = axum::serve(listener, router) => r?,
+            _ = tokio::signal::ctrl_c() => { tracing::info!("SIGINT ricevuto, shutdown"); }
+        }
+    }
+
+    // _guard dropped qui → processi figlio SIGKILL'd
     Ok(())
 }
-
 
 fn open_browser(port: u16) {
     let url = format!("http://localhost:{port}");
