@@ -108,9 +108,19 @@ function App() {
   }, [isAuthenticated])
 
   useEffect(() => {
+    // Registrato una sola volta (niente dipendenza da `token`): legge il token
+    // da localStorage ad ogni richiesta, non da una closure. Se dipendesse da
+    // `token` via [token], questo effetto è dichiarato DOPO quello che lancia
+    // fetchConversationsFromApi/fetchDocuments su isAuthenticated (riga ~100) —
+    // React esegue gli effetti nell'ordine di dichiarazione nello stesso commit,
+    // quindi al login (isAuthenticated e token cambiano insieme) le prime
+    // richieste partirebbero con l'interceptor "vecchio" (token ancora null dal
+    // mount) → 401 → conversazioni e documenti restano vuoti. Leggere sempre da
+    // localStorage elimina il problema indipendentemente dall'ordine degli effetti.
     const reqInt = axios.interceptors.request.use(
       (config) => {
-        if (token) config.headers.Authorization = `Bearer ${token}`
+        const currentToken = localStorage.getItem('rag_auth_token')
+        if (currentToken) config.headers.Authorization = `Bearer ${currentToken}`
         return config
       },
       (error) => Promise.reject(error)
@@ -126,7 +136,7 @@ function App() {
       axios.interceptors.request.eject(reqInt)
       axios.interceptors.response.eject(resInt)
     }
-  }, [token])
+  }, [])
 
   // ============================================================================
   // AUTHENTICATION
