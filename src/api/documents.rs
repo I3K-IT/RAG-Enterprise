@@ -82,8 +82,9 @@ pub async fn upload(
     // 3. Extract text (sync, possibly heavy — run off the async executor)
     let (text, page_count) = match tokio::task::spawn_blocking({
         let tmp = tmp_path.clone();
+        let data_dir = state.settings.data.data_path();
         move || {
-            let r = parser::extract_text(&tmp);
+            let r = parser::extract_text(&tmp, &data_dir);
             let _ = std::fs::remove_file(&tmp);
             r
         }

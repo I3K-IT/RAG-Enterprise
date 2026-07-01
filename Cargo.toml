@@ -44,7 +44,12 @@ hf-hub = "0.3"
 # --- Ingestione documenti ---
 # PDF testo: pdf_oxide (Rust puro, validato vs PyMuPDF)
 pdf_oxide = "0.3"
-# OCR (sistema libs: leptonica + pdfium — abilita con --features ocr):
+# OCR (abilita con --features ocr):
+#   pdfium-render: libpdfium bundlabile, caricata a runtime da un path esplicito
+#     (vedi ocr.rs) — non richiede installazione di sistema in una build distribuita.
+#   leptess: si linka a compile-time contro libtesseract+libleptonica di sistema
+#     (nessun equivalente di bind_to_library) — richiede ancora le dev libs sulla
+#     macchina di build. Bundling cross-platform: vedi BUILD.md.
 pdfium-render = { version = "0.8", features = ["sync"], optional = true }
 leptess = { version = "0.14", optional = true }
 image = { version = "0.25", optional = true }  # usata da ocr.rs per encode PNG

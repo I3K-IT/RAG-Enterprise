@@ -66,6 +66,26 @@ size   = 5027784512
 dest   = "{data}/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
 exec   = false
 
+# OCR (leptess/Tesseract, lang="ita+eng" — MAPPA/CLAUDE.md). Fonte:
+# tessdata_best (LSTM, massima accuratezza — github.com/tesseract-ocr/tessdata_best).
+[[component]]
+name   = "tessdata-ita"
+kind   = "model"
+url    = "https://www.i3k.dev/models/tessdata/ita.traineddata"
+sha256 = "8df9c89176fb93f56bf4b2d4ede04c01c1f31d4b7697fbd76cc336df700f3f38"
+size   = 8863635
+dest   = "{data}/tessdata/ita.traineddata"
+exec   = false
+
+[[component]]
+name   = "tessdata-eng"
+kind   = "model"
+url    = "https://www.i3k.dev/models/tessdata/eng.traineddata"
+sha256 = "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba"
+size   = 15400601
+dest   = "{data}/tessdata/eng.traineddata"
+exec   = false
+
 # === BINARI (per-piattaforma) ==================================================
 
 [[component]]

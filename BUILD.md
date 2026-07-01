@@ -25,69 +25,88 @@ Non è necessaria la toolchain nightly.
 
 ## 2. Dipendenze di sistema
 
-### 2a. leptess → libtesseract + libleptonica + traineddata
+### 2a. leptess → libtesseract + libleptonica (dev libs) + traineddata
+
+`leptess` si linka **a compile-time** contro `libtesseract`/`libleptonica` di sistema —
+servono le dev libs sulla macchina di build (bundling cross-platform: rimandato a
+Fase 4, packaging — vedi CLAUDE.md):
 
 ```sh
 # Ubuntu 22.04 / 24.04
-sudo apt-get install -y \
-    libtesseract-dev \
-    libleptonica-dev \
-    tesseract-ocr \
-    tesseract-ocr-ita \
-    tesseract-ocr-eng
+sudo apt-get install -y libtesseract-dev libleptonica-dev
 ```
 
-**Dove vanno i traineddata:**
-Il pacchetto `tesseract-ocr-ita` installa `/usr/share/tesseract-ocr/*/tessdata/ita.traineddata`
-(versione 4 o 5 secondo la distro). Verifica con:
+**Traineddata (ita+eng):** risolta a runtime da `{data_dir}/tessdata/` — la stessa
+radice dati di `Settings.data.data_path()` (dove il bootstrap/manifest scarica tutti
+gli altri modelli). È nel `manifest.toml` come `tessdata-ita`/`tessdata-eng`
+(sorgente: [tessdata_best](https://github.com/tesseract-ocr/tessdata_best), massima
+accuratezza) — al primo avvio il bootstrap la scarica e verifica da sola, nessun
+`apt-get install tesseract-ocr-ita` richiesto in produzione.
+
+**Sviluppo senza bootstrap** (es. `cargo test --features ocr` prima di aver mai
+avviato il binario): o esegui il bootstrap una volta, oppure installa i language pack
+di sistema come fallback — `leptess` ricade su `TESSDATA_PREFIX` se
+`{data_dir}/tessdata/` non esiste:
 
 ```sh
-find /usr/share/tesseract-ocr -name "*.traineddata" | head -5
+sudo apt-get install -y tesseract-ocr-ita tesseract-ocr-eng
+find /usr/share/tesseract-ocr -name "*.traineddata"   # verifica dove sono finite
+export TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/    # adatta alla versione trovata
 ```
 
-**TESSDATA_PREFIX** (necessario solo se leptess non trova i file):
+**Test di non-regressione** (verifica vera, non solo compilazione — vedi
+`src/documents/ocr.rs::smoke_test`):
 
 ```sh
-# Se tessdata è in /usr/share/tesseract-ocr/5/tessdata/
-export TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/
-# o versione 4:
-export TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/
+export PDFIUM_LIB_FOR_TEST=/path/assoluto/a/libpdfium.so     # scaricata come in §2b
+export TESSDATA_DIR_FOR_TEST=/path/a/cartella/con/tessdata/  # contiene tessdata/{ita,eng}.traineddata
+cargo test --features ocr documents::ocr::smoke_test
 ```
-
-Aggiungilo a `.env` / `~/.bashrc` se necessario.
-In Fase 1 il percorso traineddata sarà configurabile via `Settings`.
 
 ---
 
-### 2b. pdfium-render → libpdfium
+### 2b. pdfium-render → libpdfium (bundlabile, no install system-wide richiesta)
 
-`pdfium-render` richiede `libpdfium.so` — **non è nei repository apt**.
-La fonte ufficiale dei binari precompilati è [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases).
+`pdfium-render` carica `libpdfium` **a runtime da un path esplicito** (`Pdfium::bind_to_library`,
+vedi `resolve_pdfium_library_path()` in `ocr.rs`), non da un nome di libreria "di sistema".
+Ordine di risoluzione:
+
+1. `PDFIUM_DYNAMIC_LIB_PATH` (override esplicito — comodo in sviluppo).
+2. Un file `libpdfium.so`/`pdfium.dll`/`libpdfium.dylib` **accanto all'eseguibile**, poi in
+   `./lib/` accanto all'eseguibile — questo è il layout di una build **distribuita e bundlata**.
+3. Fallback: ricerca di sistema standard (dlopen) — comoda in sviluppo se già installata
+   via apt/brew, **non richiesta** per il binario finale.
+
+La fonte ufficiale dei binari precompilati, per **tutte** le piattaforme (Linux x64/arm64,
+macOS x64/arm64/universal, Windows x64/arm64/x86) è
+[bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) — build
+automatiche settimanali, nessuna compilazione necessaria da parte nostra.
+
+**Sviluppo locale (rapido, opzione 1 sopra):**
 
 ```sh
-# Scarica l'ultimo release linux-x64
-# Sostituisci V con il numero di versione corrente sulla pagina releases
 wget https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
-tar -xzf pdfium-linux-x64.tgz          # estrae ./lib/libpdfium.so (e header)
-sudo cp lib/libpdfium.so /usr/local/lib/
-sudo ldconfig
-```
-
-**Verifica:**
-
-```sh
-ldconfig -p | grep pdfium              # deve comparire /usr/local/lib/libpdfium.so
-```
-
-**In alternativa** (senza installare system-wide), puoi usare la variabile d'ambiente
-al momento del build e del run:
-
-```sh
-export PDFIUM_DYNAMIC_LIB_PATH=/path/assoluto/a/libpdfium.so
+tar -xzf pdfium-linux-x64.tgz          # estrae ./lib/libpdfium.so
+export PDFIUM_DYNAMIC_LIB_PATH=$PWD/lib/libpdfium.so
 cargo build --features ocr
-# e poi anche per il run:
-LD_LIBRARY_PATH=/usr/local/lib ./target/release/i3k-rag-engine
 ```
+
+**Build distribuita (opzione 2 sopra, quella pensata per il pacchetto finale):** scarica
+l'archivio per la piattaforma target dalle release di pdfium-binaries e copia
+`libpdfium.so` / `pdfium.dll` / `libpdfium.dylib` nella stessa cartella del binario
+compilato (o in una sua sottocartella `lib/`) prima di distribuire il pacchetto. Nessun
+passaggio di installazione richiesto sulla macchina dell'utente finale.
+
+**Test di non-regressione:** `src/documents/ocr.rs` contiene un test che verifica
+davvero il caricamento bundlato (non solo che compili). Per eseguirlo:
+
+```sh
+export PDFIUM_LIB_FOR_TEST=/path/assoluto/a/libpdfium.so   # una copia scaricata come sopra
+cargo test --features ocr bundled_pdfium_path_resolution_and_ocr_roundtrip
+```
+
+Senza questa variabile il test viene saltato (nessun fallimento) — non è richiesto in CI
+(che comunque non esiste ancora, vedi CLAUDE.md) né bloccante per gli altri test.
 
 ---
 

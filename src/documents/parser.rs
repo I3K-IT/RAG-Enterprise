@@ -15,7 +15,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 /// Estrae il testo e il numero di pagine (None se non applicabile al formato).
-pub fn extract_text(path: &Path) -> Result<(String, Option<u32>)> {
+///
+/// `data_dir` è la radice dati (`Settings.data.data_path()`) — serve solo al ramo
+/// OCR per trovare `{data_dir}/tessdata/` (dove il manifest la scarica).
+pub fn extract_text(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -28,7 +31,7 @@ pub fn extract_text(path: &Path) -> Result<(String, Option<u32>)> {
                 .with_context(|| format!("lettura {}", path.display()))?;
             Ok((text, None))
         }
-        "pdf" => extract_pdf(path),
+        "pdf" => extract_pdf(path, data_dir),
         "docx" | "doc" => extract_docx(path).map(|t| (t, None)),
         "xlsx" | "xls" => extract_xlsx(path).map(|t| (t, None)),
         "html" | "htm" => extract_html(path).map(|t| (t, None)),
@@ -38,7 +41,8 @@ pub fn extract_text(path: &Path) -> Result<(String, Option<u32>)> {
 
 // ── PDF ───────────────────────────────────────────────────────────────────────
 
-fn extract_pdf(path: &Path) -> Result<(String, Option<u32>)> {
+#[cfg_attr(not(feature = "ocr"), allow(unused_variables))]
+fn extract_pdf(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
     let doc = pdf_oxide::PdfDocument::open(path)
         .with_context(|| format!("pdf_oxide open {}", path.display()))?;
     let page_count = doc.page_count().context("pdf_oxide page_count")? as u32;
@@ -78,16 +82,19 @@ fn extract_pdf(path: &Path) -> Result<(String, Option<u32>)> {
     // Testo insufficiente: OCR opzionale
     #[cfg(feature = "ocr")]
     {
-        let ocr_text = super::ocr::ocr_pdf(path, page_count)?;
-        return Ok((ocr_text, Some(page_count)));
+        let ocr_text = super::ocr::ocr_pdf(path, page_count, data_dir)?;
+        Ok((ocr_text, Some(page_count)))
     }
 
-    tracing::warn!(
-        file = %path.display(),
-        text_ratio = format!("{:.0}%", text_ratio * 100.0).as_str(),
-        "PDF probabilmente scansionato — compila con --features ocr"
-    );
-    Ok((full_text, Some(page_count)))
+    #[cfg(not(feature = "ocr"))]
+    {
+        tracing::warn!(
+            file = %path.display(),
+            text_ratio = format!("{:.0}%", text_ratio * 100.0).as_str(),
+            "PDF probabilmente scansionato — compila con --features ocr"
+        );
+        Ok((full_text, Some(page_count)))
+    }
 }
 
 // ── DOCX ──────────────────────────────────────────────────────────────────────
