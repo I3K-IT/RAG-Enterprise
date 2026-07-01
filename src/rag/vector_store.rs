@@ -30,7 +30,6 @@ pub struct ChunkPayload {
 /// Risultato di una ricerca per similarità vettoriale.
 #[derive(Debug)]
 pub struct SearchHit {
-    pub id: String,
     pub similarity: f32,
     pub payload: ChunkPayload,
 }

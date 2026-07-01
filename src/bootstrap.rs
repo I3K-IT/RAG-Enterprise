@@ -98,31 +98,26 @@ mod manifest_tests {
 ///   linux-x86_64        — Linux x86_64 CPU-only / fallback
 ///   (future: darwin-arm64, darwin-x86_64, windows-x86_64, linux-aarch64…)
 fn current_targets() -> Vec<&'static str> {
-    #[cfg(target_os = "linux")]
+    let mut t = Vec::new();
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let mut t = Vec::new();
-            // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
-            if std::path::Path::new("/dev/nvidia0").exists() {
-                t.push("linux-x86_64-cuda");
-            }
-            t.push("linux-x86_64");
-            return t;
+        // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
+        if std::path::Path::new("/dev/nvidia0").exists() {
+            t.push("linux-x86_64-cuda");
         }
-        #[cfg(target_arch = "aarch64")]
-        return vec!["linux-aarch64"];
+        t.push("linux-x86_64");
     }
-    #[cfg(target_os = "macos")]
-    {
-        #[cfg(target_arch = "aarch64")]
-        return vec!["darwin-arm64"];
-        #[cfg(target_arch = "x86_64")]
-        return vec!["darwin-x86_64"];
-    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    t.push("linux-aarch64");
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    t.push("darwin-arm64");
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    t.push("darwin-x86_64");
     #[cfg(target_os = "windows")]
-    return vec!["windows-x86_64"];
-    vec![]
+    t.push("windows-x86_64");
+
+    t
 }
 
 /// Seleziona i componenti da scaricare/verificare.

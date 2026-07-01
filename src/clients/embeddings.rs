@@ -324,13 +324,3 @@ pub fn download_target_dir(model_id: &str) -> PathBuf {
         });
     root.join("models").join(basename)
 }
-
-/// Cerca il modello in tutte le cache locali note.
-/// Usato da main.rs prima del download per evitare download inutili.
-pub fn find_model_in_cache(model_id: &str) -> Option<PathBuf> {
-    let local = Path::new(model_id);
-    if local.is_dir() {
-        return Some(local.to_path_buf());
-    }
-    find_in_hf_local_cache(model_id)
-}
