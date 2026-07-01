@@ -221,6 +221,14 @@ fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
 /// Tiene in vita i processi figli. Al drop: SIGKILL (kill_on_drop=true).
 pub struct ProcessGuard {
     _children: Vec<tokio::process::Child>,
+    /// Se bootstrap ha avviato eullm, il path GGUF esatto usato per farlo.
+    /// eullm accetta un path GGUF diretto nel campo "model" di /api/generate
+    /// (vedi errore "Accepted formats: GGUF file path / ... / Registered
+    /// name") — usando lo STESSO path con cui è stato avviato non serve
+    /// nessuna registrazione (`eullm import-ollama`) né alcuno stato esterno
+    /// che possa andare perso. None se manage_subprocesses=false (eullm
+    /// esterno): in quel caso si usa Settings.eullm.model così com'è.
+    pub eullm_model_path: Option<std::path::PathBuf>,
 }
 
 // ── Costanti ──────────────────────────────────────────────────────────────────
@@ -258,6 +266,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     }
 
     let mut children: Vec<tokio::process::Child> = Vec::new();
+    let mut eullm_model_path: Option<std::path::PathBuf> = None;
 
     if settings.data.manage_subprocesses {
         // Qdrant
@@ -286,6 +295,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
                 kill_stale_process(&bin).await;
                 children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
                 tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
+                eullm_model_path = Some(gguf);
             }
             _ => tracing::warn!(
                 "eullm o qwen3-14b non trovati in {} — RAG senza LLM",
@@ -310,7 +320,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     )
     .await?;
 
-    Ok(ProcessGuard { _children: children })
+    Ok(ProcessGuard { _children: children, eullm_model_path })
 }
 
 // ── Componente: verifica / download atomico ───────────────────────────────────

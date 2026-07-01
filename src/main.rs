@@ -34,8 +34,9 @@ async fn main() -> Result<()> {
     std::env::set_var("I3K_DATA_DIR", settings.data.data_path());
 
     // Bootstrap: scarica componenti, avvia qdrant + eullm, attende API ready.
-    // _guard tiene in vita i processi figlio supervisionati (drop → SIGKILL).
-    let _guard = bootstrap::ensure_ready(&settings).await?;
+    // guard tiene in vita i processi figlio supervisionati (drop → SIGKILL);
+    // espone anche il path GGUF esatto con cui ha avviato eullm (se lo gestisce).
+    let guard = bootstrap::ensure_ready(&settings).await?;
 
     tracing::info!(path = %settings.database.url, "database SQLite");
     let db = db::connect(&settings.database.url).await?;
@@ -60,9 +61,19 @@ async fn main() -> Result<()> {
     .context("qdrant init")?;
     tracing::info!("qdrant pronto");
 
+    // Se bootstrap ha avviato eullm, usa lo STESSO path GGUF come "model" nelle
+    // richieste — eullm lo accetta direttamente (vedi ProcessGuard), niente
+    // registrazione/import-ollama necessaria. Altrimenti (eullm esterno,
+    // manage_subprocesses=false) usa Settings.eullm.model così com'è.
+    let eullm_model = guard
+        .eullm_model_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| settings.eullm.model.clone());
+
     let eullm = clients::eullm::EullmClient::new(
         settings.eullm.url.clone(),
-        settings.eullm.model.clone(),
+        eullm_model,
         settings.eullm.num_ctx,
         settings.eullm.num_predict,
         settings.eullm.repeat_penalty,
@@ -113,7 +124,7 @@ async fn main() -> Result<()> {
 
     let router = api::router(app_state);
 
-    // Shutdown graceful: SIGINT (Ctrl+C) o SIGTERM → drop _guard → SIGKILL figli.
+    // Shutdown graceful: SIGINT (Ctrl+C) o SIGTERM → drop guard → SIGKILL figli.
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -132,7 +143,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // _guard dropped qui → processi figlio SIGKILL'd
+    // guard dropped qui → processi figlio SIGKILL'd
     Ok(())
 }
 

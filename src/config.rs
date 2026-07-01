@@ -60,6 +60,13 @@ pub struct QdrantSettings {
 pub struct EullmSettings {
     #[serde(default = "default_eullm_url")]
     pub url: String,
+    /// Usato solo se manage_subprocesses=false (eullm gestito esternamente):
+    /// deve essere un path GGUF diretto o un nome importato via
+    /// `eullm import-ollama` — un nome "sciolto" (es. "qwen3:14b") senza
+    /// nessuna delle due cose fallisce con 500 "model not found". Quando
+    /// bootstrap avvia eullm da sé, questo valore viene ignorato: si usa
+    /// automaticamente lo stesso path GGUF passato a `eullm run` (vedi
+    /// bootstrap::ProcessGuard::eullm_model_path e main.rs).
     pub model: String,
     /// Contesto PER CONNESSIONE (slot). Il flag di avvio --ctx-size passato a
     /// eullm è il TOTALE: num_ctx * batch_size (vedi bootstrap::spawn_eullm).
