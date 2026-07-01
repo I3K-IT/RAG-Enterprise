@@ -1,7 +1,6 @@
-//! Chat message persistence (rag_users.db → `chat_messages` table).
+//! Chat message persistence (`chat_messages` table) e metadata conversazioni (`conversations` table).
 //!
-//! Schema mirrors MAPPA §4: id, user_id, role, content, sources (JSON), timestamp.
-//! MAX_MESSAGES_PER_USER = 100 (same as Python).
+//! MAX_MESSAGES_PER_USER = 100 (parità Python).
 
 use anyhow::Result;
 use chrono::Utc;
@@ -9,6 +8,106 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 pub const MAX_MESSAGES_PER_USER: i64 = 100;
+
+// ── Conversation metadata ─────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ConversationRow {
+    pub id: String,
+    pub user_id: i64,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub async fn create_conversation(pool: &SqlitePool, user_id: i64) -> Result<ConversationRow> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, title, created_at, updated_at)
+         VALUES (?, ?, 'New Conversation', ?, ?)"
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(ConversationRow {
+        id,
+        user_id,
+        title: "New Conversation".to_owned(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+pub async fn list_conversations(pool: &SqlitePool, user_id: i64) -> Result<Vec<ConversationRow>> {
+    let rows = sqlx::query_as::<_, ConversationRow>(
+        "SELECT id, user_id, title, created_at, updated_at
+         FROM conversations WHERE user_id = ?
+         ORDER BY updated_at DESC"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn rename_conversation(
+    pool: &SqlitePool,
+    conv_id: &str,
+    user_id: i64,
+    title: &str,
+) -> Result<bool> {
+    let now = Utc::now().to_rfc3339();
+    let affected = sqlx::query(
+        "UPDATE conversations SET title = ?, updated_at = ?
+         WHERE id = ? AND user_id = ?"
+    )
+    .bind(title)
+    .bind(now)
+    .bind(conv_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected > 0)
+}
+
+/// Elimina la conversazione e tutti i suoi messaggi (cascade manuale).
+pub async fn delete_conversation(
+    pool: &SqlitePool,
+    conv_id: &str,
+    user_id: i64,
+) -> Result<bool> {
+    sqlx::query("DELETE FROM chat_messages WHERE conversation_id = ?")
+        .bind(conv_id)
+        .execute(pool)
+        .await?;
+    let affected = sqlx::query(
+        "DELETE FROM conversations WHERE id = ? AND user_id = ?"
+    )
+    .bind(conv_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected > 0)
+}
+
+/// Aggiorna updated_at della conversazione (chiamato dopo insert messaggio).
+pub async fn touch_conversation(pool: &SqlitePool, conv_id: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(conv_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ── Chat messages ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ChatMessageRow {
@@ -18,11 +117,67 @@ pub struct ChatMessageRow {
     pub content: String,
     pub sources: Option<String>,
     pub timestamp: String,
+    pub conversation_id: Option<String>,
 }
 
-pub async fn list_by_user(pool: &SqlitePool, user_id: i64, limit: i64) -> Result<Vec<ChatMessageRow>> {
+pub async fn insert(
+    pool: &SqlitePool,
+    user_id: i64,
+    role: &str,
+    content: &str,
+    sources: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    let id = sqlx::query(
+        "INSERT INTO chat_messages (user_id, role, content, sources, timestamp, conversation_id)
+         VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(user_id)
+    .bind(role)
+    .bind(content)
+    .bind(sources)
+    .bind(now)
+    .bind(conversation_id)
+    .execute(pool)
+    .await?
+    .last_insert_rowid();
+
+    if let Some(cid) = conversation_id {
+        let _ = touch_conversation(pool, cid).await;
+    }
+
+    Ok(id)
+}
+
+/// Messaggi di una conversazione specifica, ordinati ASC (cronologici).
+pub async fn list_by_conversation(
+    pool: &SqlitePool,
+    conv_id: &str,
+    user_id: i64,
+) -> Result<Vec<ChatMessageRow>> {
     let rows = sqlx::query_as::<_, ChatMessageRow>(
-        "SELECT id, user_id, role, content, sources, timestamp
+        "SELECT id, user_id, role, content, sources, timestamp, conversation_id
+         FROM chat_messages
+         WHERE conversation_id = ? AND user_id = ?
+         ORDER BY id ASC"
+    )
+    .bind(conv_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Ultimi N messaggi dell'utente (usato per history injection nel prompt).
+/// Se conv_id è Some, filtra per quella conversazione.
+pub async fn list_by_user(
+    pool: &SqlitePool,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<ChatMessageRow>> {
+    let rows = sqlx::query_as::<_, ChatMessageRow>(
+        "SELECT id, user_id, role, content, sources, timestamp, conversation_id
          FROM chat_messages
          WHERE user_id = ?
          ORDER BY timestamp DESC
@@ -35,27 +190,26 @@ pub async fn list_by_user(pool: &SqlitePool, user_id: i64, limit: i64) -> Result
     Ok(rows)
 }
 
-pub async fn insert(
+/// Ultimi N messaggi di una specifica conversazione (per history injection).
+pub async fn list_by_conv_for_history(
     pool: &SqlitePool,
+    conv_id: &str,
     user_id: i64,
-    role: &str,
-    content: &str,
-    sources: Option<&str>,
-) -> Result<i64> {
-    let now = Utc::now().to_rfc3339();
-    let id = sqlx::query(
-        "INSERT INTO chat_messages (user_id, role, content, sources, timestamp)
-         VALUES (?, ?, ?, ?, ?)"
+    limit: i64,
+) -> Result<Vec<ChatMessageRow>> {
+    let rows = sqlx::query_as::<_, ChatMessageRow>(
+        "SELECT id, user_id, role, content, sources, timestamp, conversation_id
+         FROM chat_messages
+         WHERE conversation_id = ? AND user_id = ?
+         ORDER BY id DESC
+         LIMIT ?"
     )
+    .bind(conv_id)
     .bind(user_id)
-    .bind(role)
-    .bind(content)
-    .bind(sources)
-    .bind(now)
-    .execute(pool)
-    .await?
-    .last_insert_rowid();
-    Ok(id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 pub async fn delete_by_user(pool: &SqlitePool, user_id: i64) -> Result<u64> {

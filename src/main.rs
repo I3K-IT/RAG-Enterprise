@@ -28,6 +28,8 @@ async fn main() -> Result<()> {
         "starting i3k-rag-engine"
     );
 
+    tracing::info!(data_dir = %settings.data.data_path().display(), "data directory");
+
     // Rende data_dir disponibile al modulo embeddings (find_model_in_cache).
     std::env::set_var("I3K_DATA_DIR", settings.data.data_path());
 
@@ -35,6 +37,7 @@ async fn main() -> Result<()> {
     // _guard tiene in vita i processi figlio supervisionati (drop → SIGKILL).
     let _guard = bootstrap::ensure_ready(&settings).await?;
 
+    tracing::info!(path = %settings.database.url, "database SQLite");
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
     db::users::seed_admin(&db, settings.auth.admin_default_password.as_deref()).await?;

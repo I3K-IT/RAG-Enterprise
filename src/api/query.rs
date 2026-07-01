@@ -32,6 +32,9 @@ pub struct QueryRequest {
     pub top_k: Option<u64>,
     #[serde(default)]
     pub use_history: bool,
+    /// ID della conversazione SQLite. Se presente, i messaggi vengono salvati
+    /// in quella conversazione e la history viene letta solo da essa.
+    pub conversation_id: Option<String>,
 }
 
 fn err(status: StatusCode, msg: impl std::fmt::Display) -> Response {
@@ -45,6 +48,7 @@ async fn prepare(
     question: &str,
     user_id: i64,
     use_history: bool,
+    conversation_id: Option<&str>,
 ) -> anyhow::Result<(String, Vec<Source>)> {
     // 1. Embed query (CPU/GPU bound)
     let svc = state.embeddings.clone();
@@ -77,7 +81,7 @@ async fn prepare(
 
     // 4. Load last 3 exchanges from history if requested
     let history = if use_history {
-        build_history_pairs(state, user_id).await?
+        build_history_pairs(state, user_id, conversation_id).await?
     } else {
         vec![]
     };
@@ -89,9 +93,15 @@ async fn prepare(
 async fn build_history_pairs(
     state: &AppState,
     user_id: i64,
+    conversation_id: Option<&str>,
 ) -> anyhow::Result<Vec<(String, String)>> {
-    // List returns DESC; we reverse to get chronological order.
-    let msgs = db::conversations::list_by_user(&state.db, user_id, 6).await?;
+    let msgs = if let Some(cid) = conversation_id {
+        // Prendi gli ultimi 6 messaggi di questa conversazione
+        db::conversations::list_by_conv_for_history(&state.db, cid, user_id, 6).await?
+    } else {
+        db::conversations::list_by_user(&state.db, user_id, 6).await?
+    };
+    // list returns DESC; reverse to chronological order.
     let asc: Vec<_> = msgs.into_iter().rev().collect();
     let mut pairs: Vec<(String, String)> = Vec::new();
     let mut i = 0;
@@ -113,8 +123,9 @@ pub async fn query(
     claims: Claims,
     Json(req): Json<QueryRequest>,
 ) -> Response {
+    let conv_id = req.conversation_id.as_deref();
     let (full_prompt, sources) =
-        match prepare(&state, &req.query, claims.user_id, req.use_history).await {
+        match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
             Ok(v) => v,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
         };
@@ -126,13 +137,14 @@ pub async fn query(
 
     // Persist conversation
     let sources_json = serde_json::to_string(&sources).unwrap_or_default();
-    let _ = db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None).await;
+    let _ = db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None, conv_id).await;
     let _ = db::conversations::insert(
         &state.db,
         claims.user_id,
         "assistant",
         &answer,
         Some(&sources_json),
+        conv_id,
     )
     .await;
 
@@ -150,17 +162,21 @@ pub async fn query_stream(
     claims: Claims,
     Json(req): Json<QueryRequest>,
 ) -> Response {
+    let conv_id = req.conversation_id.as_deref();
     // Run setup synchronously before opening the SSE stream so we can return
     // a proper HTTP error if embed/search fails.
     let (full_prompt, sources) =
-        match prepare(&state, &req.query, claims.user_id, req.use_history).await {
+        match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
             Ok(v) => v,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
         };
 
     // Persist user question (answer is stored when the stream finishes).
-    let _ =
-        db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None).await;
+    let _ = db::conversations::insert(
+        &state.db, claims.user_id, "user", &req.query, None,
+        req.conversation_id.as_deref(),
+    )
+    .await;
 
     // Start eullm streaming in background.
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
@@ -173,12 +189,13 @@ pub async fn query_stream(
     });
 
     // Convert mpsc receiver into an SSE stream.
-    // State: (rx, accumulated_answer, sources, db_pool, user_id, is_done)
+    // State: (rx, accumulated_answer, sources, db_pool, user_id, conv_id, is_done)
     let db = state.db.clone();
     let uid = claims.user_id;
+    let stream_conv_id = req.conversation_id.clone();
     let stream = unfold(
-        (rx, String::new(), sources, db, uid, false),
-        |(mut rx, mut acc, sources, db, uid, done)| async move {
+        (rx, String::new(), sources, db, uid, stream_conv_id, false),
+        |(mut rx, mut acc, sources, db, uid, cid, done)| async move {
             if done {
                 return None;
             }
@@ -186,18 +203,19 @@ pub async fn query_stream(
                 Some(token) => {
                     acc.push_str(&token);
                     let ev = Event::default().data(json!({ "token": token }).to_string());
-                    Some((Ok::<_, Infallible>(ev), (rx, acc, sources, db, uid, false)))
+                    Some((Ok::<_, Infallible>(ev), (rx, acc, sources, db, uid, cid, false)))
                 }
                 None => {
                     // Channel closed — persist assistant reply and emit final event.
                     let sources_json = serde_json::to_string(&sources).unwrap_or_default();
                     let _ = db::conversations::insert(
                         &db, uid, "assistant", &acc, Some(&sources_json),
+                        cid.as_deref(),
                     )
                     .await;
                     let ev = Event::default()
                         .data(json!({ "done": true, "sources": sources }).to_string());
-                    Some((Ok::<_, Infallible>(ev), (rx, acc, vec![], db, uid, true)))
+                    Some((Ok::<_, Infallible>(ev), (rx, acc, vec![], db, uid, cid, true)))
                 }
             }
         },

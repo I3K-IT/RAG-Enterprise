@@ -63,6 +63,31 @@ fn load_manifest() -> Result<Manifest> {
     toml::from_str(MANIFEST_STR).context("manifest.toml non valido — bug di compilazione")
 }
 
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    #[test]
+    fn manifest_toml_parses_and_has_sane_fields() {
+        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        assert!(!manifest.component.is_empty());
+        for comp in &manifest.component {
+            assert_eq!(comp.sha256.len(), 64, "{}: sha256 non è a 64 caratteri hex", comp.name);
+            assert!(comp.dest.contains("{data}"), "{}: dest senza placeholder {{data}}", comp.name);
+            assert!(comp.url.starts_with("https://"), "{}: url non https", comp.name);
+        }
+        for name in ["tessdata-ita", "tessdata-eng"] {
+            let comp = manifest
+                .component
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("componente {name} mancante dal manifest"));
+            assert!(comp.target.is_none(), "{name}: deve essere universale (nessun target)");
+            assert!(comp.dest.ends_with(".traineddata"));
+        }
+    }
+}
+
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
 /// Target supportati, ordinati dal più specifico al più generico.

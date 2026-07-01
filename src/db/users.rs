@@ -76,40 +76,55 @@ pub async fn find_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserRo
     Ok(row)
 }
 
-/// Crea l'admin di default se non esiste (parità con database.py).
-/// Password: da `admin_default_password` config, oppure generata casualmente.
+/// Crea o aggiorna l'admin di default.
+///
+/// Comportamento:
+/// - Se `AUTH__ADMIN_DEFAULT_PASSWORD` è impostata → usa quella password,
+///   sia alla creazione che all'aggiornamento (riavvio con nuova password = funziona).
+/// - Se non è impostata e l'admin NON esiste → genera password casuale e la logga.
+/// - Se non è impostata e l'admin esiste già → non tocca nulla.
 pub async fn seed_admin(pool: &SqlitePool, configured_password: Option<&str>) -> Result<()> {
     use crate::auth::password;
 
     let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?")
         .bind("admin")
         .fetch_one(pool)
-        .await?;
+        .await? > 0;
 
-    if exists > 0 {
+    if let Some(p) = configured_password.filter(|p| !p.is_empty()) {
+        let hash = password::hash(p)?;
+        if exists {
+            sqlx::query("UPDATE users SET password_hash = ? WHERE username = ?")
+                .bind(&hash)
+                .bind("admin")
+                .execute(pool)
+                .await?;
+            tracing::info!("password admin aggiornata da AUTH__ADMIN_DEFAULT_PASSWORD");
+        } else {
+            create(pool, "admin", "admin@rag-engine.local", &hash, Role::Admin).await?;
+            tracing::info!("admin creato con AUTH__ADMIN_DEFAULT_PASSWORD");
+        }
         return Ok(());
     }
 
-    let password = if let Some(p) = configured_password.filter(|p| !p.is_empty()) {
-        tracing::info!("admin creato con ADMIN_DEFAULT_PASSWORD");
-        p.to_owned()
-    } else {
-        let generated: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(22)
-            .map(char::from)
-            .collect();
-        tracing::warn!("========================================");
-        tracing::warn!("ACCOUNT ADMIN CREATO CON PASSWORD CASUALE");
-        tracing::warn!("  Username: admin");
-        tracing::warn!("  Password: {generated}");
-        tracing::warn!("SALVA QUESTA PASSWORD — non verrà mostrata di nuovo!");
-        tracing::warn!("Per impostarne una fissa: AUTH__ADMIN_DEFAULT_PASSWORD=...");
-        tracing::warn!("========================================");
-        generated
-    };
+    if exists {
+        return Ok(());
+    }
 
-    let hash = password::hash(&password)?;
+    // Nessuna password configurata e admin non esiste → genera casuale
+    let generated: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(22)
+        .map(char::from)
+        .collect();
+    tracing::warn!("========================================");
+    tracing::warn!("ACCOUNT ADMIN CREATO CON PASSWORD CASUALE");
+    tracing::warn!("  Username: admin");
+    tracing::warn!("  Password: {generated}");
+    tracing::warn!("SALVA QUESTA PASSWORD — non verrà mostrata di nuovo!");
+    tracing::warn!("Per impostarne una fissa: AUTH__ADMIN_DEFAULT_PASSWORD=...");
+    tracing::warn!("========================================");
+    let hash = password::hash(&generated)?;
     create(pool, "admin", "admin@rag-engine.local", &hash, Role::Admin).await?;
     Ok(())
 }

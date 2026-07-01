@@ -34,6 +34,12 @@ function App() {
   const [localBackups, setLocalBackups] = useState([])
   const [backupRunning, setBackupRunning] = useState(false)
 
+  const [qdrantStats, setQdrantStats] = useState(null)
+  const [qdrantDocs, setQdrantDocs] = useState([])
+  const [loadingQdrant, setLoadingQdrant] = useState(false)
+  const [sqliteDocs, setSqliteDocs] = useState([])
+  const [loadingSqlite, setLoadingSqlite] = useState(false)
+
   // Change password state
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' })
@@ -77,16 +83,23 @@ function App() {
   useEffect(() => {
     const savedToken = localStorage.getItem('rag_auth_token')
     const savedUser = localStorage.getItem('rag_auth_user')
-    if (savedToken && savedUser) {
+    if (!savedToken || !savedUser) return
+    axios.get(`${API_URL}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${savedToken}` }
+    }).then(res => {
+      localStorage.setItem('rag_auth_user', JSON.stringify(res.data))
       setToken(savedToken)
-      setUser(JSON.parse(savedUser))
+      setUser(res.data)
       setIsAuthenticated(true)
-    }
+    }).catch(() => {
+      localStorage.removeItem('rag_auth_token')
+      localStorage.removeItem('rag_auth_user')
+    })
   }, [])
 
   useEffect(() => {
     if (isAuthenticated) {
-      loadConversationsFromStorage()
+      fetchConversationsFromApi()
       checkBackendHealth()
       fetchDocuments()
       const interval = setInterval(checkBackendHealth, 30000)
@@ -95,9 +108,19 @@ function App() {
   }, [isAuthenticated])
 
   useEffect(() => {
+    // Registrato una sola volta (niente dipendenza da `token`): legge il token
+    // da localStorage ad ogni richiesta, non da una closure. Se dipendesse da
+    // `token` via [token], questo effetto è dichiarato DOPO quello che lancia
+    // fetchConversationsFromApi/fetchDocuments su isAuthenticated (riga ~100) —
+    // React esegue gli effetti nell'ordine di dichiarazione nello stesso commit,
+    // quindi al login (isAuthenticated e token cambiano insieme) le prime
+    // richieste partirebbero con l'interceptor "vecchio" (token ancora null dal
+    // mount) → 401 → conversazioni e documenti restano vuoti. Leggere sempre da
+    // localStorage elimina il problema indipendentemente dall'ordine degli effetti.
     const reqInt = axios.interceptors.request.use(
       (config) => {
-        if (token) config.headers.Authorization = `Bearer ${token}`
+        const currentToken = localStorage.getItem('rag_auth_token')
+        if (currentToken) config.headers.Authorization = `Bearer ${currentToken}`
         return config
       },
       (error) => Promise.reject(error)
@@ -113,7 +136,7 @@ function App() {
       axios.interceptors.request.eject(reqInt)
       axios.interceptors.response.eject(resInt)
     }
-  }, [token])
+  }, [])
 
   // ============================================================================
   // AUTHENTICATION
@@ -226,6 +249,44 @@ function App() {
     }
   }
 
+  const fetchQdrantInfo = async () => {
+    setLoadingQdrant(true)
+    try {
+      const [stats, docs] = await Promise.all([
+        axios.get(`${API_URL}/api/admin/qdrant/stats`),
+        axios.get(`${API_URL}/api/admin/qdrant/documents`),
+      ])
+      setQdrantStats(stats.data.result || null)
+      setQdrantDocs(docs.data.documents || [])
+    } catch (e) {
+      console.error('Qdrant fetch error:', e)
+    } finally {
+      setLoadingQdrant(false)
+    }
+  }
+
+  const fetchSqliteInfo = async () => {
+    setLoadingSqlite(true)
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/sqlite/documents`)
+      setSqliteDocs(res.data.documents || [])
+    } catch (e) {
+      console.error('SQLite fetch error:', e)
+    } finally {
+      setLoadingSqlite(false)
+    }
+  }
+
+  const handleQdrantDeleteDocument = async (docId, filename) => {
+    if (!window.confirm(`Eliminare tutti i vettori di "${filename}" da Qdrant?`)) return
+    try {
+      await axios.delete(`${API_URL}/api/admin/qdrant/document/${docId}`)
+      fetchQdrantInfo()
+    } catch (e) {
+      alert('Errore: ' + (e.response?.data?.error || e.message))
+    }
+  }
+
   const handleRunBackup = async () => {
     setBackupRunning(true)
     try {
@@ -277,92 +338,82 @@ function App() {
   }
 
   // ============================================================================
-  // CONVERSATIONS (localStorage)
+  // CONVERSATIONS (SQLite via API)
   // ============================================================================
 
-  const loadConversationsFromStorage = () => {
-    if (!user) return
+  const fetchConversationsFromApi = async () => {
     try {
-      const stored = localStorage.getItem(`rag_conversations_${user.id}`)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        setConversations(parsed)
-        const lastId = localStorage.getItem(`rag_current_conversation_${user.id}`)
-        if (lastId && parsed.find(c => c.id === lastId)) {
-          loadConversation(lastId, parsed)
-        } else if (parsed.length > 0) {
-          loadConversation(parsed[0].id, parsed)
-        }
+      const res = await axios.get(`${API_URL}/api/conversations`)
+      const convs = res.data.conversations || []
+      setConversations(convs)
+      if (convs.length > 0) {
+        await switchConversation(convs[0].id)
       } else {
-        createNewConversation([])
+        await createNewConversation()
       }
-    } catch {
-      createNewConversation([])
+    } catch (e) {
+      console.error('Errore caricamento conversazioni:', e)
+      setConversations([])
+      setMessages([])
     }
   }
 
-  const saveConversationsToStorage = (convs) => {
-    if (!user) return
-    localStorage.setItem(`rag_conversations_${user.id}`, JSON.stringify(convs))
-  }
-
-  const createNewConversation = (existingConvs) => {
-    const base = existingConvs !== undefined ? existingConvs : conversations
-    const newConv = {
-      id: Date.now().toString(),
-      title: 'New Conversation',
-      messages: [],
-      createdAt: new Date().toISOString()
-    }
-    const updated = [newConv, ...base]
-    setConversations(updated)
-    saveConversationsToStorage(updated)
-    setCurrentConversationId(newConv.id)
-    setMessages([])
-  }
-
-  const loadConversation = (convId, convList) => {
-    const list = convList || conversations
-    const conv = list.find(c => c.id === convId)
-    if (conv && user) {
-      setCurrentConversationId(convId)
-      setMessages(conv.messages || [])
-      localStorage.setItem(`rag_current_conversation_${user.id}`, convId)
+  const createNewConversation = async () => {
+    try {
+      const res = await axios.post(`${API_URL}/api/conversations`)
+      const conv = res.data
+      setConversations(prev => [conv, ...prev])
+      setCurrentConversationId(conv.id)
+      setMessages([])
+      return conv.id
+    } catch (e) {
+      console.error('Errore creazione conversazione:', e)
+      return null
     }
   }
 
-  const deleteConversation = (convId) => {
-    if (conversations.length === 1) {
-      alert('Cannot delete the last conversation')
-      return
-    }
-    const updated = conversations.filter(c => c.id !== convId)
-    setConversations(updated)
-    saveConversationsToStorage(updated)
-    if (currentConversationId === convId) {
-      loadConversation(updated[0].id, updated)
+  const switchConversation = async (convId) => {
+    setCurrentConversationId(convId)
+    try {
+      const res = await axios.get(`${API_URL}/api/conversations/${convId}/messages`)
+      const msgs = (res.data.messages || []).map(m => ({
+        role: m.role,
+        content: m.content,
+        sources: m.sources ? (() => { try { return JSON.parse(m.sources) } catch { return [] } })() : [],
+        timestamp: m.timestamp,
+      }))
+      setMessages(msgs)
+    } catch (e) {
+      console.error('Errore caricamento messaggi:', e)
+      setMessages([])
     }
   }
 
-  const updateConversationTitle = (convId, firstMessage) => {
-    setConversations(prev => {
-      const updated = prev.map(c => {
-        if (c.id === convId && c.title === 'New Conversation') {
-          return { ...c, title: firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '') }
+  const deleteConversation = async (convId) => {
+    try {
+      await axios.delete(`${API_URL}/api/conversations/${convId}`)
+      const updated = conversations.filter(c => c.id !== convId)
+      setConversations(updated)
+      if (currentConversationId === convId) {
+        if (updated.length > 0) {
+          await switchConversation(updated[0].id)
+        } else {
+          await createNewConversation()
         }
-        return c
-      })
-      saveConversationsToStorage(updated)
-      return updated
-    })
+      }
+    } catch (e) {
+      alert('Errore eliminazione: ' + (e.response?.data?.error || e.message))
+    }
   }
 
-  const updateConversationMessages = (convId, newMessages) => {
-    setConversations(prev => {
-      const updated = prev.map(c => c.id === convId ? { ...c, messages: newMessages } : c)
-      saveConversationsToStorage(updated)
-      return updated
-    })
+  const updateConversationTitleApi = async (convId, firstMessage) => {
+    const title = firstMessage.substring(0, 50) + (firstMessage.length > 50 ? '...' : '')
+    try {
+      await axios.put(`${API_URL}/api/conversations/${convId}`, { title })
+      setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c))
+    } catch (e) {
+      console.error('Errore rinomina conversazione:', e)
+    }
   }
 
   // ============================================================================
@@ -460,8 +511,8 @@ function App() {
     const userMessage = { role: 'user', content: query, timestamp: new Date().toISOString() }
     const updatedMessages = [...messages, userMessage]
     setMessages(updatedMessages)
-    updateConversationMessages(currentConversationId, updatedMessages)
-    if (updatedMessages.length === 1) updateConversationTitle(currentConversationId, query)
+    // Primo messaggio → rinomina la conversazione
+    if (updatedMessages.length === 1) updateConversationTitleApi(currentConversationId, query)
 
     setQuery('')
     setQuerying(true)
@@ -472,7 +523,9 @@ function App() {
     try {
       const response = await axios.post(`${API_URL}/api/query`, {
         query: userMessage.content,
-        top_k: 5
+        top_k: 5,
+        use_history: true,
+        conversation_id: currentConversationId,
       }, { timeout: 630000 })
 
       const assistantMessage = {
@@ -481,19 +534,13 @@ function App() {
         sources: response.data.sources || [],
         timestamp: new Date().toISOString()
       }
-      const finalMessages = [...updatedMessages, assistantMessage]
-      setMessages(finalMessages)
-      updateConversationMessages(currentConversationId, finalMessages)
+      setMessages(prev => [...prev, assistantMessage])
     } catch (error) {
       const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
       const errorContent = isTimeout
-        ? 'The model took too long to respond. Please try again.'
-        : `Error: ${error.response?.data?.error || error.message}`
-
-      const errorMessage = { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }
-      const finalMessages = [...updatedMessages, errorMessage]
-      setMessages(finalMessages)
-      updateConversationMessages(currentConversationId, finalMessages)
+        ? 'Il modello ha impiegato troppo tempo. Riprova.'
+        : `Errore: ${error.response?.data?.error || error.message}`
+      setMessages(prev => [...prev, { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }])
     } finally {
       if (modelLoadingTimerRef.current) {
         clearTimeout(modelLoadingTimerRef.current)
@@ -569,9 +616,8 @@ function App() {
           </form>
 
           <div className="mt-6 pt-6 border-t border-slate-700 text-center text-xs text-slate-400">
-            <p>Default credentials:</p>
-            <p className="mt-1">Username: <span className="text-white font-mono">admin</span></p>
-            <p>Password: <span className="text-white font-mono">admin123</span></p>
+            <p>Username: <span className="text-white font-mono">admin</span></p>
+            <p className="mt-1">Password: check startup logs or set <span className="text-white font-mono">AUTH__ADMIN_DEFAULT_PASSWORD</span></p>
           </div>
         </div>
       </div>
@@ -605,6 +651,18 @@ function App() {
                   className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'backup' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
                 >
                   Backup
+                </button>
+                <button
+                  onClick={() => { setAdminTab('qdrant'); fetchQdrantInfo() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'qdrant' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  Qdrant
+                </button>
+                <button
+                  onClick={() => { setAdminTab('sqlite'); fetchSqliteInfo() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'sqlite' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  SQLite
                 </button>
               </div>
               <button onClick={toggleAdminPanel} className="text-slate-400 hover:text-white text-2xl">
@@ -765,6 +823,138 @@ function App() {
                 </div>
               )}
 
+              {/* TAB QDRANT */}
+              {adminTab === 'qdrant' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-white">Qdrant Vector Store</h3>
+                    <button onClick={fetchQdrantInfo} className="text-sm text-blue-400 hover:text-blue-300">Aggiorna</button>
+                  </div>
+
+                  {loadingQdrant ? (
+                    <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                  ) : (
+                    <>
+                      {qdrantStats && (
+                        <div className="grid grid-cols-3 gap-3">
+                          {[
+                            ['Punti totali', qdrantStats.points_count ?? '—'],
+                            ['Vettori indicizzati', qdrantStats.indexed_vectors_count ?? '—'],
+                            ['Stato', qdrantStats.status ?? '—'],
+                          ].map(([label, val]) => (
+                            <div key={label} className="bg-slate-700 rounded-lg p-3 text-center">
+                              <p className="text-xs text-slate-400">{label}</p>
+                              <p className="text-white font-bold text-lg">{String(val)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {qdrantDocs.length === 0 ? (
+                        <p className="text-slate-400 text-sm text-center py-4">Nessun documento in Qdrant</p>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-sm text-slate-400">{qdrantDocs.length} document{qdrantDocs.length !== 1 ? 'i' : 'o'} nel vector store</p>
+                          <div className="max-h-80 overflow-y-auto space-y-2">
+                            {qdrantDocs.map((doc) => (
+                              <div key={doc.document_id} className="bg-slate-700 rounded-lg p-3 flex items-center justify-between gap-3">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white text-sm font-medium truncate">{doc.filename}</p>
+                                  <p className="text-xs text-slate-400 font-mono truncate">{doc.document_id}</p>
+                                  <p className="text-xs text-slate-400">{doc.chunk_count} chunk · {doc.upload_date ? new Date(doc.upload_date).toLocaleString('it-IT') : '—'}</p>
+                                </div>
+                                <button
+                                  onClick={() => handleQdrantDeleteDocument(doc.document_id, doc.filename)}
+                                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition flex-shrink-0"
+                                >
+                                  Elimina vettori
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Sync check */}
+                      {sqliteDocs.length > 0 && (() => {
+                        const sqliteIds = new Set(sqliteDocs.filter(d => d.is_deleted === 0).map(d => d.id))
+                        const qdrantIds = new Set(qdrantDocs.map(d => d.document_id))
+                        const orphansQdrant = qdrantDocs.filter(d => !sqliteIds.has(d.document_id))
+                        const orphansSqlite = sqliteDocs.filter(d => d.is_deleted === 0 && !qdrantIds.has(d.id))
+                        if (orphansQdrant.length === 0 && orphansSqlite.length === 0) return (
+                          <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 text-sm text-green-300">
+                            SQLite e Qdrant sono sincronizzati.
+                          </div>
+                        )
+                        return (
+                          <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-3 space-y-2">
+                            {orphansQdrant.length > 0 && (
+                              <div>
+                                <p className="text-yellow-300 text-sm font-semibold">Orfani in Qdrant (non in SQLite):</p>
+                                {orphansQdrant.map(d => (
+                                  <div key={d.document_id} className="flex items-center justify-between mt-1">
+                                    <span className="text-xs text-slate-300 font-mono truncate">{d.filename} ({d.document_id.slice(0,8)}…)</span>
+                                    <button onClick={() => handleQdrantDeleteDocument(d.document_id, d.filename)}
+                                      className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded ml-2 flex-shrink-0">
+                                      Pulisci
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {orphansSqlite.length > 0 && (
+                              <div>
+                                <p className="text-yellow-300 text-sm font-semibold">In SQLite ma non in Qdrant:</p>
+                                {orphansSqlite.map(d => (
+                                  <p key={d.id} className="text-xs text-slate-300 font-mono mt-1 truncate">{d.filename} ({d.id.slice(0,8)}…)</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* TAB SQLITE */}
+              {adminTab === 'sqlite' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-white">SQLite — tabella documenti</h3>
+                    <button onClick={fetchSqliteInfo} className="text-sm text-blue-400 hover:text-blue-300">Aggiorna</button>
+                  </div>
+
+                  {loadingSqlite ? (
+                    <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                  ) : sqliteDocs.length === 0 ? (
+                    <p className="text-slate-400 text-sm text-center py-4">Nessun documento nel database</p>
+                  ) : (
+                    <div className="max-h-[60vh] overflow-y-auto space-y-2">
+                      <p className="text-sm text-slate-400">{sqliteDocs.length} righe totali ({sqliteDocs.filter(d => d.is_deleted === 0).length} attive, {sqliteDocs.filter(d => d.is_deleted !== 0).length} cancellate)</p>
+                      {sqliteDocs.map((doc) => (
+                        <div key={doc.id} className={`rounded-lg p-3 border ${doc.is_deleted ? 'bg-slate-700/50 border-slate-600 opacity-60' : 'bg-slate-700 border-slate-600'}`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${doc.is_deleted ? 'bg-red-800 text-red-200' : 'bg-green-700 text-green-100'}`}>
+                              {doc.is_deleted ? 'ELIMINATO' : 'ATTIVO'}
+                            </span>
+                            <span className="text-white text-sm font-medium truncate">{doc.filename}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 text-xs text-slate-400 mt-1">
+                            <span>ID: <span className="font-mono">{doc.id.slice(0,8)}…</span></span>
+                            <span>Tipo: {doc.doc_type}</span>
+                            <span>Pagine: {doc.page_count ?? '—'}</span>
+                            <span>Chunk: {doc.chunk_count}</span>
+                            <span className="col-span-2">Caricato: {doc.upload_date ? new Date(doc.upload_date).toLocaleString('it-IT') : '—'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
             </div>
           </div>
         </div>
@@ -912,10 +1102,10 @@ function App() {
           <aside className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col">
             <div className="p-4 border-b border-slate-700">
               <button
-                onClick={() => createNewConversation(undefined)}
+                onClick={() => createNewConversation()}
                 className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
               >
-                + New Chat
+                + Nuova chat
               </button>
             </div>
 
@@ -928,17 +1118,15 @@ function App() {
                       ? 'bg-slate-700 text-white'
                       : 'text-slate-300 hover:bg-slate-700/50'
                   }`}
-                  onClick={() => loadConversation(conv.id, undefined)}
+                  onClick={() => switchConversation(conv.id)}
                 >
                   <span className="truncate flex-1 text-sm">{conv.title}</span>
-                  {conversations.length > 1 && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
-                      className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs ml-2"
-                    >
-                      ✕
-                    </button>
-                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
+                    className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 text-xs ml-2"
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>
@@ -985,30 +1173,38 @@ function App() {
                   }`}>
                     <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 
-                    {msg.sources && msg.sources.length > 0 && (
-                      <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
-                        <p className="text-sm font-semibold text-slate-300">
-                          Sources ({msg.sources.length}):
-                        </p>
-                        {msg.sources.map((source, sidx) => (
-                          <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
-                            <div className="flex justify-between items-center gap-2">
-                              <a
-                                href={`${API_URL}/api/documents/${source.document_id}/download`}
-                                download
-                                className="text-blue-300 hover:text-blue-200 underline truncate flex-1"
-                                title={source.filename || source.document_id}
-                              >
-                                {source.filename || source.document_id}
-                              </a>
-                              <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold flex-shrink-0">
-                                {source.similarity != null ? (source.similarity * 100).toFixed(1) : 'N/A'}%
-                              </span>
+                    {msg.sources && msg.sources.length > 0 && (() => {
+                      const byDoc = {}
+                      msg.sources.forEach(s => {
+                        const id = s.document_id
+                        if (!byDoc[id] || (s.similarity ?? 0) > (byDoc[id].similarity ?? 0)) byDoc[id] = s
+                      })
+                      const unique = Object.values(byDoc)
+                      return (
+                        <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
+                          <p className="text-sm font-semibold text-slate-300">
+                            Fonti ({unique.length} {unique.length === 1 ? 'documento' : 'documenti'}):
+                          </p>
+                          {unique.map((source, sidx) => (
+                            <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
+                              <div className="flex justify-between items-center gap-2">
+                                <a
+                                  href={`${API_URL}/api/documents/${source.document_id}/download`}
+                                  download
+                                  className="text-blue-300 hover:text-blue-200 underline truncate flex-1"
+                                  title={source.filename || source.document_id}
+                                >
+                                  {source.filename || source.document_id}
+                                </a>
+                                <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold flex-shrink-0">
+                                  {source.similarity != null ? (source.similarity * 100).toFixed(1) : 'N/A'}%
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          ))}
+                        </div>
+                      )
+                    })()}
 
                     <p className="text-xs text-slate-400 mt-2">
                       {new Date(msg.timestamp).toLocaleTimeString()}
