@@ -43,24 +43,6 @@ async fn main() -> Result<()> {
     db::migrate(&db).await?;
     db::users::seed_admin(&db, settings.auth.admin_default_password.as_deref()).await?;
 
-    let model_id = settings.embeddings.model_id.clone();
-
-    let embeddings = tokio::task::spawn_blocking(move || {
-        clients::embeddings::EmbeddingService::load(&model_id)
-    })
-    .await
-    .context("join embedding load")?
-    .context("embedding service load")?;
-    tracing::info!("embedding service pronto");
-
-    let qdrant = clients::qdrant_store::QdrantStore::new(
-        &settings.qdrant.grpc_url,
-        &settings.qdrant.collection,
-    )
-    .await
-    .context("qdrant init")?;
-    tracing::info!("qdrant pronto");
-
     // Se bootstrap ha avviato eullm, usa lo STESSO path GGUF come "model" nelle
     // richieste — eullm lo accetta direttamente (vedi ProcessGuard), niente
     // registrazione/import-ollama necessaria. Altrimenti (eullm esterno,
@@ -80,12 +62,16 @@ async fn main() -> Result<()> {
         settings.eullm.keep_alive,
     );
 
-    // Warmup: forza il caricamento del modello in VRAM prima di servire traffico
-    // reale (parità Python: llm_client.py::warmup(), "avoid timeout on first
-    // query"). /api/tags (atteso in bootstrap) conferma solo che il processo
-    // eullm è in ascolto, non che il modello sia caricato/pronto per l'inferenza
-    // — senza questo passo la prima query reale paga il cold-start e può
-    // tornare vuota o incompleta.
+    // Warmup PRIMA dell'embedding (ordine invertito — vedi 5a nell'audit Fase 1):
+    // forza il caricamento del modello eullm in VRAM prima che Candle tenti la
+    // sua allocazione CUDA per bge-m3. /api/tags (già atteso in bootstrap)
+    // conferma solo che il processo eullm è in ascolto, NON che il modello sia
+    // caricato in memoria — se il caricamento di eullm è lazy (avviene alla
+    // prima richiesta reale, non all'avvio del processo), l'embedding poteva
+    // partire in parallelo con l'allocazione VRAM di eullm ed entrare in
+    // contesa proprio sul cold boot. Una invoke reale è l'unico segnale certo
+    // che il modello eullm è effettivamente residente, qualunque sia la sua
+    // strategia di caricamento interna.
     tracing::info!("warmup eullm…");
     match eullm.invoke("hi").await {
         Ok(a) if a.trim().is_empty() => tracing::warn!(
@@ -94,6 +80,25 @@ async fn main() -> Result<()> {
         Ok(_) => tracing::info!("eullm warmup completato, modello in VRAM"),
         Err(e) => tracing::warn!(error = %e, "eullm warmup fallito (si caricherà alla prima query reale)"),
     }
+
+    let model_id = settings.embeddings.model_id.clone();
+    let require_gpu = settings.embeddings.require_gpu;
+
+    let embeddings = tokio::task::spawn_blocking(move || {
+        clients::embeddings::EmbeddingService::load(&model_id, require_gpu)
+    })
+    .await
+    .context("join embedding load")?
+    .context("embedding service load")?;
+    tracing::info!(device = embeddings.device_label(), "embedding service pronto");
+
+    let qdrant = clients::qdrant_store::QdrantStore::new(
+        &settings.qdrant.grpc_url,
+        &settings.qdrant.collection,
+    )
+    .await
+    .context("qdrant init")?;
+    tracing::info!("qdrant pronto");
 
     let port = settings.server.port;
     let host = settings.server.host.clone();

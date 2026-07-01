@@ -7,39 +7,132 @@
 //! - L2-normalizzazione su query E documenti
 //! - GPU batch=4 (conservativo: 14b + bge-m3 ~11 GB su 16 GB), CPU batch=2
 //! - OOM CUDA → fallback CPU automatico sul batch
+//!
+//! Device selection (vedi load()): la CPU può essere raggiunta per due strade
+//! ben distinte, e non vanno confuse — DeviceStatus le tiene separate:
+//!   - CpuByConfig: build senza feature "cuda", CPU è la scelta attesa.
+//!   - CpuFallback: CUDA richiesta ma fallita dopo i retry — degrado reale,
+//!     va sempre segnalato forte (log error! + esposto via GET /info).
 
 use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokenizers::Tokenizer;
 
 #[allow(dead_code)]
 pub const EMBED_DIM: usize = 1024;
 const GPU_BATCH: usize = 4;
 const CPU_BATCH: usize = 2;
+/// Tentativi di init CUDA (device + caricamento pesi) prima di rassegnarsi alla CPU.
+const CUDA_LOAD_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceStatus {
+    /// CUDA richiesta (feature "cuda" compilata) e riuscita.
+    Gpu,
+    /// CPU per scelta di build (feature "cuda" non compilata) — non è un fallback.
+    CpuByConfig,
+    /// CUDA richiesta ma fallita dopo CUDA_LOAD_ATTEMPTS tentativi — degrado reale.
+    CpuFallback,
+}
 
 pub struct EmbeddingService {
     model: BertModel,
     tokenizer: Tokenizer,
     device: Device,
+    device_status: DeviceStatus,
 }
 
 impl EmbeddingService {
-    /// Carica bge-m3 da HuggingFace hub (cache locale ~/.cache/huggingface/).
-    /// Prova CUDA, poi ricade su CPU.
-    pub fn load(model_id: &str) -> Result<Self> {
-        let device = preferred_device();
-        tracing::info!(model_id, "carico modello embedding su {device:?}");
-
-        match Self::load_on(model_id, &device) {
-            Ok(s) => Ok(s),
-            Err(e) if device_is_cuda(&device) => {
-                tracing::warn!("CUDA fallisce ({e:#}), ricarico su CPU");
-                Self::load_on(model_id, &Device::Cpu)
+    /// Carica bge-m3. Se la feature "cuda" è compilata, tenta CUDA per
+    /// CUDA_LOAD_ATTEMPTS tentativi (backoff 1s poi 2s tra un tentativo e
+    /// l'altro) prima di ricadere su CPU. `require_gpu=true`
+    /// (EMBEDDINGS__REQUIRE_GPU) fa fallire l'avvio invece di degradare in
+    /// silenzio — un'ingestione a 17 minuti non deve mai passare inosservata.
+    pub fn load(model_id: &str, require_gpu: bool) -> Result<Self> {
+        if !cfg!(feature = "cuda") {
+            if require_gpu {
+                bail!(
+                    "EMBEDDINGS__REQUIRE_GPU=true ma il binario è compilato senza \
+                     --features cuda: nessun supporto GPU possibile per l'embedding. \
+                     Ricompila con --features cuda (o ocr,cuda)."
+                );
             }
-            Err(e) => Err(e),
+            tracing::info!(model_id, "embedding su CPU (build senza feature \"cuda\")");
+            let mut svc = Self::load_on(model_id, &Device::Cpu)?;
+            svc.device_status = DeviceStatus::CpuByConfig;
+            return Ok(svc);
+        }
+
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 1..=CUDA_LOAD_ATTEMPTS {
+            let outcome = Self::try_cuda_device(0).and_then(|dev| Self::load_on(model_id, &dev));
+            match outcome {
+                Ok(mut svc) => {
+                    svc.device_status = DeviceStatus::Gpu;
+                    tracing::info!(model_id, attempt, "embedding model pronto su GPU (CUDA)");
+                    return Ok(svc);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        attempt,
+                        max_attempts = CUDA_LOAD_ATTEMPTS,
+                        error = ?e,
+                        "init CUDA per l'embedding fallito (tentativo {attempt}/{CUDA_LOAD_ATTEMPTS})"
+                    );
+                    last_err = Some(e);
+                    if attempt < CUDA_LOAD_ATTEMPTS {
+                        std::thread::sleep(Duration::from_secs(1 << (attempt - 1)));
+                    }
+                }
+            }
+        }
+        let e = last_err.expect("almeno un tentativo eseguito nel loop sopra");
+
+        if require_gpu {
+            return Err(e.context(
+                "EMBEDDINGS__REQUIRE_GPU=true: CUDA ha fallito dopo tutti i tentativi — \
+                 avvio interrotto invece di degradare su CPU",
+            ));
+        }
+
+        tracing::error!(
+            error = ?e,
+            "\n================================================================\n\
+             EMBEDDING IN FALLBACK SU CPU — CUDA fallita dopo {CUDA_LOAD_ATTEMPTS} tentativi.\n\
+             L'ingestione documenti sarà MOLTO più lenta (minuti anziché secondi).\n\
+             Causa reale nel campo 'error' qui sopra (chain completa).\n\
+             Imposta EMBEDDINGS__REQUIRE_GPU=true per fallire subito invece di degradare.\n\
+             ================================================================"
+        );
+        let mut svc = Self::load_on(model_id, &Device::Cpu)
+            .context("fallback CPU dopo fallimento CUDA")?;
+        svc.device_status = DeviceStatus::CpuFallback;
+        Ok(svc)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_cuda_device(ordinal: usize) -> Result<Device> {
+        Device::new_cuda(ordinal).context("Device::new_cuda")
+    }
+    #[cfg(not(feature = "cuda"))]
+    fn try_cuda_device(_ordinal: usize) -> Result<Device> {
+        unreachable!("chiamato solo quando la feature \"cuda\" è attiva")
+    }
+
+    pub fn device_status(&self) -> DeviceStatus {
+        self.device_status
+    }
+
+    pub fn device_label(&self) -> &'static str {
+        match self.device_status {
+            DeviceStatus::Gpu => "gpu",
+            DeviceStatus::CpuByConfig => "cpu (build senza GPU)",
+            DeviceStatus::CpuFallback => "cpu (FALLBACK: CUDA fallita all'avvio, vedi log)",
         }
     }
 
@@ -83,7 +176,10 @@ impl EmbeddingService {
         let model = BertModel::load(vb, &config).context("BertModel::load")?;
 
         tracing::info!(model_id, "embedding model pronto su {device:?}");
-        Ok(Self { model, tokenizer, device: device.clone() })
+        // device_status è un placeholder: il chiamante (load()) lo sovrascrive
+        // sempre subito dopo, in base a quale ramo (Gpu/CpuByConfig/CpuFallback)
+        // ha effettivamente prodotto questo Self.
+        Ok(Self { model, tokenizer, device: device.clone(), device_status: DeviceStatus::CpuByConfig })
     }
 
     /// Embedding di un singolo testo, L2-normalizzato. dim=1024.
@@ -173,17 +269,6 @@ pub fn l2_normalize(v: &mut Vec<f32>) {
     if norm > 1e-12 {
         v.iter_mut().for_each(|x| *x /= norm);
     }
-}
-
-fn preferred_device() -> Device {
-    #[cfg(feature = "cuda")]
-    {
-        match Device::new_cuda(0) {
-            Ok(dev) => return dev,
-            Err(e) => tracing::warn!("CUDA non disponibile: {e}"),
-        }
-    }
-    Device::Cpu
 }
 
 fn device_is_cuda(dev: &Device) -> bool {
@@ -323,4 +408,49 @@ pub fn download_target_dir(model_id: &str) -> PathBuf {
             PathBuf::from(home).join(".eullm")
         });
     root.join("models").join(basename)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Solo per build SENZA feature "cuda" (il caso normale di questo sandbox):
+    // require_gpu=true deve fallire SUBITO, prima di toccare qualunque file
+    // modello — non deve mai degradare in silenzio su CPU (5a, CLAUDE.md
+    // REGOLA ZERO — "onestà sullo stato"). Un model_id inesistente basta a
+    // dimostrare che l'errore arriva dal guard require_gpu e non da un
+    // successivo tentativo di caricamento pesi.
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn require_gpu_fails_hard_without_cuda_feature() {
+        let result = EmbeddingService::load("modello/che-non-esiste-di-sicuro", true);
+        let Err(err) = result else {
+            panic!("deve fallire, non degradare su CPU");
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("REQUIRE_GPU") && msg.contains("cuda"),
+            "messaggio d'errore non spiega la causa (REQUIRE_GPU + cuda): {msg}"
+        );
+    }
+
+    // Senza require_gpu, la stessa build (niente feature "cuda") deve usare la
+    // CPU per scelta di build — non è un fallback, quindi l'unico modo di
+    // osservarlo da fuori load() è il fatto che NON fallisca per questo motivo
+    // (l'errore che riceve qui viene dal model_id inventato, non da un guard
+    // GPU) e che device_label/device_status lo marchino CpuByConfig, mai
+    // CpuFallback, quando il caricamento riesce.
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn cpu_by_config_is_not_reported_as_fallback_message() {
+        let result = EmbeddingService::load("modello/che-non-esiste-di-sicuro", false);
+        let Err(err) = result else {
+            panic!("model_id inventato, deve comunque fallire il load pesi");
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            !msg.contains("REQUIRE_GPU"),
+            "senza require_gpu l'errore non deve menzionare REQUIRE_GPU: {msg}"
+        );
+    }
 }

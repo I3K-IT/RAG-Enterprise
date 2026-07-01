@@ -96,6 +96,14 @@ pub struct EullmSettings {
 pub struct EmbeddingsSettings {
     #[serde(default = "default_embedding_model")]
     pub model_id: String,
+    /// Se true: CUDA obbligatoria per l'embedding. Se l'init CUDA fallisce dopo i
+    /// retry (vedi EmbeddingService::load), l'avvio FALLISCE invece di degradare
+    /// in silenzio su CPU — un'ingestione a 17 minuti anziché secondi non deve
+    /// mai passare inosservata. Default false: fallback CPU consentito ma
+    /// loggato a livello error (non warn) ed esposto via GET /info.
+    /// Env: EMBEDDINGS__REQUIRE_GPU (il campo Settings si chiama "embeddings").
+    #[serde(default)]
+    pub require_gpu: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +168,7 @@ impl Default for QdrantSettings {
     }
 }
 impl Default for EmbeddingsSettings {
-    fn default() -> Self { Self { model_id: default_embedding_model() } }
+    fn default() -> Self { Self { model_id: default_embedding_model(), require_gpu: false } }
 }
 impl Default for BackupSettings {
     fn default() -> Self { Self { dir: default_backup_dir() } }
