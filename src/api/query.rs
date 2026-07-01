@@ -135,6 +135,14 @@ pub async fn query(
         Err(e) => return err(StatusCode::BAD_GATEWAY, format!("eullm: {e}")),
     };
 
+    // Risposta vuota (es. il modello ha prodotto solo un blocco <think> poi
+    // ripulito): NON persistere — un turno "assistant" vuoto in cronologia
+    // contaminerebbe i prompt dei tentativi successivi (use_history=true).
+    if answer.trim().is_empty() {
+        tracing::warn!(query = %req.query, "eullm: risposta vuota");
+        return err(StatusCode::BAD_GATEWAY, "il modello non ha prodotto una risposta, riprova");
+    }
+
     // Persist conversation
     let sources_json = serde_json::to_string(&sources).unwrap_or_default();
     let _ = db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None, conv_id).await;
@@ -206,13 +214,18 @@ pub async fn query_stream(
                     Some((Ok::<_, Infallible>(ev), (rx, acc, sources, db, uid, cid, false)))
                 }
                 None => {
-                    // Channel closed — persist assistant reply and emit final event.
-                    let sources_json = serde_json::to_string(&sources).unwrap_or_default();
-                    let _ = db::conversations::insert(
-                        &db, uid, "assistant", &acc, Some(&sources_json),
-                        cid.as_deref(),
-                    )
-                    .await;
+                    // Channel closed — persist assistant reply (se non vuota: vedi
+                    // query() non-streaming per il motivo) ed emette l'evento finale.
+                    if !acc.trim().is_empty() {
+                        let sources_json = serde_json::to_string(&sources).unwrap_or_default();
+                        let _ = db::conversations::insert(
+                            &db, uid, "assistant", &acc, Some(&sources_json),
+                            cid.as_deref(),
+                        )
+                        .await;
+                    } else {
+                        tracing::warn!("eullm stream: risposta vuota, non persistita");
+                    }
                     let ev = Event::default()
                         .data(json!({ "done": true, "sources": sources }).to_string());
                     Some((Ok::<_, Infallible>(ev), (rx, acc, vec![], db, uid, cid, true)))

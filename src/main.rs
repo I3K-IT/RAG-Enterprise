@@ -69,6 +69,18 @@ async fn main() -> Result<()> {
         settings.eullm.keep_alive,
     );
 
+    // Warmup: forza il caricamento del modello in VRAM prima di servire traffico
+    // reale (parità Python: llm_client.py::warmup(), "avoid timeout on first
+    // query"). /api/tags (atteso in bootstrap) conferma solo che il processo
+    // eullm è in ascolto, non che il modello sia caricato/pronto per l'inferenza
+    // — senza questo passo la prima query reale paga il cold-start e può
+    // tornare vuota o incompleta.
+    tracing::info!("warmup eullm…");
+    match eullm.invoke("hi").await {
+        Ok(_) => tracing::info!("eullm warmup completato, modello in VRAM"),
+        Err(e) => tracing::warn!(error = %e, "eullm warmup fallito (si caricherà alla prima query reale)"),
+    }
+
     let port = settings.server.port;
     let host = settings.server.host.clone();
 
