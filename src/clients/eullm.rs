@@ -131,16 +131,19 @@ impl EullmClient {
     /// Returns the trimmed, <think>-cleaned model response.
     pub async fn invoke(&self, user_text: &str) -> Result<String> {
         let url = format!("{}/api/generate", self.base_url);
-        let body: serde_json::Value = self
+        let resp = self
             .http
             .post(&url)
             .json(&self.request(user_text, false))
             .send()
             .await
-            .context("eullm POST")?
-            .json()
-            .await
-            .context("eullm response JSON")?;
+            .context("eullm POST")?;
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().await.context("eullm response JSON")?;
+        if !status.is_success() {
+            let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("errore sconosciuto");
+            anyhow::bail!("eullm HTTP {status}: {msg}");
+        }
         let text = body["response"].as_str().unwrap_or("").to_owned();
         let clean = think_re().replace_all(&text, "").into_owned();
         Ok(clean.trim().to_owned())
@@ -165,6 +168,12 @@ impl EullmClient {
             .send()
             .await
             .context("eullm stream POST")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("eullm HTTP {status}: {body}");
+        }
 
         let mut buf = Vec::<u8>::new();
         let mut accumulated = String::new();
