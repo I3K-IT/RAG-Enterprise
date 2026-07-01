@@ -87,6 +87,12 @@ async fn prepare(
     };
 
     let full_prompt = prompt::build_prompt(&context, question, &history);
+    tracing::info!(
+        chars = full_prompt.len(),
+        chunks = sources.len(),
+        history_pairs = history.len(),
+        "prompt costruito"
+    );
     Ok((full_prompt, sources))
 }
 

@@ -77,6 +77,9 @@ async fn main() -> Result<()> {
     // tornare vuota o incompleta.
     tracing::info!("warmup eullm…");
     match eullm.invoke("hi").await {
+        Ok(a) if a.trim().is_empty() => tracing::warn!(
+            "eullm warmup: risposta vuota — il modello potrebbe non essere pronto (vedi eullm stesso)"
+        ),
         Ok(_) => tracing::info!("eullm warmup completato, modello in VRAM"),
         Err(e) => tracing::warn!(error = %e, "eullm warmup fallito (si caricherà alla prima query reale)"),
     }
