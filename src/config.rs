@@ -87,6 +87,9 @@ pub struct BackupSettings {
 pub struct StorageSettings {
     #[serde(default = "default_documents_dir")]
     pub documents_dir: String,
+    /// Limite upload documento (MB). Parità Python: MAX_UPLOAD_SIZE_MB, default 100.
+    #[serde(default = "default_max_upload_mb")]
+    pub max_upload_mb: u64,
 }
 
 /// Radice dati: binari, modelli, storage Qdrant, db SQLite, uploads.
@@ -142,7 +145,9 @@ impl Default for BackupSettings {
     fn default() -> Self { Self { dir: default_backup_dir() } }
 }
 impl Default for StorageSettings {
-    fn default() -> Self { Self { documents_dir: default_documents_dir() } }
+    fn default() -> Self {
+        Self { documents_dir: default_documents_dir(), max_upload_mb: default_max_upload_mb() }
+    }
 }
 impl Default for DataSettings {
     fn default() -> Self {
@@ -165,6 +170,7 @@ fn default_keep_alive() -> i32 { -1 }
 fn default_embedding_model() -> String { "BAAI/bge-m3".into() }
 fn default_backup_dir() -> String { "./backups".into() }
 fn default_documents_dir() -> String { "./documents".into() }
+fn default_max_upload_mb() -> u64 { 100 }
 fn default_data_dir() -> String {
     // Exe-relative: la cartella che contiene il binario è la portable app dir.
     // In produzione: /install/dir/i3k-rag-engine → data = /install/dir/

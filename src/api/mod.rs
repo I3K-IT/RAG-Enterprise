@@ -6,6 +6,7 @@ pub mod health;
 pub mod query;
 
 use axum::{
+    extract::DefaultBodyLimit,
     Router,
     routing::{delete, get, post, put},
 };
@@ -29,11 +30,20 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/users/:id", put(auth::update_user))
         .route("/api/auth/users/:id", delete(auth::delete_user));
 
+    // Upload isolato in un sub-router: DefaultBodyLimit (2MB) vale per l'intero
+    // Router a cui è applicato con .layer(), quindi va scoped alla sola route di
+    // upload — le altre (list/delete/download, tutte JSON o senza body) restano
+    // al default. Limite parità Python (MAX_UPLOAD_SIZE_MB, default 100MB).
+    let max_upload_bytes = (state.settings.storage.max_upload_mb * 1024 * 1024) as usize;
+    let upload_route = Router::new()
+        .route("/api/documents/upload", post(documents::upload))
+        .layer(DefaultBodyLimit::max(max_upload_bytes));
+
     let doc_routes = Router::new()
         .route("/api/documents", get(documents::list))
-        .route("/api/documents/upload", post(documents::upload))
         .route("/api/documents/:id", delete(documents::delete))
-        .route("/api/documents/:id/download", get(documents::download));
+        .route("/api/documents/:id/download", get(documents::download))
+        .merge(upload_route);
 
     let admin_routes = Router::new()
         .route("/api/admin/backup", post(admin::trigger_backup))
