@@ -144,7 +144,7 @@ pub async fn qdrant_delete_document(
 ) -> Response {
     if let Some(r) = require_admin(&claims) { return r; }
     let url = format!(
-        "{}/collections/{}/points/delete",
+        "{}/collections/{}/points/delete?wait=true",
         state.settings.qdrant.url, state.settings.qdrant.collection
     );
     let body = json!({
