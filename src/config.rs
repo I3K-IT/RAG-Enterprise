@@ -61,6 +61,8 @@ pub struct EullmSettings {
     #[serde(default = "default_eullm_url")]
     pub url: String,
     pub model: String,
+    /// Contesto PER CONNESSIONE (slot). Il flag di avvio --ctx-size passato a
+    /// eullm è il TOTALE: num_ctx * batch_size (vedi bootstrap::spawn_eullm).
     #[serde(default = "default_num_ctx")]
     pub num_ctx: u32,
     #[serde(default = "default_num_predict")]
@@ -69,6 +71,18 @@ pub struct EullmSettings {
     pub repeat_penalty: f32,
     #[serde(default = "default_keep_alive")]
     pub keep_alive: i32,
+    /// Connessioni concorrenti gestite da eullm. VRAM per la KV cache scala
+    /// linearmente con num_ctx * batch_size — verifica il budget VRAM prima
+    /// di alzarlo (vedi BUILD.md).
+    #[serde(default = "default_eullm_batch_size")]
+    pub batch_size: u32,
+    /// Quantizzazione KV cache (llama.cpp: f16, q8_0, q4_0…). None = default
+    /// di eullm (F16, nessun flag passato). Da testare per piattaforma/GPU —
+    /// non dare per scontato che sia supportata (verificare nei log di eullm).
+    #[serde(default)]
+    pub cache_type_k: Option<String>,
+    #[serde(default)]
+    pub cache_type_v: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +178,7 @@ fn default_qdrant_grpc_url() -> String { "http://localhost:6334".into() }
 fn default_collection() -> String { "rag_documents".into() }
 fn default_eullm_url() -> String { "http://localhost:11434".into() }
 fn default_num_ctx() -> u32 { 16384 }
+fn default_eullm_batch_size() -> u32 { 1 }
 fn default_num_predict() -> u32 { 4096 }
 fn default_repeat_penalty() -> f32 { 1.3 }
 fn default_keep_alive() -> i32 { -1 }

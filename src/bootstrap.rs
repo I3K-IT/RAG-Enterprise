@@ -30,7 +30,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 
-use crate::config::Settings;
+use crate::config::{EullmSettings, Settings};
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,69 @@ mod manifest_tests {
                 .unwrap_or_else(|| panic!("componente {name} mancante dal manifest"));
             assert!(comp.target.is_none(), "{name}: deve essere universale (nessun target)");
             assert!(comp.dest.ends_with(".traineddata"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod eullm_args_tests {
+    use super::*;
+
+    fn base_cfg() -> EullmSettings {
+        EullmSettings {
+            url: "http://localhost:11434".into(),
+            model: "qwen3-14b".into(),
+            num_ctx: 16384,
+            num_predict: 4096,
+            repeat_penalty: 1.3,
+            keep_alive: -1,
+            batch_size: 1,
+            cache_type_k: None,
+            cache_type_v: None,
+        }
+    }
+
+    /// Un flag sbagliato qui impedisce a eullm di avviarsi in produzione —
+    /// niente --fit (non esiste nella release pinnata v0.6.6, verificato dal
+    /// binario), --ctx-size deve essere il TOTALE (num_ctx * batch_size).
+    #[test]
+    fn default_single_slot_no_cache_override() {
+        let args = eullm_args(&base_cfg());
+        assert_eq!(args, vec!["--cli", "--ctx-size", "16384", "--batch-size", "1"]);
+    }
+
+    #[test]
+    fn ctx_size_is_num_ctx_times_batch_size() {
+        let mut cfg = base_cfg();
+        cfg.batch_size = 2;
+        let args = eullm_args(&cfg);
+        assert_eq!(args, vec!["--cli", "--ctx-size", "32768", "--batch-size", "2"]);
+    }
+
+    #[test]
+    fn cache_type_flags_only_when_set() {
+        let mut cfg = base_cfg();
+        cfg.cache_type_k = Some("q8_0".into());
+        cfg.cache_type_v = Some("q4_0".into());
+        let args = eullm_args(&cfg);
+        assert_eq!(
+            args,
+            vec![
+                "--cli", "--ctx-size", "16384", "--batch-size", "1",
+                "--cache-type-k", "q8_0", "--cache-type-v", "q4_0",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_fit_flag_ever() {
+        // --fit non esiste nella release pinnata (v0.6.6): non deve MAI ricomparire.
+        for cfg in [base_cfg(), {
+            let mut c = base_cfg();
+            c.cache_type_k = Some("q8_0".into());
+            c
+        }] {
+            assert!(!eullm_args(&cfg).contains(&"--fit".to_owned()));
         }
     }
 }
@@ -221,7 +284,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         ) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
-                children.push(spawn_eullm(&bin, &gguf)?);
+                children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
                 tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
             }
             _ => tracing::warn!(
@@ -517,13 +580,41 @@ fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
         .with_context(|| format!("avvio qdrant: {}", bin.display()))
 }
 
-fn spawn_eullm(bin: &Path, model_path: &Path) -> Result<tokio::process::Child> {
-    Command::new(bin)
-        .arg("run")
-        .arg(model_path)
-        .arg("--fit")
-        .arg("--cli")
-        .kill_on_drop(true)
+/// --ctx-size è il TOTALE eullm (llama.cpp-style), diviso tra i `batch_size`
+/// slot concorrenti — quindi num_ctx (contesto per connessione, quello che
+/// conta per far stare un prompt RAG) va moltiplicato per batch_size qui.
+/// --fit NON esiste nella release pinnata (v0.6.6, verificato dal binario:
+/// nessun auto-sizing) — senza --ctx-size/--batch-size espliciti eullm parte
+/// al suo default (4096 ctx, 1 slot), troppo piccolo per un prompt RAG con
+/// più di un paio di documenti indicizzati (causa nota di risposte vuote o
+/// troncate a metà frase).
+/// Pura e testabile: costruisce gli argomenti CLI (senza il model_path, che
+/// è un Path e complicherebbe i confronti nei test — aggiunto separatamente).
+fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
+    let ctx_size_total = cfg.num_ctx * cfg.batch_size;
+    let mut args = vec![
+        "--cli".to_owned(),
+        "--ctx-size".to_owned(),
+        ctx_size_total.to_string(),
+        "--batch-size".to_owned(),
+        cfg.batch_size.to_string(),
+    ];
+    if let Some(kt) = &cfg.cache_type_k {
+        args.push("--cache-type-k".to_owned());
+        args.push(kt.clone());
+    }
+    if let Some(vt) = &cfg.cache_type_v {
+        args.push("--cache-type-v".to_owned());
+        args.push(vt.clone());
+    }
+    args
+}
+
+fn spawn_eullm(bin: &Path, model_path: &Path, cfg: &EullmSettings) -> Result<tokio::process::Child> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("run").arg(model_path).args(eullm_args(cfg));
+
+    cmd.kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
