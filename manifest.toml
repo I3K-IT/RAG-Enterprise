@@ -7,14 +7,19 @@
 #   specifica disponibile. Per ogni dest, vince il target più specifico:
 #     linux-x86_64-cuda  →  Linux x86_64 con GPU NVIDIA (driver caricato)
 #     linux-x86_64       →  Linux x86_64 CPU/fallback
-#     linux-aarch64      →  Linux ARM64 (futuro)
-#     darwin-arm64       →  macOS Apple Silicon (futuro)
-#     darwin-x86_64      →  macOS Intel (futuro)
-#     windows-x86_64     →  Windows 64-bit (futuro)
+#     linux-aarch64      →  Linux ARM64
+#     darwin-arm64       →  macOS Apple Silicon
+#     darwin-x86_64      →  macOS Intel
+#     windows-x86_64     →  Windows 64-bit
+#     windows-arm64      →  Windows ARM64
 #
-#   eullm è SEMPRE richiesto (senza di lui il RAG non funziona).
-#   Aggiungere una entry per ogni variante disponibile; il bootstrap
-#   seleziona automaticamente quella giusta.
+#   eullm è SEMPRE richiesto (senza di lui il RAG non funziona). qdrant/pdfium
+#   hanno oggi solo alcune varianti pinnate — aggiungere le altre quando si
+#   targettano davvero quelle piattaforme (build+test, non solo manifest).
+#
+# archive_member (opzionale): se url punta a un .tar.gz invece che a un file
+# nudo, indica il path INTERNO da estrarre. sha256/size si riferiscono al
+# file ESTRATTO, non all'archivio (vedi bootstrap::extract_and_verify_member).
 #
 # dest: usa il placeholder {data} (risolto a runtime come data_dir).
 # Pre-check disco = somma delle size dei componenti mancanti (nessun archivio).
@@ -109,3 +114,82 @@ sha256  = "3642149cea0b66d2dcb0c3ef411986bca9bee22982146cb435843bae2bb2a649"
 size    = 905274848
 dest    = "{data}/bin/eullm"
 exec    = true
+
+# pdfium (OCR, feature "ocr"): libreria bundlata, no dipendenza host — vedi
+# ocr.rs::resolve_pdfium_library_path(), che cerca proprio in {data}/lib/.
+# url punta DIRETTAMENTE alle release ufficiali di bblanchon/pdfium-binaries
+# (tag immutabile chromium/7920) — sono archivi .tar.gz, non file nudi:
+# archive_member indica il path interno da estrarre, sha256/size si
+# riferiscono al file ESTRATTO (verificato dopo l'estrazione).
+
+[[component]]
+name           = "pdfium"
+version        = "chromium-7920"
+kind           = "binary"
+target         = "linux-x86_64"
+url            = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7920/pdfium-linux-x64.tgz"
+archive_member = "lib/libpdfium.so"
+sha256         = "687dce861f959c7097d47c5864509d51a926a71b38322596a8ee3e7a99c6b96e"
+size           = 7649168
+dest           = "{data}/lib/libpdfium.so"
+exec           = false
+
+[[component]]
+name           = "pdfium"
+version        = "chromium-7920"
+kind           = "binary"
+target         = "linux-aarch64"
+url            = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7920/pdfium-linux-arm64.tgz"
+archive_member = "lib/libpdfium.so"
+sha256         = "933f3d620cc8b58fb30a7f12a1bce8bf276da65caf39ff8fb2d04bc1268d53a3"
+size           = 7837256
+dest           = "{data}/lib/libpdfium.so"
+exec           = false
+
+[[component]]
+name           = "pdfium"
+version        = "chromium-7920"
+kind           = "binary"
+target         = "darwin-x86_64"
+url            = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7920/pdfium-mac-x64.tgz"
+archive_member = "lib/libpdfium.dylib"
+sha256         = "8fdf8fc61c85676515321b0c214fb1afa0e157cffdadbdff40802e7b4bed7ad6"
+size           = 7473800
+dest           = "{data}/lib/libpdfium.dylib"
+exec           = false
+
+[[component]]
+name           = "pdfium"
+version        = "chromium-7920"
+kind           = "binary"
+target         = "darwin-arm64"
+url            = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7920/pdfium-mac-arm64.tgz"
+archive_member = "lib/libpdfium.dylib"
+sha256         = "df568fcd17a6a6296956aa79abea1181db187458432f360b084fec1cea7cd4d9"
+size           = 7732848
+dest           = "{data}/lib/libpdfium.dylib"
+exec           = false
+
+[[component]]
+name           = "pdfium"
+version        = "chromium-7920"
+kind           = "binary"
+target         = "windows-x86_64"
+url            = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7920/pdfium-win-x64.tgz"
+archive_member = "bin/pdfium.dll"
+sha256         = "0aa3abb1aa20798094c1a5f2d8cdea45b24a6e12cdc6c774de261dd522dbdf81"
+size           = 7216128
+dest           = "{data}/lib/pdfium.dll"
+exec           = false
+
+[[component]]
+name           = "pdfium"
+version        = "chromium-7920"
+kind           = "binary"
+target         = "windows-arm64"
+url            = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7920/pdfium-win-arm64.tgz"
+archive_member = "bin/pdfium.dll"
+sha256         = "8f2b2aa5b5047d429c2026d5ec8c5cf13859d9e7fab1f56e4fd7a580a2bc3737"
+size           = 6662656
+dest           = "{data}/lib/pdfium.dll"
+exec           = false

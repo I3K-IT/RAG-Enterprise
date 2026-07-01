@@ -52,6 +52,13 @@ struct Component {
     /// Percorso con placeholder "{data}" (risolto a runtime).
     dest: String,
     exec: bool,
+    /// Se presente: `url` punta a un archivio .tar.gz, questo è il path
+    /// INTERNO del file da estrarre e scrivere in `dest`. sha256/size si
+    /// riferiscono al file ESTRATTO (non all'archivio) — la verifica avviene
+    /// dopo l'estrazione, così lo stamp-file fast-path (che hash-a `dest`)
+    /// funziona invariato per entrambi i casi.
+    #[serde(default)]
+    archive_member: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +158,50 @@ mod eullm_args_tests {
     }
 }
 
+#[cfg(test)]
+mod archive_extraction_tests {
+    use super::*;
+
+    /// Verifica end-to-end reale (non solo che compili): estrae davvero
+    /// lib/libpdfium.so da un archivio .tar.gz ufficiale pdfium-binaries e
+    /// conferma che il file estratto combacia byte-per-byte con lo sha256
+    /// pinnato in manifest.toml per il target linux-x86_64.
+    ///
+    /// Richiede (solo locale — vedi CLAUDE.md, niente CI):
+    ///   PDFIUM_ARCHIVE_FOR_TEST=/path/a/pdfium-linux-x64.tgz
+    ///   (scaricato da github.com/bblanchon/pdfium-binaries, tag chromium/7920)
+    /// Skip gracioso se non impostata.
+    #[test]
+    fn extract_tar_gz_member_matches_manifest_pdfium_entry() {
+        let Ok(archive) = std::env::var("PDFIUM_ARCHIVE_FOR_TEST") else {
+            eprintln!("PDFIUM_ARCHIVE_FOR_TEST non impostata — skip (vedi doc del test)");
+            return;
+        };
+
+        let out = std::env::temp_dir().join("i3k_pdfium_extract_test.so");
+        let _ = std::fs::remove_file(&out);
+
+        extract_tar_gz_member(Path::new(&archive), "lib/libpdfium.so", &out)
+            .expect("estrazione deve riuscire");
+
+        let got = sha256_file(&out).expect("sha256 del file estratto");
+        let _ = std::fs::remove_file(&out);
+
+        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        let comp = manifest
+            .component
+            .iter()
+            .find(|c| c.name == "pdfium" && c.target.as_deref() == Some("linux-x86_64"))
+            .expect("componente pdfium linux-x86_64 mancante dal manifest");
+
+        assert_eq!(
+            got, comp.sha256,
+            "il file estratto non combacia col sha256 pinnato in manifest.toml"
+        );
+        assert_eq!(comp.archive_member.as_deref(), Some("lib/libpdfium.so"));
+    }
+}
+
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
 /// Target supportati, ordinati dal più specifico al più generico.
@@ -159,7 +210,7 @@ mod eullm_args_tests {
 /// Schema target:
 ///   linux-x86_64-cuda   — Linux x86_64 con GPU NVIDIA (driver caricato)
 ///   linux-x86_64        — Linux x86_64 CPU-only / fallback
-///   (future: darwin-arm64, darwin-x86_64, windows-x86_64, linux-aarch64…)
+///   linux-aarch64, darwin-arm64, darwin-x86_64, windows-x86_64, windows-arm64
 fn current_targets() -> Vec<&'static str> {
     let mut t = Vec::new();
 
@@ -177,8 +228,10 @@ fn current_targets() -> Vec<&'static str> {
     t.push("darwin-arm64");
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     t.push("darwin-x86_64");
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     t.push("windows-x86_64");
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    t.push("windows-arm64");
 
     t
 }
@@ -347,34 +400,9 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
 
     parallel_download(&comp.url, &partial, &comp.name, DOWNLOAD_CONNECTIONS).await?;
 
-    // SHA256 dopo download (obbligatorio)
-    {
-        let expected = comp.sha256.clone();
-        let p = partial.clone();
-        let name = comp.name.clone();
-        let got = tokio::task::spawn_blocking(move || {
-            tracing::info!("{name}: verifica sha256 post-download…");
-            sha256_file(&p)
-        })
-        .await
-        .context("spawn_blocking sha256")?
-        .context("sha256 calcolo")?;
-
-        if got != expected {
-            tokio::fs::remove_file(&partial).await.ok();
-            bail!(
-                "{}: sha256 errato dopo download\n  atteso:  {}\n  trovato: {}",
-                comp.name,
-                expected,
-                got
-            );
-        }
-        // Rinomina atomico
-        tokio::fs::rename(&partial, dest)
-            .await
-            .with_context(|| format!("rename {}", dest.display()))?;
-        // Scrivi stamp
-        write_stamp(dest, &got).await;
+    match &comp.archive_member {
+        Some(member) => extract_and_verify_member(comp, &partial, member, dest).await?,
+        None => verify_and_place(comp, &partial, dest).await?,
     }
 
     if comp.exec {
@@ -386,6 +414,111 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
 
     tracing::info!("{}: installato in {}", comp.name, dest.display());
     Ok(())
+}
+
+/// Caso semplice (nessun archive_member): verifica sha256 del file scaricato
+/// così com'è e lo sposta in `dest`.
+async fn verify_and_place(comp: &Component, partial: &Path, dest: &Path) -> Result<()> {
+    let expected = comp.sha256.clone();
+    let p = partial.to_owned();
+    let name = comp.name.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        tracing::info!("{name}: verifica sha256 post-download…");
+        sha256_file(&p)
+    })
+    .await
+    .context("spawn_blocking sha256")?
+    .context("sha256 calcolo")?;
+
+    if got != expected {
+        tokio::fs::remove_file(partial).await.ok();
+        bail!(
+            "{}: sha256 errato dopo download\n  atteso:  {}\n  trovato: {}",
+            comp.name,
+            expected,
+            got
+        );
+    }
+    tokio::fs::rename(partial, dest)
+        .await
+        .with_context(|| format!("rename {}", dest.display()))?;
+    write_stamp(dest, &got).await;
+    Ok(())
+}
+
+/// Caso archive_member: estrae `member` dall'archivio .tar.gz scaricato
+/// (`partial`), verifica il sha256 del file ESTRATTO (comp.sha256 si
+/// riferisce a quello, non all'archivio), lo sposta in `dest`, poi scarta
+/// l'archivio. Così lo stamp-file fast-path resta invariato: hash-a sempre
+/// `dest` e lo confronta con comp.sha256, comportamento identico per
+/// componenti semplici ed estratti da archivio.
+async fn extract_and_verify_member(
+    comp: &Component,
+    partial: &Path,
+    member: &str,
+    dest: &Path,
+) -> Result<()> {
+    let extracted = dest.with_extension("extracted");
+
+    let archive_path = partial.to_owned();
+    let member_owned = member.to_owned();
+    let extracted_path = extracted.clone();
+    let name = comp.name.clone();
+    tokio::task::spawn_blocking(move || {
+        tracing::info!("{name}: estrazione {member_owned} dall'archivio…");
+        extract_tar_gz_member(&archive_path, &member_owned, &extracted_path)
+    })
+    .await
+    .context("spawn_blocking estrazione")??;
+
+    let expected = comp.sha256.clone();
+    let ep = extracted.clone();
+    let name2 = comp.name.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        tracing::info!("{name2}: verifica sha256 del file estratto…");
+        sha256_file(&ep)
+    })
+    .await
+    .context("spawn_blocking sha256")?
+    .context("sha256 calcolo")?;
+
+    tokio::fs::remove_file(partial).await.ok(); // archivio non più necessario
+
+    if got != expected {
+        tokio::fs::remove_file(&extracted).await.ok();
+        bail!(
+            "{}: sha256 errato dopo estrazione\n  atteso:  {}\n  trovato: {}",
+            comp.name,
+            expected,
+            got
+        );
+    }
+    tokio::fs::rename(&extracted, dest)
+        .await
+        .with_context(|| format!("rename {}", dest.display()))?;
+    write_stamp(dest, &got).await;
+    Ok(())
+}
+
+/// Estrae un singolo file (`member`, path interno all'archivio) da un
+/// .tar.gz e lo scrive in `out_path`. Sincrona/bloccante: va chiamata dentro
+/// spawn_blocking.
+fn extract_tar_gz_member(archive_path: &Path, member: &str, out_path: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive_path)
+        .with_context(|| format!("apertura archivio {}", archive_path.display()))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    for entry in archive.entries().context("lettura entries tar")? {
+        let mut entry = entry.context("lettura entry tar")?;
+        let path = entry.path().context("path entry tar")?.into_owned();
+        if path.as_path() == Path::new(member) {
+            let mut out = std::fs::File::create(out_path)
+                .with_context(|| format!("creazione {}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out).context("estrazione file")?;
+            return Ok(());
+        }
+    }
+    bail!("membro '{member}' non trovato nell'archivio {}", archive_path.display())
 }
 
 /// Verifica un componente già presente su disco.
