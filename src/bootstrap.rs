@@ -14,7 +14,14 @@
 //!  1. Carica manifest + rileva target.
 //!  2. Crea struttura directory in data_dir.
 //!  3. Pre-check disco = somma size dei componenti mancanti.
-//!  4. Scarica/verifica ogni componente selezionato.
+//!  4. Scarica/verifica ogni componente selezionato. Per eullm (solo se
+//!     manage_subprocesses=true): controlla anche un override locale
+//!     ({data}/bin/eullm.override.json, NON git-tracked — vedi sezione
+//!     "eullm: controllo versione remota") e, ad ogni riavvio, se GitHub ha
+//!     una release più recente — se sì e stdin è un terminale, chiede se
+//!     scaricarla. Mai bloccante: rete irraggiungibile o avvio non
+//!     interattivo (systemd/Docker) → skip silenzioso, si resta sulla
+//!     versione già presente.
 //!  5. Se manage_subprocesses=true: avvia qdrant + eullm (kill_on_drop).
 //!  6. Attende /healthz (qdrant) e /api/tags (eullm).
 //!  7. Ritorna ProcessGuard — al drop i figli ricevono SIGKILL.
@@ -202,6 +209,57 @@ mod archive_extraction_tests {
     }
 }
 
+#[cfg(test)]
+mod eullm_update_tests {
+    use super::*;
+
+    #[test]
+    fn parse_semver_strips_known_prefixes() {
+        assert_eq!(parse_semver("0.6.6"), Some((0, 6, 6)));
+        assert_eq!(parse_semver("v0.6.6"), Some((0, 6, 6)));
+        assert_eq!(parse_semver("EuLLM-v0.6.6"), Some((0, 6, 6)));
+        assert_eq!(parse_semver("EuLLM-v1.12.103"), Some((1, 12, 103)));
+    }
+
+    #[test]
+    fn parse_semver_rejects_unexpected_formats() {
+        assert_eq!(parse_semver(""), None);
+        assert_eq!(parse_semver("nightly"), None);
+        assert_eq!(parse_semver("EuLLM-v0.6"), None);
+        assert_eq!(parse_semver("EuLLM-v0.6.6-rc1"), None); // "6-rc1" non parsa come u32
+    }
+
+    /// La causa diretta del bug che questa feature avrebbe potuto introdurre
+    /// se il confronto fosse stato per stringa invece che numerico: "0.6.9"
+    /// vince su "0.6.10" lessicograficamente ('9' > '1'), ma non è la
+    /// versione più recente. Il confronto DEVE essere sulla tupla numerica.
+    #[test]
+    fn version_tuple_compares_numerically_not_lexicographically() {
+        let v9 = parse_semver("0.6.9").unwrap();
+        let v10 = parse_semver("0.6.10").unwrap();
+        assert!(v10 > v9, "0.6.10 deve essere considerata più recente di 0.6.9");
+    }
+
+    #[test]
+    fn asset_hint_matches_current_manifest_eullm_target() {
+        // L'euristica di selezione asset (EULLM_ASSET_HINT) deve combaciare
+        // col nome file dell'unico target eullm oggi pinnato in manifest.toml
+        // — se in futuro si aggiunge un target e questo test fallisce, è il
+        // segnale che EULLM_ASSET_HINT va esteso di pari passo.
+        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        let eullm = manifest
+            .component
+            .iter()
+            .find(|c| c.name == "eullm")
+            .expect("componente eullm mancante dal manifest");
+        let asset_name = eullm.url.rsplit('/').next().unwrap_or("");
+        assert!(
+            asset_name.contains(EULLM_ASSET_HINT),
+            "EULLM_ASSET_HINT={EULLM_ASSET_HINT:?} non combacia con l'asset pinnato {asset_name:?}"
+        );
+    }
+}
+
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
 /// Target supportati, ordinati dal più specifico al più generico.
@@ -312,10 +370,18 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     // Pre-check spazio disco
     check_disk_space(&selected, &data_dir)?;
 
-    // Scarica/verifica ogni componente selezionato
+    // Scarica/verifica ogni componente selezionato. eullm ha un percorso
+    // dedicato — solo quando lo gestiamo noi (manage_subprocesses=true, senza
+    // sarebbe un binario che non arriviamo mai a spawnare): controlla anche un
+    // eventuale override locale (versione più recente approvata a runtime, vedi
+    // maybe_update_eullm) prima di ricadere sul pin del manifest.
     for comp in &selected {
         let dest = resolve_dest(&comp.dest, &data_dir);
-        ensure_component(comp, &dest).await?;
+        if comp.name == "eullm" && settings.data.manage_subprocesses {
+            ensure_eullm_component(comp, &dest, &data_dir).await?;
+        } else {
+            ensure_component(comp, &dest).await?;
+        }
     }
 
     let mut children: Vec<tokio::process::Child> = Vec::new();
@@ -592,6 +658,283 @@ fn sha256_file(path: &Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+// ── eullm: controllo versione remota + override locale ─────────────────────────
+//
+// eullm si auto-aggiorna spesso (fix indipendenti, vedi CLAUDE.md — è per questo
+// che resta un processo separato e non viene compilato nel binario). Il pin in
+// manifest.toml (version + sha256) resta la base di partenza affidabile e
+// git-tracked, ma su richiesta esplicita dell'utente ad ogni riavvio si
+// controlla se GitHub ha una release più recente e — SOLO se lo stdin è un
+// terminale, per non bloccare mai un avvio non presidiato (systemd/Docker) —
+// si chiede interattivamente se scaricarla.
+//
+// Una versione scaricata così non ha uno sha256 pre-verificato nel manifest:
+// la fiducia è nell'approvazione esplicita dell'utente a quel momento, non in
+// un hash pinnato in anticipo — è una differenza reale rispetto a tutti gli
+// altri componenti di questo file, e va sempre loggata in chiaro.
+//
+// Persistenza: {data}/bin/eullm.override.json (locale, NON git-tracked) —
+// ricorda la versione approvata (per non riscaricarla ad ogni riavvio) e
+// l'ultima versione rifiutata (per non richiederla di nuovo finché non ne
+// esce una ancora più recente).
+
+const EULLM_RELEASES_API: &str = "https://api.github.com/repos/eullm/eullm/releases/latest";
+/// Sottostringa che identifica l'asset per la nostra piattaforma nel nome file
+/// (es. "eullm-linux-x64-cuda-12.8", vedi manifest.toml). Oggi eullm ha un solo
+/// target nel manifest (linux-x86_64-cuda); se in futuro se ne aggiungono altri
+/// questa selezione va estesa di pari passo con current_targets().
+const EULLM_ASSET_HINT: &str = "linux-x64-cuda";
+const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Debug, serde::Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct EullmOverride {
+    installed_version: Option<String>,
+    installed_sha256: Option<String>,
+    installed_url: Option<String>,
+    declined_version: Option<String>,
+}
+
+fn eullm_override_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("bin").join("eullm.override.json")
+}
+
+async fn load_eullm_override(data_dir: &Path) -> EullmOverride {
+    match tokio::fs::read_to_string(eullm_override_path(data_dir)).await {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Err(_) => EullmOverride::default(),
+    }
+}
+
+async fn save_eullm_override(data_dir: &Path, ov: &EullmOverride) {
+    if let Ok(s) = serde_json::to_string_pretty(ov) {
+        let _ = tokio::fs::write(eullm_override_path(data_dir), s).await;
+    }
+}
+
+/// "0.6.6" / "v0.6.6" / "EuLLM-v0.6.6" → (0,6,6). None se il formato non torna
+/// (es. GitHub cambia schema di tag) — trattato come "skip check", mai come
+/// errore fatale.
+fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
+    let s = s.strip_prefix("EuLLM-v").or_else(|| s.strip_prefix('v')).unwrap_or(s);
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn stdin_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+async fn fetch_latest_eullm_release() -> Result<GhRelease> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(EULLM_UPDATE_CHECK_TIMEOUT_SECS))
+        .build()?;
+    let resp = client
+        .get(EULLM_RELEASES_API)
+        .header("User-Agent", "i3k-rag-engine")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("richiesta GitHub releases eullm")?;
+    if !resp.status().is_success() {
+        bail!("GitHub API {} — {}", resp.status(), EULLM_RELEASES_API);
+    }
+    resp.json::<GhRelease>().await.context("parse risposta GitHub releases")
+}
+
+/// Sceglie quale Component usare per provisionare eullm: l'override locale
+/// se presente e ancora più recente del pin del manifest, altrimenti il pin.
+/// Se il pin ha nel frattempo raggiunto/superato l'override (es. abbiamo
+/// aggiornato manifest.toml), l'override è considerato superato e scartato.
+async fn effective_eullm_component(pinned: &Component, data_dir: &Path) -> Component {
+    let mut ov = load_eullm_override(data_dir).await;
+
+    let override_is_stale = match (&ov.installed_version, pinned.version.as_deref()) {
+        (Some(ov_v), Some(pin_v)) => {
+            matches!((parse_semver(ov_v), parse_semver(pin_v)), (Some(a), Some(b)) if a <= b)
+        }
+        _ => false,
+    };
+    if override_is_stale {
+        tracing::info!(
+            "eullm: il pin del manifest ha raggiunto/superato l'override locale, torno al pin"
+        );
+        ov = EullmOverride::default();
+        save_eullm_override(data_dir, &ov).await;
+    }
+
+    match (&ov.installed_version, &ov.installed_sha256, &ov.installed_url) {
+        (Some(v), Some(sha), Some(url)) => Component {
+            version: Some(v.clone()),
+            sha256: sha.clone(),
+            url: url.clone(),
+            ..pinned.clone()
+        },
+        _ => pinned.clone(),
+    }
+}
+
+/// Provisiona eullm: usa l'override locale se valido, altrimenti il pin del
+/// manifest (comportamento identico a ensure_component per ogni altro
+/// componente) — poi controlla se esiste una versione ancora più recente.
+async fn ensure_eullm_component(pinned: &Component, dest: &Path, data_dir: &Path) -> Result<()> {
+    let effective = effective_eullm_component(pinned, data_dir).await;
+    ensure_component(&effective, dest).await?;
+    maybe_update_eullm(pinned, dest, data_dir).await;
+    Ok(())
+}
+
+/// Controlla se GitHub ha una release eullm più recente di quella attualmente
+/// effettiva (override locale se presente, altrimenti il pin) e, se sì,
+/// chiede interattivamente — SOLO se stdin è un terminale — se scaricarla.
+/// Non fatale in nessun caso: rete irraggiungibile, parsing fallito o nessun
+/// asset compatibile vengono solo loggati; l'avvio prosegue sempre con la
+/// versione già presente.
+async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
+    let mut ov = load_eullm_override(data_dir).await;
+    let current_version =
+        ov.installed_version.clone().or_else(|| pinned.version.clone()).unwrap_or_default();
+
+    let release = match fetch_latest_eullm_release().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::info!(error = ?e, "controllo versione eullm saltato (GitHub non raggiungibile)");
+            return;
+        }
+    };
+
+    let (Some(latest), Some(current)) =
+        (parse_semver(&release.tag_name), parse_semver(&current_version))
+    else {
+        tracing::warn!(tag = %release.tag_name, installed = %current_version, "formato versione eullm inatteso, skip controllo aggiornamenti");
+        return;
+    };
+    if latest <= current {
+        tracing::info!(installed = %current_version, "eullm già alla versione più recente disponibile");
+        return;
+    }
+    let latest_str = format!("{}.{}.{}", latest.0, latest.1, latest.2);
+
+    if ov.declined_version.as_deref() == Some(latest_str.as_str()) {
+        tracing::info!(latest = %latest_str, "nuova versione eullm già rifiutata in precedenza, non richiedo di nuovo");
+        return;
+    }
+
+    let Some(asset) = release.assets.iter().find(|a| a.name.contains(EULLM_ASSET_HINT)) else {
+        tracing::warn!(latest = %latest_str, "nuova versione eullm trovata ma nessun asset per questa piattaforma ({EULLM_ASSET_HINT}), skip");
+        return;
+    };
+
+    tracing::warn!(
+        installed = %current_version,
+        latest = %latest_str,
+        release_notes = %release.html_url,
+        "eullm: nuova versione disponibile"
+    );
+
+    if !stdin_is_tty() {
+        tracing::warn!(
+            "avvio non interattivo (nessun terminale su stdin) — non chiedo conferma, continuo \
+             con la versione {current_version}. Per aggiornare: avvia da un terminale, oppure \
+             elimina {} per far ripartire il controllo alla prossima occasione interattiva.",
+            eullm_override_path(data_dir).display()
+        );
+        return;
+    }
+
+    eprintln!();
+    eprintln!("  eullm: nuova versione disponibile — installata: {current_version}, ultima: {latest_str}");
+    eprintln!("  Note di rilascio: {}", release.html_url);
+    eprint!("  Scaricare e usare la nuova versione ora? [s/N]: ");
+    {
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+    }
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        tracing::warn!("lettura risposta da stdin fallita, continuo con la versione corrente");
+        return;
+    }
+    let yes = matches!(answer.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y" | "yes");
+
+    if !yes {
+        tracing::info!(latest = %latest_str, "aggiornamento eullm rifiutato, resto sulla versione {current_version}");
+        ov.declined_version = Some(latest_str);
+        save_eullm_override(data_dir, &ov).await;
+        return;
+    }
+
+    tracing::info!(url = %asset.browser_download_url, size = asset.size, "download eullm {latest_str}…");
+    let partial = dest.with_extension("partial");
+    let _ = tokio::fs::remove_file(&partial).await;
+
+    if let Err(e) = parallel_download(
+        &asset.browser_download_url,
+        &partial,
+        &format!("eullm {latest_str}"),
+        DOWNLOAD_CONNECTIONS,
+    )
+    .await
+    {
+        tracing::warn!(error = ?e, "download eullm {latest_str} fallito, resto sulla versione corrente");
+        let _ = tokio::fs::remove_file(&partial).await;
+        return;
+    }
+
+    let hash_target = partial.clone();
+    let sha256 = match tokio::task::spawn_blocking(move || sha256_file(&hash_target)).await {
+        Ok(Ok(h)) => h,
+        _ => {
+            tracing::warn!("sha256 post-download fallito, scarto il file scaricato");
+            let _ = tokio::fs::remove_file(&partial).await;
+            return;
+        }
+    };
+
+    if let Err(e) = tokio::fs::rename(&partial, dest).await {
+        tracing::warn!(error = ?e, "impossibile installare eullm {latest_str}");
+        return;
+    }
+    if pinned.exec {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755)).await;
+    }
+    write_stamp(dest, &sha256).await;
+
+    tracing::warn!(
+        version = %latest_str,
+        sha256 = %sha256,
+        "eullm aggiornato — ATTENZIONE: a differenza degli altri componenti, questa versione NON \
+         aveva uno sha256 pre-pinnato nel manifest: lo sha256 sopra è quello effettivamente \
+         scaricato ora, approvato da te a runtime, non verificato in anticipo. Annotalo se vuoi \
+         pinnarlo in manifest.toml in un prossimo aggiornamento del repo."
+    );
+
+    ov.installed_version = Some(latest_str);
+    ov.installed_sha256 = Some(sha256);
+    ov.installed_url = Some(asset.browser_download_url.clone());
+    ov.declined_version = None;
+    save_eullm_override(data_dir, &ov).await;
 }
 
 // ── Spazio disco ──────────────────────────────────────────────────────────────
