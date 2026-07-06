@@ -34,23 +34,63 @@ async fn main() -> Result<()> {
     std::env::set_var("I3K_DATA_DIR", settings.data.data_path());
 
     // Bootstrap: scarica componenti, avvia qdrant + eullm, attende API ready.
-    // _guard tiene in vita i processi figlio supervisionati (drop → SIGKILL).
-    let _guard = bootstrap::ensure_ready(&settings).await?;
+    // guard tiene in vita i processi figlio supervisionati (drop → SIGKILL);
+    // espone anche il path GGUF esatto con cui ha avviato eullm (se lo gestisce).
+    let guard = bootstrap::ensure_ready(&settings).await?;
 
     tracing::info!(path = %settings.database.url, "database SQLite");
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
     db::users::seed_admin(&db, settings.auth.admin_default_password.as_deref()).await?;
 
+    // Se bootstrap ha avviato eullm, usa lo STESSO path GGUF come "model" nelle
+    // richieste — eullm lo accetta direttamente (vedi ProcessGuard), niente
+    // registrazione/import-ollama necessaria. Altrimenti (eullm esterno,
+    // manage_subprocesses=false) usa Settings.eullm.model così com'è.
+    let eullm_model = guard
+        .eullm_model_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| settings.eullm.model.clone());
+
+    let eullm = clients::eullm::EullmClient::new(
+        settings.eullm.url.clone(),
+        eullm_model,
+        settings.eullm.num_ctx,
+        settings.eullm.num_predict,
+        settings.eullm.repeat_penalty,
+        settings.eullm.keep_alive,
+    );
+
+    // Warmup PRIMA dell'embedding (ordine invertito — vedi 5a nell'audit Fase 1):
+    // forza il caricamento del modello eullm in VRAM prima che Candle tenti la
+    // sua allocazione CUDA per bge-m3. /api/tags (già atteso in bootstrap)
+    // conferma solo che il processo eullm è in ascolto, NON che il modello sia
+    // caricato in memoria — se il caricamento di eullm è lazy (avviene alla
+    // prima richiesta reale, non all'avvio del processo), l'embedding poteva
+    // partire in parallelo con l'allocazione VRAM di eullm ed entrare in
+    // contesa proprio sul cold boot. Una invoke reale è l'unico segnale certo
+    // che il modello eullm è effettivamente residente, qualunque sia la sua
+    // strategia di caricamento interna.
+    tracing::info!("warmup eullm…");
+    match eullm.invoke("hi").await {
+        Ok(a) if a.trim().is_empty() => tracing::warn!(
+            "eullm warmup: risposta vuota — il modello potrebbe non essere pronto (vedi eullm stesso)"
+        ),
+        Ok(_) => tracing::info!("eullm warmup completato, modello in VRAM"),
+        Err(e) => tracing::warn!(error = %e, "eullm warmup fallito (si caricherà alla prima query reale)"),
+    }
+
     let model_id = settings.embeddings.model_id.clone();
+    let require_gpu = settings.embeddings.require_gpu;
 
     let embeddings = tokio::task::spawn_blocking(move || {
-        clients::embeddings::EmbeddingService::load(&model_id)
+        clients::embeddings::EmbeddingService::load(&model_id, require_gpu)
     })
     .await
     .context("join embedding load")?
     .context("embedding service load")?;
-    tracing::info!("embedding service pronto");
+    tracing::info!(device = embeddings.device_label(), "embedding service pronto");
 
     let qdrant = clients::qdrant_store::QdrantStore::new(
         &settings.qdrant.grpc_url,
@@ -59,15 +99,6 @@ async fn main() -> Result<()> {
     .await
     .context("qdrant init")?;
     tracing::info!("qdrant pronto");
-
-    let eullm = clients::eullm::EullmClient::new(
-        settings.eullm.url.clone(),
-        settings.eullm.model.clone(),
-        settings.eullm.num_ctx,
-        settings.eullm.num_predict,
-        settings.eullm.repeat_penalty,
-        settings.eullm.keep_alive,
-    );
 
     let port = settings.server.port;
     let host = settings.server.host.clone();
@@ -98,7 +129,7 @@ async fn main() -> Result<()> {
 
     let router = api::router(app_state);
 
-    // Shutdown graceful: SIGINT (Ctrl+C) o SIGTERM → drop _guard → SIGKILL figli.
+    // Shutdown graceful: SIGINT (Ctrl+C) o SIGTERM → drop guard → SIGKILL figli.
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -117,7 +148,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // _guard dropped qui → processi figlio SIGKILL'd
+    // guard dropped qui → processi figlio SIGKILL'd
     Ok(())
 }
 

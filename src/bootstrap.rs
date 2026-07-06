@@ -14,7 +14,14 @@
 //!  1. Carica manifest + rileva target.
 //!  2. Crea struttura directory in data_dir.
 //!  3. Pre-check disco = somma size dei componenti mancanti.
-//!  4. Scarica/verifica ogni componente selezionato.
+//!  4. Scarica/verifica ogni componente selezionato. Per eullm (solo se
+//!     manage_subprocesses=true): controlla anche un override locale
+//!     ({data}/bin/eullm.override.json, NON git-tracked — vedi sezione
+//!     "eullm: controllo versione remota") e, ad ogni riavvio, se GitHub ha
+//!     una release più recente — se sì e stdin è un terminale, chiede se
+//!     scaricarla. Mai bloccante: rete irraggiungibile o avvio non
+//!     interattivo (systemd/Docker) → skip silenzioso, si resta sulla
+//!     versione già presente.
 //!  5. Se manage_subprocesses=true: avvia qdrant + eullm (kill_on_drop).
 //!  6. Attende /healthz (qdrant) e /api/tags (eullm).
 //!  7. Ritorna ProcessGuard — al drop i figli ricevono SIGKILL.
@@ -30,7 +37,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 
-use crate::config::Settings;
+use crate::config::{EullmSettings, Settings};
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +59,13 @@ struct Component {
     /// Percorso con placeholder "{data}" (risolto a runtime).
     dest: String,
     exec: bool,
+    /// Se presente: `url` punta a un archivio .tar.gz, questo è il path
+    /// INTERNO del file da estrarre e scrivere in `dest`. sha256/size si
+    /// riferiscono al file ESTRATTO (non all'archivio) — la verifica avviene
+    /// dopo l'estrazione, così lo stamp-file fast-path (che hash-a `dest`)
+    /// funziona invariato per entrambi i casi.
+    #[serde(default)]
+    archive_member: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +102,164 @@ mod manifest_tests {
     }
 }
 
+#[cfg(test)]
+mod eullm_args_tests {
+    use super::*;
+
+    fn base_cfg() -> EullmSettings {
+        EullmSettings {
+            url: "http://localhost:11434".into(),
+            model: "qwen3-14b".into(),
+            num_ctx: 16384,
+            num_predict: 4096,
+            repeat_penalty: 1.3,
+            keep_alive: -1,
+            batch_size: 1,
+            cache_type_k: None,
+            cache_type_v: None,
+        }
+    }
+
+    /// Un flag sbagliato qui impedisce a eullm di avviarsi in produzione —
+    /// niente --fit (non esiste nella release pinnata v0.6.6, verificato dal
+    /// binario), --ctx-size deve essere il TOTALE (num_ctx * batch_size).
+    #[test]
+    fn default_single_slot_no_cache_override() {
+        let args = eullm_args(&base_cfg());
+        assert_eq!(args, vec!["--cli", "--ctx-size", "16384", "--batch-size", "1"]);
+    }
+
+    #[test]
+    fn ctx_size_is_num_ctx_times_batch_size() {
+        let mut cfg = base_cfg();
+        cfg.batch_size = 2;
+        let args = eullm_args(&cfg);
+        assert_eq!(args, vec!["--cli", "--ctx-size", "32768", "--batch-size", "2"]);
+    }
+
+    #[test]
+    fn cache_type_flags_only_when_set() {
+        let mut cfg = base_cfg();
+        cfg.cache_type_k = Some("q8_0".into());
+        cfg.cache_type_v = Some("q4_0".into());
+        let args = eullm_args(&cfg);
+        assert_eq!(
+            args,
+            vec![
+                "--cli", "--ctx-size", "16384", "--batch-size", "1",
+                "--cache-type-k", "q8_0", "--cache-type-v", "q4_0",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_fit_flag_ever() {
+        // --fit non esiste nella release pinnata (v0.6.6): non deve MAI ricomparire.
+        for cfg in [base_cfg(), {
+            let mut c = base_cfg();
+            c.cache_type_k = Some("q8_0".into());
+            c
+        }] {
+            assert!(!eullm_args(&cfg).contains(&"--fit".to_owned()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod archive_extraction_tests {
+    use super::*;
+
+    /// Verifica end-to-end reale (non solo che compili): estrae davvero
+    /// lib/libpdfium.so da un archivio .tar.gz ufficiale pdfium-binaries e
+    /// conferma che il file estratto combacia byte-per-byte con lo sha256
+    /// pinnato in manifest.toml per il target linux-x86_64.
+    ///
+    /// Richiede (solo locale — vedi CLAUDE.md, niente CI):
+    ///   PDFIUM_ARCHIVE_FOR_TEST=/path/a/pdfium-linux-x64.tgz
+    ///   (scaricato da github.com/bblanchon/pdfium-binaries, tag chromium/7920)
+    /// Skip gracioso se non impostata.
+    #[test]
+    fn extract_tar_gz_member_matches_manifest_pdfium_entry() {
+        let Ok(archive) = std::env::var("PDFIUM_ARCHIVE_FOR_TEST") else {
+            eprintln!("PDFIUM_ARCHIVE_FOR_TEST non impostata — skip (vedi doc del test)");
+            return;
+        };
+
+        let out = std::env::temp_dir().join("i3k_pdfium_extract_test.so");
+        let _ = std::fs::remove_file(&out);
+
+        extract_tar_gz_member(Path::new(&archive), "lib/libpdfium.so", &out)
+            .expect("estrazione deve riuscire");
+
+        let got = sha256_file(&out).expect("sha256 del file estratto");
+        let _ = std::fs::remove_file(&out);
+
+        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        let comp = manifest
+            .component
+            .iter()
+            .find(|c| c.name == "pdfium" && c.target.as_deref() == Some("linux-x86_64"))
+            .expect("componente pdfium linux-x86_64 mancante dal manifest");
+
+        assert_eq!(
+            got, comp.sha256,
+            "il file estratto non combacia col sha256 pinnato in manifest.toml"
+        );
+        assert_eq!(comp.archive_member.as_deref(), Some("lib/libpdfium.so"));
+    }
+}
+
+#[cfg(test)]
+mod eullm_update_tests {
+    use super::*;
+
+    #[test]
+    fn parse_semver_strips_known_prefixes() {
+        assert_eq!(parse_semver("0.6.6"), Some((0, 6, 6)));
+        assert_eq!(parse_semver("v0.6.6"), Some((0, 6, 6)));
+        assert_eq!(parse_semver("EuLLM-v0.6.6"), Some((0, 6, 6)));
+        assert_eq!(parse_semver("EuLLM-v1.12.103"), Some((1, 12, 103)));
+    }
+
+    #[test]
+    fn parse_semver_rejects_unexpected_formats() {
+        assert_eq!(parse_semver(""), None);
+        assert_eq!(parse_semver("nightly"), None);
+        assert_eq!(parse_semver("EuLLM-v0.6"), None);
+        assert_eq!(parse_semver("EuLLM-v0.6.6-rc1"), None); // "6-rc1" non parsa come u32
+    }
+
+    /// La causa diretta del bug che questa feature avrebbe potuto introdurre
+    /// se il confronto fosse stato per stringa invece che numerico: "0.6.9"
+    /// vince su "0.6.10" lessicograficamente ('9' > '1'), ma non è la
+    /// versione più recente. Il confronto DEVE essere sulla tupla numerica.
+    #[test]
+    fn version_tuple_compares_numerically_not_lexicographically() {
+        let v9 = parse_semver("0.6.9").unwrap();
+        let v10 = parse_semver("0.6.10").unwrap();
+        assert!(v10 > v9, "0.6.10 deve essere considerata più recente di 0.6.9");
+    }
+
+    #[test]
+    fn asset_hint_matches_current_manifest_eullm_target() {
+        // L'euristica di selezione asset (EULLM_ASSET_HINT) deve combaciare
+        // col nome file dell'unico target eullm oggi pinnato in manifest.toml
+        // — se in futuro si aggiunge un target e questo test fallisce, è il
+        // segnale che EULLM_ASSET_HINT va esteso di pari passo.
+        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        let eullm = manifest
+            .component
+            .iter()
+            .find(|c| c.name == "eullm")
+            .expect("componente eullm mancante dal manifest");
+        let asset_name = eullm.url.rsplit('/').next().unwrap_or("");
+        assert!(
+            asset_name.contains(EULLM_ASSET_HINT),
+            "EULLM_ASSET_HINT={EULLM_ASSET_HINT:?} non combacia con l'asset pinnato {asset_name:?}"
+        );
+    }
+}
+
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
 /// Target supportati, ordinati dal più specifico al più generico.
@@ -96,33 +268,30 @@ mod manifest_tests {
 /// Schema target:
 ///   linux-x86_64-cuda   — Linux x86_64 con GPU NVIDIA (driver caricato)
 ///   linux-x86_64        — Linux x86_64 CPU-only / fallback
-///   (future: darwin-arm64, darwin-x86_64, windows-x86_64, linux-aarch64…)
+///   linux-aarch64, darwin-arm64, darwin-x86_64, windows-x86_64, windows-arm64
 fn current_targets() -> Vec<&'static str> {
-    #[cfg(target_os = "linux")]
+    let mut t = Vec::new();
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let mut t = Vec::new();
-            // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
-            if std::path::Path::new("/dev/nvidia0").exists() {
-                t.push("linux-x86_64-cuda");
-            }
-            t.push("linux-x86_64");
-            return t;
+        // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
+        if std::path::Path::new("/dev/nvidia0").exists() {
+            t.push("linux-x86_64-cuda");
         }
-        #[cfg(target_arch = "aarch64")]
-        return vec!["linux-aarch64"];
+        t.push("linux-x86_64");
     }
-    #[cfg(target_os = "macos")]
-    {
-        #[cfg(target_arch = "aarch64")]
-        return vec!["darwin-arm64"];
-        #[cfg(target_arch = "x86_64")]
-        return vec!["darwin-x86_64"];
-    }
-    #[cfg(target_os = "windows")]
-    return vec!["windows-x86_64"];
-    vec![]
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    t.push("linux-aarch64");
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    t.push("darwin-arm64");
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    t.push("darwin-x86_64");
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    t.push("windows-x86_64");
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    t.push("windows-arm64");
+
+    t
 }
 
 /// Seleziona i componenti da scaricare/verificare.
@@ -163,6 +332,14 @@ fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
 /// Tiene in vita i processi figli. Al drop: SIGKILL (kill_on_drop=true).
 pub struct ProcessGuard {
     _children: Vec<tokio::process::Child>,
+    /// Se bootstrap ha avviato eullm, il path GGUF esatto usato per farlo.
+    /// eullm accetta un path GGUF diretto nel campo "model" di /api/generate
+    /// (vedi errore "Accepted formats: GGUF file path / ... / Registered
+    /// name") — usando lo STESSO path con cui è stato avviato non serve
+    /// nessuna registrazione (`eullm import-ollama`) né alcuno stato esterno
+    /// che possa andare perso. None se manage_subprocesses=false (eullm
+    /// esterno): in quel caso si usa Settings.eullm.model così com'è.
+    pub eullm_model_path: Option<std::path::PathBuf>,
 }
 
 // ── Costanti ──────────────────────────────────────────────────────────────────
@@ -193,13 +370,22 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     // Pre-check spazio disco
     check_disk_space(&selected, &data_dir)?;
 
-    // Scarica/verifica ogni componente selezionato
+    // Scarica/verifica ogni componente selezionato. eullm ha un percorso
+    // dedicato — solo quando lo gestiamo noi (manage_subprocesses=true, senza
+    // sarebbe un binario che non arriviamo mai a spawnare): controlla anche un
+    // eventuale override locale (versione più recente approvata a runtime, vedi
+    // maybe_update_eullm) prima di ricadere sul pin del manifest.
     for comp in &selected {
         let dest = resolve_dest(&comp.dest, &data_dir);
-        ensure_component(comp, &dest).await?;
+        if comp.name == "eullm" && settings.data.manage_subprocesses {
+            ensure_eullm_component(comp, &dest, &data_dir).await?;
+        } else {
+            ensure_component(comp, &dest).await?;
+        }
     }
 
     let mut children: Vec<tokio::process::Child> = Vec::new();
+    let mut eullm_model_path: Option<std::path::PathBuf> = None;
 
     if settings.data.manage_subprocesses {
         // Qdrant
@@ -226,8 +412,9 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
         ) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
-                children.push(spawn_eullm(&bin, &gguf)?);
+                children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
                 tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
+                eullm_model_path = Some(gguf);
             }
             _ => tracing::warn!(
                 "eullm o qwen3-14b non trovati in {} — RAG senza LLM",
@@ -252,7 +439,7 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     )
     .await?;
 
-    Ok(ProcessGuard { _children: children })
+    Ok(ProcessGuard { _children: children, eullm_model_path })
 }
 
 // ── Componente: verifica / download atomico ───────────────────────────────────
@@ -279,34 +466,9 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
 
     parallel_download(&comp.url, &partial, &comp.name, DOWNLOAD_CONNECTIONS).await?;
 
-    // SHA256 dopo download (obbligatorio)
-    {
-        let expected = comp.sha256.clone();
-        let p = partial.clone();
-        let name = comp.name.clone();
-        let got = tokio::task::spawn_blocking(move || {
-            tracing::info!("{name}: verifica sha256 post-download…");
-            sha256_file(&p)
-        })
-        .await
-        .context("spawn_blocking sha256")?
-        .context("sha256 calcolo")?;
-
-        if got != expected {
-            tokio::fs::remove_file(&partial).await.ok();
-            bail!(
-                "{}: sha256 errato dopo download\n  atteso:  {}\n  trovato: {}",
-                comp.name,
-                expected,
-                got
-            );
-        }
-        // Rinomina atomico
-        tokio::fs::rename(&partial, dest)
-            .await
-            .with_context(|| format!("rename {}", dest.display()))?;
-        // Scrivi stamp
-        write_stamp(dest, &got).await;
+    match &comp.archive_member {
+        Some(member) => extract_and_verify_member(comp, &partial, member, dest).await?,
+        None => verify_and_place(comp, &partial, dest).await?,
     }
 
     if comp.exec {
@@ -318,6 +480,111 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
 
     tracing::info!("{}: installato in {}", comp.name, dest.display());
     Ok(())
+}
+
+/// Caso semplice (nessun archive_member): verifica sha256 del file scaricato
+/// così com'è e lo sposta in `dest`.
+async fn verify_and_place(comp: &Component, partial: &Path, dest: &Path) -> Result<()> {
+    let expected = comp.sha256.clone();
+    let p = partial.to_owned();
+    let name = comp.name.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        tracing::info!("{name}: verifica sha256 post-download…");
+        sha256_file(&p)
+    })
+    .await
+    .context("spawn_blocking sha256")?
+    .context("sha256 calcolo")?;
+
+    if got != expected {
+        tokio::fs::remove_file(partial).await.ok();
+        bail!(
+            "{}: sha256 errato dopo download\n  atteso:  {}\n  trovato: {}",
+            comp.name,
+            expected,
+            got
+        );
+    }
+    tokio::fs::rename(partial, dest)
+        .await
+        .with_context(|| format!("rename {}", dest.display()))?;
+    write_stamp(dest, &got).await;
+    Ok(())
+}
+
+/// Caso archive_member: estrae `member` dall'archivio .tar.gz scaricato
+/// (`partial`), verifica il sha256 del file ESTRATTO (comp.sha256 si
+/// riferisce a quello, non all'archivio), lo sposta in `dest`, poi scarta
+/// l'archivio. Così lo stamp-file fast-path resta invariato: hash-a sempre
+/// `dest` e lo confronta con comp.sha256, comportamento identico per
+/// componenti semplici ed estratti da archivio.
+async fn extract_and_verify_member(
+    comp: &Component,
+    partial: &Path,
+    member: &str,
+    dest: &Path,
+) -> Result<()> {
+    let extracted = dest.with_extension("extracted");
+
+    let archive_path = partial.to_owned();
+    let member_owned = member.to_owned();
+    let extracted_path = extracted.clone();
+    let name = comp.name.clone();
+    tokio::task::spawn_blocking(move || {
+        tracing::info!("{name}: estrazione {member_owned} dall'archivio…");
+        extract_tar_gz_member(&archive_path, &member_owned, &extracted_path)
+    })
+    .await
+    .context("spawn_blocking estrazione")??;
+
+    let expected = comp.sha256.clone();
+    let ep = extracted.clone();
+    let name2 = comp.name.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        tracing::info!("{name2}: verifica sha256 del file estratto…");
+        sha256_file(&ep)
+    })
+    .await
+    .context("spawn_blocking sha256")?
+    .context("sha256 calcolo")?;
+
+    tokio::fs::remove_file(partial).await.ok(); // archivio non più necessario
+
+    if got != expected {
+        tokio::fs::remove_file(&extracted).await.ok();
+        bail!(
+            "{}: sha256 errato dopo estrazione\n  atteso:  {}\n  trovato: {}",
+            comp.name,
+            expected,
+            got
+        );
+    }
+    tokio::fs::rename(&extracted, dest)
+        .await
+        .with_context(|| format!("rename {}", dest.display()))?;
+    write_stamp(dest, &got).await;
+    Ok(())
+}
+
+/// Estrae un singolo file (`member`, path interno all'archivio) da un
+/// .tar.gz e lo scrive in `out_path`. Sincrona/bloccante: va chiamata dentro
+/// spawn_blocking.
+fn extract_tar_gz_member(archive_path: &Path, member: &str, out_path: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive_path)
+        .with_context(|| format!("apertura archivio {}", archive_path.display()))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    for entry in archive.entries().context("lettura entries tar")? {
+        let mut entry = entry.context("lettura entry tar")?;
+        let path = entry.path().context("path entry tar")?.into_owned();
+        if path.as_path() == Path::new(member) {
+            let mut out = std::fs::File::create(out_path)
+                .with_context(|| format!("creazione {}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out).context("estrazione file")?;
+            return Ok(());
+        }
+    }
+    bail!("membro '{member}' non trovato nell'archivio {}", archive_path.display())
 }
 
 /// Verifica un componente già presente su disco.
@@ -391,6 +658,283 @@ fn sha256_file(path: &Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+// ── eullm: controllo versione remota + override locale ─────────────────────────
+//
+// eullm si auto-aggiorna spesso (fix indipendenti, vedi CLAUDE.md — è per questo
+// che resta un processo separato e non viene compilato nel binario). Il pin in
+// manifest.toml (version + sha256) resta la base di partenza affidabile e
+// git-tracked, ma su richiesta esplicita dell'utente ad ogni riavvio si
+// controlla se GitHub ha una release più recente e — SOLO se lo stdin è un
+// terminale, per non bloccare mai un avvio non presidiato (systemd/Docker) —
+// si chiede interattivamente se scaricarla.
+//
+// Una versione scaricata così non ha uno sha256 pre-verificato nel manifest:
+// la fiducia è nell'approvazione esplicita dell'utente a quel momento, non in
+// un hash pinnato in anticipo — è una differenza reale rispetto a tutti gli
+// altri componenti di questo file, e va sempre loggata in chiaro.
+//
+// Persistenza: {data}/bin/eullm.override.json (locale, NON git-tracked) —
+// ricorda la versione approvata (per non riscaricarla ad ogni riavvio) e
+// l'ultima versione rifiutata (per non richiederla di nuovo finché non ne
+// esce una ancora più recente).
+
+const EULLM_RELEASES_API: &str = "https://api.github.com/repos/eullm/eullm/releases/latest";
+/// Sottostringa che identifica l'asset per la nostra piattaforma nel nome file
+/// (es. "eullm-linux-x64-cuda-12.8", vedi manifest.toml). Oggi eullm ha un solo
+/// target nel manifest (linux-x86_64-cuda); se in futuro se ne aggiungono altri
+/// questa selezione va estesa di pari passo con current_targets().
+const EULLM_ASSET_HINT: &str = "linux-x64-cuda";
+const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Debug, serde::Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct EullmOverride {
+    installed_version: Option<String>,
+    installed_sha256: Option<String>,
+    installed_url: Option<String>,
+    declined_version: Option<String>,
+}
+
+fn eullm_override_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("bin").join("eullm.override.json")
+}
+
+async fn load_eullm_override(data_dir: &Path) -> EullmOverride {
+    match tokio::fs::read_to_string(eullm_override_path(data_dir)).await {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+        Err(_) => EullmOverride::default(),
+    }
+}
+
+async fn save_eullm_override(data_dir: &Path, ov: &EullmOverride) {
+    if let Ok(s) = serde_json::to_string_pretty(ov) {
+        let _ = tokio::fs::write(eullm_override_path(data_dir), s).await;
+    }
+}
+
+/// "0.6.6" / "v0.6.6" / "EuLLM-v0.6.6" → (0,6,6). None se il formato non torna
+/// (es. GitHub cambia schema di tag) — trattato come "skip check", mai come
+/// errore fatale.
+fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
+    let s = s.strip_prefix("EuLLM-v").or_else(|| s.strip_prefix('v')).unwrap_or(s);
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn stdin_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+async fn fetch_latest_eullm_release() -> Result<GhRelease> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(EULLM_UPDATE_CHECK_TIMEOUT_SECS))
+        .build()?;
+    let resp = client
+        .get(EULLM_RELEASES_API)
+        .header("User-Agent", "i3k-rag-engine")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("richiesta GitHub releases eullm")?;
+    if !resp.status().is_success() {
+        bail!("GitHub API {} — {}", resp.status(), EULLM_RELEASES_API);
+    }
+    resp.json::<GhRelease>().await.context("parse risposta GitHub releases")
+}
+
+/// Sceglie quale Component usare per provisionare eullm: l'override locale
+/// se presente e ancora più recente del pin del manifest, altrimenti il pin.
+/// Se il pin ha nel frattempo raggiunto/superato l'override (es. abbiamo
+/// aggiornato manifest.toml), l'override è considerato superato e scartato.
+async fn effective_eullm_component(pinned: &Component, data_dir: &Path) -> Component {
+    let mut ov = load_eullm_override(data_dir).await;
+
+    let override_is_stale = match (&ov.installed_version, pinned.version.as_deref()) {
+        (Some(ov_v), Some(pin_v)) => {
+            matches!((parse_semver(ov_v), parse_semver(pin_v)), (Some(a), Some(b)) if a <= b)
+        }
+        _ => false,
+    };
+    if override_is_stale {
+        tracing::info!(
+            "eullm: il pin del manifest ha raggiunto/superato l'override locale, torno al pin"
+        );
+        ov = EullmOverride::default();
+        save_eullm_override(data_dir, &ov).await;
+    }
+
+    match (&ov.installed_version, &ov.installed_sha256, &ov.installed_url) {
+        (Some(v), Some(sha), Some(url)) => Component {
+            version: Some(v.clone()),
+            sha256: sha.clone(),
+            url: url.clone(),
+            ..pinned.clone()
+        },
+        _ => pinned.clone(),
+    }
+}
+
+/// Provisiona eullm: usa l'override locale se valido, altrimenti il pin del
+/// manifest (comportamento identico a ensure_component per ogni altro
+/// componente) — poi controlla se esiste una versione ancora più recente.
+async fn ensure_eullm_component(pinned: &Component, dest: &Path, data_dir: &Path) -> Result<()> {
+    let effective = effective_eullm_component(pinned, data_dir).await;
+    ensure_component(&effective, dest).await?;
+    maybe_update_eullm(pinned, dest, data_dir).await;
+    Ok(())
+}
+
+/// Controlla se GitHub ha una release eullm più recente di quella attualmente
+/// effettiva (override locale se presente, altrimenti il pin) e, se sì,
+/// chiede interattivamente — SOLO se stdin è un terminale — se scaricarla.
+/// Non fatale in nessun caso: rete irraggiungibile, parsing fallito o nessun
+/// asset compatibile vengono solo loggati; l'avvio prosegue sempre con la
+/// versione già presente.
+async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
+    let mut ov = load_eullm_override(data_dir).await;
+    let current_version =
+        ov.installed_version.clone().or_else(|| pinned.version.clone()).unwrap_or_default();
+
+    let release = match fetch_latest_eullm_release().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::info!(error = ?e, "controllo versione eullm saltato (GitHub non raggiungibile)");
+            return;
+        }
+    };
+
+    let (Some(latest), Some(current)) =
+        (parse_semver(&release.tag_name), parse_semver(&current_version))
+    else {
+        tracing::warn!(tag = %release.tag_name, installed = %current_version, "formato versione eullm inatteso, skip controllo aggiornamenti");
+        return;
+    };
+    if latest <= current {
+        tracing::info!(installed = %current_version, "eullm già alla versione più recente disponibile");
+        return;
+    }
+    let latest_str = format!("{}.{}.{}", latest.0, latest.1, latest.2);
+
+    if ov.declined_version.as_deref() == Some(latest_str.as_str()) {
+        tracing::info!(latest = %latest_str, "nuova versione eullm già rifiutata in precedenza, non richiedo di nuovo");
+        return;
+    }
+
+    let Some(asset) = release.assets.iter().find(|a| a.name.contains(EULLM_ASSET_HINT)) else {
+        tracing::warn!(latest = %latest_str, "nuova versione eullm trovata ma nessun asset per questa piattaforma ({EULLM_ASSET_HINT}), skip");
+        return;
+    };
+
+    tracing::warn!(
+        installed = %current_version,
+        latest = %latest_str,
+        release_notes = %release.html_url,
+        "eullm: nuova versione disponibile"
+    );
+
+    if !stdin_is_tty() {
+        tracing::warn!(
+            "avvio non interattivo (nessun terminale su stdin) — non chiedo conferma, continuo \
+             con la versione {current_version}. Per aggiornare: avvia da un terminale, oppure \
+             elimina {} per far ripartire il controllo alla prossima occasione interattiva.",
+            eullm_override_path(data_dir).display()
+        );
+        return;
+    }
+
+    eprintln!();
+    eprintln!("  eullm: nuova versione disponibile — installata: {current_version}, ultima: {latest_str}");
+    eprintln!("  Note di rilascio: {}", release.html_url);
+    eprint!("  Scaricare e usare la nuova versione ora? [s/N]: ");
+    {
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+    }
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        tracing::warn!("lettura risposta da stdin fallita, continuo con la versione corrente");
+        return;
+    }
+    let yes = matches!(answer.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y" | "yes");
+
+    if !yes {
+        tracing::info!(latest = %latest_str, "aggiornamento eullm rifiutato, resto sulla versione {current_version}");
+        ov.declined_version = Some(latest_str);
+        save_eullm_override(data_dir, &ov).await;
+        return;
+    }
+
+    tracing::info!(url = %asset.browser_download_url, size = asset.size, "download eullm {latest_str}…");
+    let partial = dest.with_extension("partial");
+    let _ = tokio::fs::remove_file(&partial).await;
+
+    if let Err(e) = parallel_download(
+        &asset.browser_download_url,
+        &partial,
+        &format!("eullm {latest_str}"),
+        DOWNLOAD_CONNECTIONS,
+    )
+    .await
+    {
+        tracing::warn!(error = ?e, "download eullm {latest_str} fallito, resto sulla versione corrente");
+        let _ = tokio::fs::remove_file(&partial).await;
+        return;
+    }
+
+    let hash_target = partial.clone();
+    let sha256 = match tokio::task::spawn_blocking(move || sha256_file(&hash_target)).await {
+        Ok(Ok(h)) => h,
+        _ => {
+            tracing::warn!("sha256 post-download fallito, scarto il file scaricato");
+            let _ = tokio::fs::remove_file(&partial).await;
+            return;
+        }
+    };
+
+    if let Err(e) = tokio::fs::rename(&partial, dest).await {
+        tracing::warn!(error = ?e, "impossibile installare eullm {latest_str}");
+        return;
+    }
+    if pinned.exec {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755)).await;
+    }
+    write_stamp(dest, &sha256).await;
+
+    tracing::warn!(
+        version = %latest_str,
+        sha256 = %sha256,
+        "eullm aggiornato — ATTENZIONE: a differenza degli altri componenti, questa versione NON \
+         aveva uno sha256 pre-pinnato nel manifest: lo sha256 sopra è quello effettivamente \
+         scaricato ora, approvato da te a runtime, non verificato in anticipo. Annotalo se vuoi \
+         pinnarlo in manifest.toml in un prossimo aggiornamento del repo."
+    );
+
+    ov.installed_version = Some(latest_str);
+    ov.installed_sha256 = Some(sha256);
+    ov.installed_url = Some(asset.browser_download_url.clone());
+    ov.declined_version = None;
+    save_eullm_override(data_dir, &ov).await;
 }
 
 // ── Spazio disco ──────────────────────────────────────────────────────────────
@@ -522,13 +1066,41 @@ fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
         .with_context(|| format!("avvio qdrant: {}", bin.display()))
 }
 
-fn spawn_eullm(bin: &Path, model_path: &Path) -> Result<tokio::process::Child> {
-    Command::new(bin)
-        .arg("run")
-        .arg(model_path)
-        .arg("--fit")
-        .arg("--cli")
-        .kill_on_drop(true)
+/// --ctx-size è il TOTALE eullm (llama.cpp-style), diviso tra i `batch_size`
+/// slot concorrenti — quindi num_ctx (contesto per connessione, quello che
+/// conta per far stare un prompt RAG) va moltiplicato per batch_size qui.
+/// --fit NON esiste nella release pinnata (v0.6.6, verificato dal binario:
+/// nessun auto-sizing) — senza --ctx-size/--batch-size espliciti eullm parte
+/// al suo default (4096 ctx, 1 slot), troppo piccolo per un prompt RAG con
+/// più di un paio di documenti indicizzati (causa nota di risposte vuote o
+/// troncate a metà frase).
+/// Pura e testabile: costruisce gli argomenti CLI (senza il model_path, che
+/// è un Path e complicherebbe i confronti nei test — aggiunto separatamente).
+fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
+    let ctx_size_total = cfg.num_ctx * cfg.batch_size;
+    let mut args = vec![
+        "--cli".to_owned(),
+        "--ctx-size".to_owned(),
+        ctx_size_total.to_string(),
+        "--batch-size".to_owned(),
+        cfg.batch_size.to_string(),
+    ];
+    if let Some(kt) = &cfg.cache_type_k {
+        args.push("--cache-type-k".to_owned());
+        args.push(kt.clone());
+    }
+    if let Some(vt) = &cfg.cache_type_v {
+        args.push("--cache-type-v".to_owned());
+        args.push(vt.clone());
+    }
+    args
+}
+
+fn spawn_eullm(bin: &Path, model_path: &Path, cfg: &EullmSettings) -> Result<tokio::process::Child> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("run").arg(model_path).args(eullm_args(cfg));
+
+    cmd.kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())

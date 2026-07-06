@@ -21,7 +21,6 @@ use qdrant_client::{
 
 use crate::rag::vector_store::{ChunkPayload, SearchHit, VectorStore};
 
-pub const COLLECTION: &str = "rag_documents";
 pub const VECTOR_DIM: u64 = 1024;
 
 pub struct QdrantStore {
@@ -123,11 +122,7 @@ impl VectorStore for QdrantStore {
                     hit.payload.into_iter().map(|(k, v)| (k, v.into())).collect();
                 let payload: ChunkPayload =
                     serde_json::from_value(serde_json::Value::Object(raw)).ok()?;
-                let id = hit
-                    .id
-                    .and_then(|pid| pid.point_id_options)
-                    .map(|o| format!("{o:?}"))?;
-                Some(SearchHit { id, similarity: hit.score, payload })
+                Some(SearchHit { similarity: hit.score, payload })
             })
             .collect();
         Ok(hits)

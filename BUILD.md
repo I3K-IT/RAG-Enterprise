@@ -228,6 +228,9 @@ QDRANT__COLLECTION=rag_documents
 EULLM__URL=http://localhost:11434
 EULLM__MODEL=qwen3:14b
 EMBEDDINGS__MODEL_ID=BAAI/bge-m3
+# true = fallisce l'avvio se CUDA non è disponibile per l'embedding, invece di
+# degradare in silenzio su CPU (ingestione minuti anziché secondi). Default: false.
+EMBEDDINGS__REQUIRE_GPU=false
 TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/
 RUST_LOG=info
 ```

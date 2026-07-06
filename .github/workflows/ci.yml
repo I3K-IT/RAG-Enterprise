@@ -1,0 +1,84 @@
+name: CI
+
+# Scope Fase 1: SOLO linux-x86_64, CPU/OCR — l'unico target oggi completo
+# (codice + binari nel manifest, vedi manifest.toml). Niente --features cuda:
+# i runner GitHub non hanno GPU NVIDIA. ARM64/macOS/Windows non sono ancora
+# in CI: mancano i binari qdrant/eullm per quelle piattaforme nel manifest, e
+# Windows in più ha 3 punti di codice unix-only da sistemare prima di poter
+# anche solo compilare (std::os::unix::fs::FileExt/PermissionsExt,
+# libc::statvfs in src/bootstrap.rs).
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch: {} # trigger manuale, utile anche solo per riverificare
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust — build, test, clippy (--features ocr)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Vedi BUILD.md §2a — stesse dev-lib richieste in locale per --features ocr.
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      # Cargo.lock non è tracciato in questo repo (vedi .gitignore) — la cache
+      # usa Cargo.toml come chiave migliore disponibile, non è precisa quanto
+      # un lockfile ma evita di invalidare la cache ad ogni run.
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: cargo build --features ocr
+        run: cargo build --features ocr --verbose
+
+      # I 2 test OCR con fixture reali (bundled_pdfium_path_resolution_and_ocr_roundtrip,
+      # tessdata_resolved_from_data_dir) fanno skip gracioso qui: richiedono
+      # PDFIUM_LIB_FOR_TEST/TESSDATA_DIR_FOR_TEST con asset scaricati per davvero
+      # (vedi doc dei test in src/documents/ocr.rs) — non li scarichiamo in CI
+      # per restare leggeri sui minuti. Tutto il resto gira per davvero.
+      - name: cargo test --features ocr
+        run: cargo test --features ocr --verbose
+
+      # Non-bloccante: ci sono lint pre-esistenti non legati a questo setup CI
+      # (vedi cargo clippy in locale) — qui solo per visibilità, non per gate.
+      - name: cargo clippy --features ocr (informativo)
+        run: cargo clippy --features ocr --all-targets || true
+
+  frontend:
+    name: Frontend — build (vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
