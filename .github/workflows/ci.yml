@@ -9,10 +9,14 @@ name: CI
 # libc::statvfs in src/bootstrap.rs).
 
 on:
+  # Solo main — niente CI sui push diretti al branch di lavoro (dev), per
+  # risparmiare minuti Actions. pull_request resta perché è comunque "su
+  # main" (verifica prima del merge, sulla PR che punta a main), non
+  # un'esecuzione per ogni push sul branch di lavoro.
   push:
-    branches: [dev, main]
+    branches: [main]
   pull_request:
-    branches: [dev, main]
+    branches: [main]
   workflow_dispatch: {} # trigger manuale, utile anche solo per riverificare
 
 concurrency:
@@ -35,9 +39,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
-      # Cargo.lock non è tracciato in questo repo (vedi .gitignore) — la cache
-      # usa Cargo.toml come chiave migliore disponibile, non è precisa quanto
-      # un lockfile ma evita di invalidare la cache ad ogni run.
+      # Cargo.lock ora tracciato (era in .gitignore, rimosso) — build riproducibili,
+      # cache key precisa sulle versioni risolte effettive.
       - name: Cache cargo registry + target
         uses: actions/cache@v4
         with:
@@ -45,25 +48,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      - name: cargo build --features ocr
-        run: cargo build --features ocr --verbose
+      - name: cargo build --features ocr --locked
+        run: cargo build --features ocr --locked --verbose
 
       # I 2 test OCR con fixture reali (bundled_pdfium_path_resolution_and_ocr_roundtrip,
       # tessdata_resolved_from_data_dir) fanno skip gracioso qui: richiedono
       # PDFIUM_LIB_FOR_TEST/TESSDATA_DIR_FOR_TEST con asset scaricati per davvero
       # (vedi doc dei test in src/documents/ocr.rs) — non li scarichiamo in CI
       # per restare leggeri sui minuti. Tutto il resto gira per davvero.
-      - name: cargo test --features ocr
-        run: cargo test --features ocr --verbose
+      - name: cargo test --features ocr --locked
+        run: cargo test --features ocr --locked --verbose
 
       # Non-bloccante: ci sono lint pre-esistenti non legati a questo setup CI
       # (vedi cargo clippy in locale) — qui solo per visibilità, non per gate.
       - name: cargo clippy --features ocr (informativo)
-        run: cargo clippy --features ocr --all-targets || true
+        run: cargo clippy --features ocr --all-targets --locked || true
 
   frontend:
     name: Frontend — build (vite)
