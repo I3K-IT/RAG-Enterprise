@@ -281,7 +281,14 @@ fn current_targets() -> Vec<&'static str> {
         t.push("linux-x86_64");
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    t.push("linux-aarch64");
+    {
+        // Stessa euristica di x86_64 — vale anche su ARM64+dGPU NVIDIA via
+        // PCIe (es. Radxa Orion O6 con GPU esterna), non solo Jetson/SoC.
+        if std::path::Path::new("/dev/nvidia0").exists() {
+            t.push("linux-aarch64-cuda");
+        }
+        t.push("linux-aarch64");
+    }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     t.push("darwin-arm64");
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
