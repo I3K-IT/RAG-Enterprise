@@ -105,6 +105,17 @@ dest    = "{data}/bin/qdrant"
 exec    = true
 
 [[component]]
+name    = "qdrant"
+version = "1.18.2"
+kind    = "binary"
+target  = "linux-aarch64"
+url     = "https://www.i3k.dev/bin/qdrant-aarch64-unknown-linux-musl"
+sha256  = "697428364498b13eaaaeb38e1ecc6c0ce3f68a4276738295ad6442bb69941e14"
+size    = 74369816
+dest    = "{data}/bin/qdrant"
+exec    = true
+
+[[component]]
 name    = "eullm"
 version = "0.6.6"
 kind    = "binary"
