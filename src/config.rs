@@ -90,6 +90,19 @@ pub struct EullmSettings {
     pub cache_type_k: Option<String>,
     #[serde(default)]
     pub cache_type_v: Option<String>,
+    /// Passa --fit a eullm (verificato presente da EuLLM-v0.6.9 — versioni
+    /// pinnate precedenti, es. v0.6.6 su x86_64 oggi, NON hanno questo flag:
+    /// clap lo rifiuterebbe come argomento sconosciuto. Attivalo solo se il
+    /// binario pinnato per la piattaforma lo supporta davvero.
+    ///
+    /// Con fit=true cambia anche l'ORDINE di avvio (vedi main.rs): l'embedding
+    /// carica PRIMA di eullm, così il probe VRAM di --fit (cudaMemGetInfo,
+    /// letto a caldo all'avvio di eullm) vede la VRAM già ridotta dal modello
+    /// di embedding e adatta di conseguenza quanti layer offloadare su
+    /// GPU/CPU — invece di rischiare che i due si contendano la VRAM
+    /// all'avvio (vedi audit Fase 1, punto 5a).
+    #[serde(default)]
+    pub fit: bool,
 }
 
 #[derive(Debug, Deserialize)]

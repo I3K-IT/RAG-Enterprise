@@ -115,6 +115,23 @@ size    = 905274848
 dest    = "{data}/bin/eullm"
 exec    = true
 
+# ARM64+CUDA (es. Radxa Orion O6 con GPU NVIDIA esterna via PCIe). Versione
+# più recente della pin x86_64 (0.6.9 vs 0.6.6) — ha --fit (vedi
+# EullmSettings::fit), verificato nel sorgente eullm; la pin x86_64 non
+# l'ha ancora, non bumpata insieme di proposito (decisione separata).
+# size approssimata (827 MB dalla UI GitHub, non byte esatti — usata solo
+# per il pre-check disco, l'integrità è sullo sha256, non sulla size).
+[[component]]
+name    = "eullm"
+version = "0.6.9"
+kind    = "binary"
+target  = "linux-aarch64-cuda"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.9/eullm-linux-arm64-cuda-12.8"
+sha256  = "d3b7c8a1d08c564dbe535f2b47ed037bf04e58a7460cec0782897d0b4f9a4840"
+size    = 867041280
+dest    = "{data}/bin/eullm"
+exec    = true
+
 # pdfium (OCR, feature "ocr"): libreria bundlata, no dipendenza host — vedi
 # ocr.rs::resolve_pdfium_library_path(), che cerca proprio in {data}/lib/.
 # url punta DIRETTAMENTE alle release ufficiali di bblanchon/pdfium-binaries
