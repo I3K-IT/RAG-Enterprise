@@ -117,6 +117,7 @@ mod eullm_args_tests {
             batch_size: 1,
             cache_type_k: None,
             cache_type_v: None,
+            fit: false,
         }
     }
 
@@ -153,8 +154,11 @@ mod eullm_args_tests {
     }
 
     #[test]
-    fn no_fit_flag_ever() {
-        // --fit non esiste nella release pinnata (v0.6.6): non deve MAI ricomparire.
+    fn no_fit_flag_unless_configured() {
+        // --fit esiste solo da EuLLM-v0.6.9 in poi (verificato nel sorgente
+        // eullm) — la pin di oggi per x86_64 è ancora v0.6.6, che clap
+        // rifiuterebbe come flag sconosciuto. Di default (fit=false, il
+        // default di EullmSettings) non deve mai comparire.
         for cfg in [base_cfg(), {
             let mut c = base_cfg();
             c.cache_type_k = Some("q8_0".into());
@@ -162,6 +166,13 @@ mod eullm_args_tests {
         }] {
             assert!(!eullm_args(&cfg).contains(&"--fit".to_owned()));
         }
+    }
+
+    #[test]
+    fn fit_flag_present_when_configured() {
+        let mut cfg = base_cfg();
+        cfg.fit = true;
+        assert!(eullm_args(&cfg).contains(&"--fit".to_owned()));
     }
 }
 
@@ -361,7 +372,24 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
+/// Stato che attraversa le due fasi di boot — opaco a main.rs, serve solo a
+/// non ripetere manifest/target detection tra provision_and_start_qdrant e
+/// start_eullm.
+pub struct Phase1 {
+    manifest: Manifest,
+    data_dir: std::path::PathBuf,
+}
+
+/// Fase 1: scarica/verifica tutti i componenti selezionati (eullm incluso —
+/// solo il file, non lo avvia), poi avvia qdrant e attende /healthz. NON
+/// avvia eullm: vedi start_eullm, chiamata separatamente così main.rs può
+/// caricare l'embedding PRIMA quando settings.eullm.fit=true — --fit di
+/// eullm legge la VRAM libera con cudaMemGetInfo al proprio avvio, quindi
+/// deve vedere la VRAM già ridotta dall'embedding per offloadare i layer di
+/// conseguenza (vedi audit Fase 1, punto 5a, e EullmSettings::fit).
+pub async fn provision_and_start_qdrant(
+    settings: &Settings,
+) -> Result<(Phase1, Vec<tokio::process::Child>)> {
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
     let targets = current_targets();
@@ -392,10 +420,8 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     }
 
     let mut children: Vec<tokio::process::Child> = Vec::new();
-    let mut eullm_model_path: Option<std::path::PathBuf> = None;
 
     if settings.data.manage_subprocesses {
-        // Qdrant
         let qdrant_url = &settings.qdrant.url;
         if probe_url(&format!("{qdrant_url}/healthz")).await {
             tracing::info!("qdrant già in ascolto su {qdrant_url}");
@@ -409,7 +435,32 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
                 None => tracing::warn!("qdrant non selezionato per questa piattaforma"),
             }
         }
+    } else {
+        tracing::info!("manage_subprocesses=false — processi esterni attesi (qdrant)");
+    }
 
+    wait_for_url(
+        &format!("{}/healthz", settings.qdrant.url),
+        QDRANT_READY_TIMEOUT_SECS,
+        "qdrant",
+    )
+    .await?;
+
+    Ok((Phase1 { manifest, data_dir }, children))
+}
+
+/// Fase 2: avvia eullm (se manage_subprocesses=true) e attende /api/tags.
+/// `children` sono i processi già avviati in fase 1 (qdrant) — combinati con
+/// quello di eullm nel ProcessGuard finale, che tiene in vita ENTRAMBI.
+pub async fn start_eullm(
+    settings: &Settings,
+    phase1: Phase1,
+    mut children: Vec<tokio::process::Child>,
+) -> Result<ProcessGuard> {
+    let Phase1 { manifest, data_dir } = phase1;
+    let mut eullm_model_path: Option<std::path::PathBuf> = None;
+
+    if settings.data.manage_subprocesses {
         // eullm — decisione di avvio basata su presenza su disco, non sul target.
         // Il target filtra i DOWNLOAD (non scaricare CUDA binary su CPU);
         // ma se il file c'è, lo avviamo — il RAG dipende da eullm.
@@ -429,16 +480,9 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
             ),
         }
     } else {
-        tracing::info!("manage_subprocesses=false — processi esterni attesi");
+        tracing::info!("manage_subprocesses=false — processi esterni attesi (eullm)");
     }
 
-    // Attendi API (sempre)
-    wait_for_url(
-        &format!("{}/healthz", settings.qdrant.url),
-        QDRANT_READY_TIMEOUT_SECS,
-        "qdrant",
-    )
-    .await?;
     wait_for_url(
         &format!("{}/api/tags", settings.eullm.url),
         EULLM_READY_TIMEOUT_SECS,
@@ -447,6 +491,16 @@ pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
     .await?;
 
     Ok(ProcessGuard { _children: children, eullm_model_path })
+}
+
+/// Percorso classico (settings.eullm.fit=false, il default): qdrant ed eullm
+/// avviati insieme, l'embedding carica dopo (vedi main.rs) — comportamento
+/// INVARIATO rispetto a prima dello split in provision_and_start_qdrant +
+/// start_eullm. Chi vuole l'ordine invertito (fit=true) chiama le due fasi
+/// separatamente per intercalarci il caricamento dell'embedding.
+pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
+    let (phase1, children) = provision_and_start_qdrant(settings).await?;
+    start_eullm(settings, phase1, children).await
 }
 
 // ── Componente: verifica / download atomico ───────────────────────────────────
@@ -1099,6 +1153,9 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
     if let Some(vt) = &cfg.cache_type_v {
         args.push("--cache-type-v".to_owned());
         args.push(vt.clone());
+    }
+    if cfg.fit {
+        args.push("--fit".to_owned());
     }
     args
 }
