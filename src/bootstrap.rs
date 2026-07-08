@@ -118,6 +118,7 @@ mod eullm_args_tests {
             cache_type_k: None,
             cache_type_v: None,
             fit: false,
+            unload_during_ingestion: false,
         }
     }
 

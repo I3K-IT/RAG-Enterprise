@@ -41,6 +41,15 @@ fn err(status: StatusCode, msg: impl std::fmt::Display) -> Response {
     (status, Json(json!({ "error": msg.to_string() }))).into_response()
 }
 
+/// eullm è scaricato dalla VRAM (o in procinto) per via di
+/// `unload_during_ingestion` — vedi AppState::ingestion_blocks_queries.
+fn ingestion_busy_response() -> Response {
+    err(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "ingestione documento in corso: il modello è temporaneamente scaricato dalla VRAM, riprova tra qualche secondo",
+    )
+}
+
 // ── Shared setup: embed → search → load history → build prompt ────────────────
 
 async fn prepare(
@@ -129,6 +138,9 @@ pub async fn query(
     claims: Claims,
     Json(req): Json<QueryRequest>,
 ) -> Response {
+    if state.ingestion_blocks_queries() {
+        return ingestion_busy_response();
+    }
     let conv_id = req.conversation_id.as_deref();
     let (full_prompt, sources) =
         match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
@@ -176,6 +188,9 @@ pub async fn query_stream(
     claims: Claims,
     Json(req): Json<QueryRequest>,
 ) -> Response {
+    if state.ingestion_blocks_queries() {
+        return ingestion_busy_response();
+    }
     let conv_id = req.conversation_id.as_deref();
     // Run setup synchronously before opening the SSE stream so we can return
     // a proper HTTP error if embed/search fails.

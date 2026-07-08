@@ -64,4 +64,40 @@ impl AppState {
             active_ingestions: Arc::new(AtomicUsize::new(0)),
         }
     }
+
+    /// true se una query eullm andrebbe rifiutata ora: `unload_during_ingestion`
+    /// attivo E almeno un'ingestione in corso (eullm scaricato o in procinto —
+    /// vedi documents::upload). Senza questo guard una query concorrente
+    /// rifarebbe caricare eullm da sola (stesso meccanismo di swap-on-request
+    /// usato per il reload), contendendo la VRAM con l'embedding a metà ingestione.
+    pub fn ingestion_blocks_queries(&self) -> bool {
+        ingestion_blocks(self.settings.eullm.unload_during_ingestion, &self.active_ingestions)
+    }
+}
+
+fn ingestion_blocks(unload_during_ingestion: bool, active_ingestions: &AtomicUsize) -> bool {
+    unload_during_ingestion && active_ingestions.load(Ordering::SeqCst) > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ingestion_blocks_false_when_feature_disabled() {
+        let counter = AtomicUsize::new(1);
+        assert!(!ingestion_blocks(false, &counter));
+    }
+
+    #[test]
+    fn ingestion_blocks_false_when_idle() {
+        let counter = AtomicUsize::new(0);
+        assert!(!ingestion_blocks(true, &counter));
+    }
+
+    #[test]
+    fn ingestion_blocks_true_when_enabled_and_active() {
+        let counter = AtomicUsize::new(1);
+        assert!(ingestion_blocks(true, &counter));
+    }
 }
