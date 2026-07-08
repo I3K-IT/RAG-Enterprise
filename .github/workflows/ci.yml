@@ -9,13 +9,12 @@ name: CI
 # libc::statvfs in src/bootstrap.rs).
 
 on:
-  # Solo main — niente CI sui push diretti al branch di lavoro (dev), per
-  # risparmiare minuti Actions. pull_request resta perché è comunque "su
-  # main" (verifica prima del merge, sulla PR che punta a main), non
-  # un'esecuzione per ogni push sul branch di lavoro.
+  # SOLO push diretto su main — niente pull_request: anche se il target di
+  # una PR è main, GitHub etichetta comunque quel run col branch sorgente
+  # (es. "dev-cihrdj"), quindi ogni merge produceva 2 run (uno per la PR, uno
+  # per il push post-merge) — doppio consumo di minuti per lo stesso set di
+  # modifiche. Ora: un run solo, quando main cambia davvero.
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch: {} # trigger manuale, utile anche solo per riverificare
 
