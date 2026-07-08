@@ -79,7 +79,11 @@ pub async fn upload(
         return err(StatusCode::INTERNAL_SERVER_ERROR, format!("write temp: {e}"));
     }
 
-    // 3. Extract text (sync, possibly heavy — run off the async executor)
+    // 3. Extract text (sync, possibly heavy — run off the async executor).
+    // _ingestion_guard copre extract+chunk+embed (tutta la fase pesante) e
+    // decrementa active_ingestions al Drop, su QUALSIASI percorso di uscita
+    // da qui in poi — niente da ricordare ad ogni return anticipato sotto.
+    let _ingestion_guard = crate::state::IngestionGuard::start(&state.active_ingestions);
     let (text, page_count) = match tokio::task::spawn_blocking({
         let tmp = tmp_path.clone();
         let data_dir = state.settings.data.data_path();

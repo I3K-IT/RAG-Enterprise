@@ -48,6 +48,9 @@ function App() {
 
   // Backend status
   const [status, setStatus] = useState('checking')
+  // true se almeno un documento è in fase di ingestione pesante (extract/chunk/embed)
+  // in QUALSIASI sessione connessa — non solo la tua (vedi GET /health, polling ogni 30s).
+  const [ingestionInProgress, setIngestionInProgress] = useState(false)
 
   // Conversations (localStorage)
   const [conversations, setConversations] = useState([])
@@ -422,8 +425,9 @@ function App() {
 
   const checkBackendHealth = async () => {
     try {
-      await axios.get(`${API_URL}/health`)
+      const res = await axios.get(`${API_URL}/health`)
       setStatus('ready')
+      setIngestionInProgress(!!res.data?.ingestion_in_progress)
     } catch {
       setStatus('error')
     }
@@ -1234,6 +1238,13 @@ function App() {
 
             <div ref={messagesEndRef} />
           </div>
+
+          {ingestionInProgress && (
+            <div className="border-t border-slate-700 bg-amber-900/40 text-amber-200 text-sm px-4 py-2 flex items-center gap-2">
+              <span className="animate-spin">⏳</span>
+              <span>Ingestione documento in corso, attendi qualche secondo — le risposte potrebbero essere più lente del solito.</span>
+            </div>
+          )}
 
           <div className="border-t border-slate-700 p-4 bg-slate-800">
             <form onSubmit={handleQuery} className="flex gap-2">
