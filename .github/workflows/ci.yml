@@ -55,6 +55,19 @@ name: CI
 # sistemare prima di poter anche solo compilare
 # (std::os::unix::fs::FileExt/PermissionsExt, libc::statvfs in
 # src/bootstrap.rs).
+#
+# Cache: Swatinem/rust-cache su tutti i job che compilano (chiave distinta
+# per config: debug-ocr / release-x86_64(-cuda) / release-arm64(-cuda) — il
+# default dell'action non distingue per --features, quindi senza chiave
+# esplicita una build CPU e una CUDA potrebbero condividere cache in modo
+# scorretto). Non actions/cache "a mano" su target/: quel path aveva
+# riempito i 14GB del runner fino a far crashare il job "rust" (non un
+# warning innocuo — il runner è morto, log del job mai arrivati su GitHub).
+# rust-cache pota da sé gli artefatti obsoleti prima di salvare invece di
+# comprimere target/ indiscriminatamente, ed è anche il motivo per cui prima
+# i job CUDA (che non avevano NESSUNA cache) erano la parte più lenta del
+# workflow (~20+ min a ricompilare candle/cudarc/candle-kernels da zero ad
+# ogni run) — non il tag/release in sé.
 
 on:
   # SOLO push diretto su main — niente pull_request: anche se il target di
@@ -93,24 +106,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
-      # Cargo.lock ora tracciato (era in .gitignore, rimosso) — build riproducibili,
-      # cache key precisa sulle versioni risolte effettive.
-      #
-      # SOLO registry/git, NON target/: cresciuto nel tempo (debug + clippy
-      # --all-targets compila anche i test) fino a far fallire il salvataggio
-      # della cache per spazio esaurito sul runner (14GB) — non un warning
-      # innocuo, il runner è arrivato a crashare (job "failure", log persi).
-      # La registry (sorgenti crate scaricate) è piccola e stabile, vale
-      # comunque la pena cachearla; target no.
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      # Swatinem/rust-cache invece di actions/cache "a mano" su target/ grezza:
+      # actions/cache con target/ intera aveva riempito i 14GB del runner
+      # fino a far crashare il job (vedi commit precedenti) — rust-cache
+      # pota da sé gli artefatti obsoleti (mtime > 1 settimana, incrementali,
+      # dipendenze non più usate) prima di salvare, invece di comprimere
+      # tutto indiscriminatamente. Anche più veloce: senza cache su target/,
+      # ogni push ricompilava ~300 crate da zero invece di solo i cambiati.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
+          key: debug-ocr
 
       - name: cargo build --features ocr --locked
         run: cargo build --features ocr --locked --verbose
@@ -163,14 +168,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@v4
+      # Vedi commento nel job "rust" sul perché rust-cache invece di
+      # actions/cache su target/ grezza.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-release-x86_64-${{ hashFiles('Cargo.lock') }}
+          key: release-x86_64
 
       - uses: actions/setup-node@v4
         with:
@@ -244,6 +246,14 @@ jobs:
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
 
+      # Prima non c'era NESSUNA cache qui — ogni run ricompilava candle/
+      # cudarc/candle-kernels da zero (~20+ min), il vero grosso dei 35 min
+      # totali del workflow, non il tag/release. rust-cache pota da sé,
+      # sicura anche con lo spazio già eroso dal toolkit CUDA installato sopra.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-x86_64-cuda
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -313,14 +323,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-release-arm64-${{ hashFiles('Cargo.lock') }}
+          key: release-arm64
 
       - uses: actions/setup-node@v4
         with:
@@ -389,6 +394,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-arm64-cuda
 
       - uses: actions/setup-node@v4
         with:
