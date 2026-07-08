@@ -1,12 +1,41 @@
 name: CI
 
-# Scope Fase 1: SOLO linux-x86_64, CPU/OCR — l'unico target oggi completo
-# (codice + binari nel manifest, vedi manifest.toml). Niente --features cuda:
-# i runner GitHub non hanno GPU NVIDIA. ARM64/macOS/Windows non sono ancora
-# in CI: mancano i binari qdrant/eullm per quelle piattaforme nel manifest, e
-# Windows in più ha 3 punti di codice unix-only da sistemare prima di poter
-# anche solo compilare (std::os::unix::fs::FileExt/PermissionsExt,
-# libc::statvfs in src/bootstrap.rs).
+# Job "rust"/"frontend": build+test ad ogni push su main (invariati).
+#
+# Job "release-*": SOLO sui tag v*, producono i 4 binari scaricabili allegati
+# alla GitHub Release (release-linux-{x86_64,arm64}{,-cuda}). Nessun binario
+# "universale": --features cuda RICHIEDE il driver NVIDIA (libcuda.so.1)
+# presente per AVVIARSI, non solo per usare la GPU — non è il fallback
+# graceful CPU/GPU già gestito dentro il processo da EmbeddingService::load
+# (quello copre "il driver c'è ma CUDA fallisce", non "il driver non c'è
+# affatto"). Verificato con una build reale in locale (nessuna GPU, stesso
+# profilo di un runner GitHub):
+#   - candle-kernels rileva la compute cap via nvidia-smi, assente sui
+#     runner → fallisce con ComputeCapDetectionFailed senza
+#     CUDA_COMPUTE_CAP impostata esplicitamente. 80 (Ampere) è il target PTX:
+#     compatibile via JIT sia con la RTX 3060 (Orion, sm_86) sia con la RTX
+#     5070 Ti (sm_120, vedi BUILD.md) — non serve un valore per GPU.
+#   - Pacchetti CUDA minimi necessari per compilare (nvcc + link):
+#     cuda-nvcc, cuda-cudart-dev, libcublas-dev, cuda-nvrtc-dev,
+#     libcurand-dev (tutti -12-8). La metapackage cuda-toolkit-12-8 intera
+#     è molto più pesante (6-8GB) e include roba mai usata qui (driver,
+#     nsight, samples, docs) — sui runner c'è solo 14GB di disco.
+#   - arm64: repo apt "sbsa" (server arm64 + GPU discreta, es. Orion+RTX
+#     3060), NON il repo "arm64" (quello è per libnvidia-container/Jetson,
+#     pacchetti completamente diversi — verificato confrontando gli indici).
+# ARM64 gira su runner nativi ubuntu-24.04-arm (disponibili anche su repo
+# privati da inizio 2026, minuti standard) — niente cross-compilation, niente
+# toolchain gcc-aarch64/PKG_CONFIG_ALLOW_CROSS.
+#
+# NON verificato empiricamente: la build arm64+cuda (nessun hardware/emulation
+# arm64 disponibile per testarla prima — solo l'esistenza dei pacchetti nel
+# repo sbsa). Il primo tag è il primo test reale di quel job specifico.
+#
+# macOS/Windows restano fuori: mancano i binari qdrant/eullm per quelle
+# piattaforme nel manifest, e Windows ha 3 punti di codice unix-only da
+# sistemare prima di poter anche solo compilare
+# (std::os::unix::fs::FileExt/PermissionsExt, libc::statvfs in
+# src/bootstrap.rs).
 
 on:
   # SOLO push diretto su main — niente pull_request: anche se il target di
@@ -91,3 +120,204 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Release (solo tag v*) — vedi commento in cima al file per il perché delle
+  # 4 varianti separate e dei parametri CUDA.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  release-linux-x86_64:
+    name: Release — linux x86_64 (CPU)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-release-x86_64-${{ hashFiles('Cargo.lock') }}
+
+      - name: cargo build --release --features ocr --locked
+        run: cargo build --release --features ocr --locked --verbose
+
+      - name: Impacchetta binario + checksum
+        run: |
+          mkdir -p dist
+          tar czf dist/i3k-rag-engine-linux-x86_64.tar.gz -C target/release i3k-rag-engine
+          sha256sum dist/i3k-rag-engine-linux-x86_64.tar.gz > dist/i3k-rag-engine-linux-x86_64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-x86_64
+          path: dist/*
+          retention-days: 7
+
+  release-linux-x86_64-cuda:
+    name: Release — linux x86_64 (CUDA)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Il runner ha solo 14GB di disco — il toolkit CUDA (anche minimo) ne
+      # occupa alcuni GB, meglio liberare spazio non necessario a noi prima.
+      - name: Libera spazio disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      - name: "Installa CUDA Toolkit 12.8 (minimo: nvcc, cudart, cublas, nvrtc, curand)"
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+
+      - name: cargo build --release --features ocr,cuda --locked
+        env:
+          # Niente GPU fisica sul runner → candle-kernels non riesce a
+          # rilevare la compute cap da nvidia-smi (ComputeCapDetectionFailed).
+          # 80 = target PTX Ampere, JIT-compatibile con GPU più recenti
+          # (Blackwell sm_120) e leggermente più vecchie (Ampere sm_86).
+          CUDA_COMPUTE_CAP: "80"
+          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
+        run: |
+          export PATH=/usr/local/cuda-12.8/bin:$PATH
+          cargo build --release --features ocr,cuda --locked --verbose
+
+      - name: Impacchetta binario + checksum
+        run: |
+          mkdir -p dist
+          tar czf dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz -C target/release i3k-rag-engine
+          sha256sum dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz > dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-x86_64-cuda
+          path: dist/*
+          retention-days: 7
+
+  release-linux-arm64:
+    name: Release — linux arm64 (CPU)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-release-arm64-${{ hashFiles('Cargo.lock') }}
+
+      - name: cargo build --release --features ocr --locked
+        run: cargo build --release --features ocr --locked --verbose
+
+      - name: Impacchetta binario + checksum
+        run: |
+          mkdir -p dist
+          tar czf dist/i3k-rag-engine-linux-arm64.tar.gz -C target/release i3k-rag-engine
+          sha256sum dist/i3k-rag-engine-linux-arm64.tar.gz > dist/i3k-rag-engine-linux-arm64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-arm64
+          path: dist/*
+          retention-days: 7
+
+  release-linux-arm64-cuda:
+    name: Release — linux arm64 (CUDA)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Libera spazio disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      # Repo "sbsa" = server arm64 con GPU discreta (Orion+RTX3060). Il repo
+      # "arm64" di NVIDIA è tutt'altra cosa (libnvidia-container/Jetson) —
+      # verificato confrontando i due indici pacchetti, non usarlo qui.
+      - name: "Installa CUDA Toolkit 12.8 SBSA (minimo: nvcc, cudart, cublas, nvrtc, curand)"
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+
+      - name: cargo build --release --features ocr,cuda --locked
+        env:
+          CUDA_COMPUTE_CAP: "80"
+          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
+        run: |
+          export PATH=/usr/local/cuda-12.8/bin:$PATH
+          cargo build --release --features ocr,cuda --locked --verbose
+
+      - name: Impacchetta binario + checksum
+        run: |
+          mkdir -p dist
+          tar czf dist/i3k-rag-engine-linux-arm64-cuda.tar.gz -C target/release i3k-rag-engine
+          sha256sum dist/i3k-rag-engine-linux-arm64-cuda.tar.gz > dist/i3k-rag-engine-linux-arm64-cuda.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-arm64-cuda
+          path: dist/*
+          retention-days: 7
+
+  publish-release:
+    name: Pubblica i binari sulla GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - release-linux-x86_64
+      - release-linux-x86_64-cuda
+      - release-linux-arm64
+      - release-linux-arm64-cuda
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
