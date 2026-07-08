@@ -149,6 +149,36 @@ impl EullmClient {
         Ok(clean.trim().to_owned())
     }
 
+    // ── Unload/reload (eullm ≥ EuLLM-v0.6.10, POST /api/unload) ─────────────────
+
+    /// Libera lo slot modello di eullm (VRAM libera, server resta in ascolto —
+    /// non è un riavvio di processo). Estensione EULLM, non Ollama standard.
+    /// `Ok(Some(nome))` se ha scaricato un modello, `Ok(None)` se lo slot era
+    /// già vuoto. Verificato nel sorgente eullm (EuLLM-v0.6.10): risposta
+    /// `{"unloaded": "<nome>"|null}` su 200, `{"error": ...}` su 500.
+    pub async fn unload(&self) -> Result<Option<String>> {
+        let url = format!("{}/api/unload", self.base_url);
+        let resp = self.http.post(&url).send().await.context("eullm unload POST")?;
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().await.context("eullm unload response JSON")?;
+        if !status.is_success() {
+            let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("errore sconosciuto");
+            anyhow::bail!("eullm unload HTTP {status}: {msg}");
+        }
+        Ok(body.get("unloaded").and_then(|v| v.as_str()).map(str::to_owned))
+    }
+
+    /// Rimette in VRAM il modello configurato (`self.model`) dopo un unload —
+    /// eullm carica al volo qualunque modello arrivi nel campo "model" di una
+    /// richiesta normale, stesso meccanismo di swap dinamico usato per il
+    /// warmup iniziale. Riusa invoke() con un prompt minimo: non serve un
+    /// endpoint dedicato, la risposta stessa conferma che il caricamento è
+    /// completato (la chiamata blocca fino a quel momento).
+    pub async fn reload(&self) -> Result<()> {
+        self.invoke("ok").await?;
+        Ok(())
+    }
+
     // ── Streaming ─────────────────────────────────────────────────────────────
 
     /// Streams tokens from eullm and sends each one to `tx`.

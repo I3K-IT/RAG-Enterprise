@@ -14,8 +14,15 @@ on:
   # (es. "dev-cihrdj"), quindi ogni merge produceva 2 run (uno per la PR, uno
   # per il push post-merge) — doppio consumo di minuti per lo stesso set di
   # modifiche. Ora: un run solo, quando main cambia davvero.
+  #
+  # tags: i tag di release (v0.1.0…) sono un ref a parte (refs/tags, non
+  # refs/heads) — push:branches non li intercetta affatto, serve elencarli
+  # esplicitamente. Nota: questo vale solo per i tag pushati DOPO che questo
+  # file (con questa riga) è già su main — un tag già pushato prima non
+  # riparte da solo, va ripushato per far scattare il trigger.
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch: {} # trigger manuale, utile anche solo per riverificare
 
 concurrency:

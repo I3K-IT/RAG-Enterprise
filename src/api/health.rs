@@ -6,8 +6,17 @@ use serde_json::json;
 
 use crate::state::AppState;
 
-pub async fn health() -> impl IntoResponse {
-    Json(json!({ "status": "ok" }))
+/// ingestion_in_progress: true se almeno un upload è nella fase pesante
+/// (extract/chunk/embed) in questo momento — la UI la usa per mostrare un
+/// avviso "ingestione in corso" a tutti gli utenti connessi (polling
+/// esistente, vedi frontend checkBackendHealth), non solo a chi ha lanciato
+/// l'upload. Vedi state::IngestionGuard.
+pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let active = state.active_ingestions.load(std::sync::atomic::Ordering::SeqCst);
+    Json(json!({
+        "status": "ok",
+        "ingestion_in_progress": active > 0,
+    }))
 }
 
 /// Espone lo stato reale scelto all'avvio (non solo la config desiderata) —

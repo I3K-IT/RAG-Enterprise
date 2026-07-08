@@ -103,6 +103,17 @@ pub struct EullmSettings {
     /// all'avvio (vedi audit Fase 1, punto 5a).
     #[serde(default)]
     pub fit: bool,
+    /// Scarica eullm dalla VRAM durante l'ingestione documenti (POST
+    /// /api/unload — estensione EULLM da EuLLM-v0.6.10, verificata nel
+    /// sorgente eullm) e lo ricarica al termine. Richiede un binario pinnato
+    /// che abbia davvero l'endpoint — versioni precedenti (es. v0.6.6 su
+    /// x86_64 oggi) risponderebbero 404. Con questo attivo, la chat non
+    /// funziona per la durata dell'ingestione (eullm non è in VRAM) — la UI
+    /// mostra "ingestione in corso" ma non blocca l'invio, quindi una
+    /// domanda fatta in quella finestra fallirebbe o resterebbe in attesa
+    /// fino al reload.
+    #[serde(default)]
+    pub unload_during_ingestion: bool,
 }
 
 #[derive(Debug, Deserialize)]

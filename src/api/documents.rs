@@ -37,8 +37,34 @@ pub async fn list(State(state): State<AppState>, _claims: Claims) -> Response {
 pub async fn upload(
     State(state): State<AppState>,
     _claims: Claims,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Response {
+    // La guardia resta viva (quindi active_ingestions > 0, vedi
+    // AppState::ingestion_blocks_queries) per l'INTERA finestra
+    // unload → estrazione/chunk/embed → reload, non solo la fase pesante:
+    // se calasse prima del reload, una query concorrente rifarebbe caricare
+    // eullm da sola mentre l'embedding sta ancora usando la VRAM liberata.
+    let _ingestion_guard = crate::state::IngestionGuard::start(&state.active_ingestions);
+    let unload_enabled = state.settings.eullm.unload_during_ingestion;
+
+    if unload_enabled {
+        if let Err(e) = state.eullm.unload().await {
+            tracing::error!(error = %e, "eullm: unload pre-ingestione fallito, procedo comunque (nessuna VRAM liberata)");
+        }
+    }
+
+    let response = process_upload(&state, multipart).await;
+
+    if unload_enabled {
+        if let Err(e) = state.eullm.reload().await {
+            tracing::error!(error = %e, "eullm: reload post-ingestione fallito — il modello potrebbe non essere in VRAM, verifica manualmente");
+        }
+    }
+
+    response
+}
+
+async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response {
     // 1. Read file bytes from multipart field "file"
     let mut filename = String::new();
     let mut file_bytes: Vec<u8> = Vec::new();
@@ -79,7 +105,7 @@ pub async fn upload(
         return err(StatusCode::INTERNAL_SERVER_ERROR, format!("write temp: {e}"));
     }
 
-    // 3. Extract text (sync, possibly heavy — run off the async executor)
+    // 3. Extract text (sync, possibly heavy — run off the async executor).
     let (text, page_count) = match tokio::task::spawn_blocking({
         let tmp = tmp_path.clone();
         let data_dir = state.settings.data.data_path();
