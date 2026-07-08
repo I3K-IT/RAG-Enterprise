@@ -15,6 +15,17 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::AppState;
 
+/// Cartella che contiene il binario (portable app dir, vedi
+/// config::default_data_dir) + "frontend/dist" — non la CWD del processo.
+fn frontend_dist_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("frontend")
+        .join("dist")
+}
+
 /// Build the full axum Router with all routes and CORS middleware.
 pub fn router(state: AppState) -> Router {
     let public = Router::new()
@@ -66,9 +77,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/conversations/:id", delete(conversations::delete))
         .route("/api/conversations/:id/messages", get(conversations::messages));
 
-    // SPA fallback: serve frontend/dist for all non-API routes
-    let spa = ServeDir::new("frontend/dist")
-        .not_found_service(ServeFile::new("frontend/dist/index.html"));
+    // SPA fallback: serve frontend/dist for all non-API routes. Path è
+    // exe-relative (stessa convenzione "portable app dir" di
+    // config::default_data_dir), non CWD-relative — altrimenti il binario
+    // funziona solo se lanciato da dentro la cartella giusta.
+    let dist = frontend_dist_dir();
+    let spa = ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));
 
     Router::new()
         .merge(public)

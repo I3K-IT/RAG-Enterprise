@@ -25,11 +25,30 @@ name: CI
 #     pacchetti completamente diversi — verificato confrontando gli indici).
 # ARM64 gira su runner nativi ubuntu-24.04-arm (disponibili anche su repo
 # privati da inizio 2026, minuti standard) — niente cross-compilation, niente
-# toolchain gcc-aarch64/PKG_CONFIG_ALLOW_CROSS.
+# toolchain gcc-aarch64/PKG_CONFIG_ALLOW_CROSS. Tutte e 4 le varianti (incluso
+# arm64+cuda, mai testato prima) verificate con successo sul tag v0.1.0.
 #
-# NON verificato empiricamente: la build arm64+cuda (nessun hardware/emulation
-# arm64 disponibile per testarla prima — solo l'esistenza dei pacchetti nel
-# repo sbsa). Il primo tag è il primo test reale di quel job specifico.
+# Contenuto del tarball (non solo il binario nudo — riscontrato in produzione
+# sull'Orion che senza questo il binario non parte nemmeno):
+#   - frontend/dist/ (buildato inline in ogni job release-*, npm ci + npm
+#     run build) — ServeDir in api/mod.rs è exe-relative (frontend_dist_dir,
+#     stessa convenzione "portable app dir" di config::default_data_dir),
+#     non CWD-relative: funziona da qualunque cartella si lanci il binario,
+#     basta che "frontend/dist" stia accanto ad esso.
+#   - lib/libtesseract.so.5 + lib/liblept.so.5 (+ le lib CUDA runtime per le
+#     varianti -cuda: cublas/cublasLt/cudart/nvrtc/curand) copiate via ldd
+#     dopo la build. Il binario è compilato con RUSTFLAGS
+#     "-Wl,-rpath,$ORIGIN/lib -Wl,-z,origin": cerca lì PRIMA delle lib di
+#     sistema, quindi funziona anche su una macchina senza
+#     libtesseract-dev/libleptonica-dev installate. libcuda.so.1 (il driver
+#     NVIDIA vero) resta l'unica eccezione non bundlabile — deve venire dal
+#     sistema target (vedi sopra).
+#   - Le altre dipendenze dinamiche (glibc, libssl, libcurl, libpng/jpeg/
+#     tiff/webp da leptonica, ICU…) NON sono bundlate: sono libreria di base
+#     presenti su qualunque distro Linux reale, bundlarle anche loro
+#     aggiungerebbe fragilità (versioni/ABI) senza un beneficio reale, e per
+#     libssl/libcrypto sarebbe pure controproducente (niente aggiornamenti
+#     di sicurezza dal sistema).
 #
 # macOS/Windows restano fuori: mancano i binari qdrant/eullm per quelle
 # piattaforme nel manifest, e Windows ha 3 punti di codice unix-only da
@@ -147,13 +166,42 @@ jobs:
             target
           key: cargo-release-x86_64-${{ hashFiles('Cargo.lock') }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # RPATH $ORIGIN/lib: il binario cerca le lib bundlate in ./lib PRIMA di
+      # quelle di sistema — vedi step successivo, che le copia lì. Senza
+      # questo, su una macchina senza libtesseract5/liblept5 installate a
+      # livello di sistema il binario non parte nemmeno (error while loading
+      # shared libraries), come riscontrato in produzione sull'Orion.
       - name: cargo build --release --features ocr --locked
+        env:
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: cargo build --release --features ocr --locked --verbose
 
-      - name: Impacchetta binario + checksum
+      - name: Impacchetta binario + lib bundlate + frontend + checksum
         run: |
-          mkdir -p dist
-          tar czf dist/i3k-rag-engine-linux-x86_64.tar.gz -C target/release i3k-rag-engine
+          mkdir -p dist stage/lib stage/frontend
+          cp target/release/i3k-rag-engine stage/
+          cp -r frontend/dist stage/frontend/dist
+          for lib in libtesseract.so.5 liblept.so.5; do
+            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
+            if [ -z "$path" ]; then
+              echo "ERRORE: $lib non trovata nell'output di ldd" >&2
+              exit 1
+            fi
+            cp -L "$path" "stage/lib/$lib"
+          done
+          tar czf dist/i3k-rag-engine-linux-x86_64.tar.gz -C stage .
           sha256sum dist/i3k-rag-engine-linux-x86_64.tar.gz > dist/i3k-rag-engine-linux-x86_64.tar.gz.sha256
 
       - uses: actions/upload-artifact@v7
@@ -190,6 +238,24 @@ jobs:
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # RPATH $ORIGIN/lib: vedi commento nel job x86_64 CPU. Qui in più
+      # servono le lib CUDA runtime (cublas/cudart/nvrtc/curand) — una
+      # macchina col solo driver NVIDIA installato (non il CUDA toolkit
+      # completo) altrimenti non le avrebbe. libcuda.so.1 (il driver vero)
+      # NON è bundlabile: deve venire dal sistema target, non c'è modo di
+      # aggirarlo (vedi commento in cima al file).
       - name: cargo build --release --features ocr,cuda --locked
         env:
           # Niente GPU fisica sul runner → candle-kernels non riesce a
@@ -198,14 +264,29 @@ jobs:
           # (Blackwell sm_120) e leggermente più vecchie (Ampere sm_86).
           CUDA_COMPUTE_CAP: "80"
           LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: |
           export PATH=/usr/local/cuda-12.8/bin:$PATH
           cargo build --release --features ocr,cuda --locked --verbose
 
-      - name: Impacchetta binario + checksum
+      - name: Impacchetta binario + lib bundlate + frontend + checksum
         run: |
-          mkdir -p dist
-          tar czf dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz -C target/release i3k-rag-engine
+          sudo ldconfig
+          mkdir -p dist stage/lib stage/frontend
+          cp target/release/i3k-rag-engine stage/
+          cp -r frontend/dist stage/frontend/dist
+          for lib in libtesseract.so.5 liblept.so.5 libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
+            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
+            if [ -z "$path" ]; then
+              path=$(find /usr/local/cuda-12.8 -name "$lib" 2>/dev/null | head -1)
+            fi
+            if [ -z "$path" ]; then
+              echo "ERRORE: $lib non trovata (né via ldd né via find)" >&2
+              exit 1
+            fi
+            cp -L "$path" "stage/lib/$lib"
+          done
+          tar czf dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz -C stage .
           sha256sum dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz > dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz.sha256
 
       - uses: actions/upload-artifact@v7
@@ -235,13 +316,37 @@ jobs:
             target
           key: cargo-release-arm64-${{ hashFiles('Cargo.lock') }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: cargo build --release --features ocr --locked
+        env:
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: cargo build --release --features ocr --locked --verbose
 
-      - name: Impacchetta binario + checksum
+      - name: Impacchetta binario + lib bundlate + frontend + checksum
         run: |
-          mkdir -p dist
-          tar czf dist/i3k-rag-engine-linux-arm64.tar.gz -C target/release i3k-rag-engine
+          mkdir -p dist stage/lib stage/frontend
+          cp target/release/i3k-rag-engine stage/
+          cp -r frontend/dist stage/frontend/dist
+          for lib in libtesseract.so.5 liblept.so.5; do
+            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
+            if [ -z "$path" ]; then
+              echo "ERRORE: $lib non trovata nell'output di ldd" >&2
+              exit 1
+            fi
+            cp -L "$path" "stage/lib/$lib"
+          done
+          tar czf dist/i3k-rag-engine-linux-arm64.tar.gz -C stage .
           sha256sum dist/i3k-rag-engine-linux-arm64.tar.gz > dist/i3k-rag-engine-linux-arm64.tar.gz.sha256
 
       - uses: actions/upload-artifact@v7
@@ -279,18 +384,45 @@ jobs:
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: cargo build --release --features ocr,cuda --locked
         env:
           CUDA_COMPUTE_CAP: "80"
           LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: |
           export PATH=/usr/local/cuda-12.8/bin:$PATH
           cargo build --release --features ocr,cuda --locked --verbose
 
-      - name: Impacchetta binario + checksum
+      - name: Impacchetta binario + lib bundlate + frontend + checksum
         run: |
-          mkdir -p dist
-          tar czf dist/i3k-rag-engine-linux-arm64-cuda.tar.gz -C target/release i3k-rag-engine
+          sudo ldconfig
+          mkdir -p dist stage/lib stage/frontend
+          cp target/release/i3k-rag-engine stage/
+          cp -r frontend/dist stage/frontend/dist
+          for lib in libtesseract.so.5 liblept.so.5 libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
+            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
+            if [ -z "$path" ]; then
+              path=$(find /usr/local/cuda-12.8 -name "$lib" 2>/dev/null | head -1)
+            fi
+            if [ -z "$path" ]; then
+              echo "ERRORE: $lib non trovata (né via ldd né via find)" >&2
+              exit 1
+            fi
+            cp -L "$path" "stage/lib/$lib"
+          done
+          tar czf dist/i3k-rag-engine-linux-arm64-cuda.tar.gz -C stage .
           sha256sum dist/i3k-rag-engine-linux-arm64-cuda.tar.gz > dist/i3k-rag-engine-linux-arm64-cuda.tar.gz.sha256
 
       - uses: actions/upload-artifact@v7
