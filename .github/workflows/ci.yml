@@ -95,16 +95,22 @@ jobs:
 
       # Cargo.lock ora tracciato (era in .gitignore, rimosso) — build riproducibili,
       # cache key precisa sulle versioni risolte effettive.
-      - name: Cache cargo registry + target
+      #
+      # SOLO registry/git, NON target/: cresciuto nel tempo (debug + clippy
+      # --all-targets compila anche i test) fino a far fallire il salvataggio
+      # della cache per spazio esaurito sul runner (14GB) — non un warning
+      # innocuo, il runner è arrivato a crashare (job "failure", log persi).
+      # La registry (sorgenti crate scaricate) è piccola e stabile, vale
+      # comunque la pena cachearla; target no.
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-registry-${{ runner.os }}-
 
       - name: cargo build --features ocr --locked
         run: cargo build --features ocr --locked --verbose
