@@ -38,6 +38,10 @@ pub enum DeviceStatus {
     CpuByConfig,
     /// CUDA richiesta ma fallita dopo CUDA_LOAD_ATTEMPTS tentativi — degrado reale.
     CpuFallback,
+    /// CPU deliberatamente, tra una finestra di ingestione e l'altra
+    /// (EmbeddingsSettings::swap_during_ingestion=true) — non è un degrado:
+    /// la VRAM è riservata a eullm fuori dall'ingestione per design.
+    CpuParked,
 }
 
 pub struct EmbeddingService {
@@ -45,6 +49,7 @@ pub struct EmbeddingService {
     tokenizer: Tokenizer,
     device: Device,
     device_status: DeviceStatus,
+    model_id: String,
 }
 
 impl EmbeddingService {
@@ -133,7 +138,35 @@ impl EmbeddingService {
             DeviceStatus::Gpu => "gpu",
             DeviceStatus::CpuByConfig => "cpu (build senza GPU)",
             DeviceStatus::CpuFallback => "cpu (FALLBACK: CUDA fallita all'avvio, vedi log)",
+            DeviceStatus::CpuParked => "cpu (in attesa — VRAM riservata a eullm fuori ingestione)",
         }
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Carica bge-m3 su CPU con status CpuParked — usato sia all'avvio
+    /// quando EMBEDDINGS__SWAP_DURING_INGESTION=true (la VRAM resta libera
+    /// per eullm finché non parte un'ingestione) sia per il rientro su CPU
+    /// a fine ingestione (vedi AppState::swap_embeddings_to_cpu).
+    pub fn load_cpu_parked(model_id: &str) -> Result<Self> {
+        let mut svc = Self::load_on(model_id, &Device::Cpu)?;
+        svc.device_status = DeviceStatus::CpuParked;
+        Ok(svc)
+    }
+
+    /// Carica bge-m3 su GPU per la finestra di ingestione, dopo che eullm ha
+    /// liberato la VRAM con /api/unload — vedi
+    /// AppState::swap_embeddings_to_gpu. Richiede la feature "cuda"
+    /// compilata (stesso limite di load()) — garantito da
+    /// Settings::load(), che fallisce all'avvio se swap_during_ingestion è
+    /// attivo su una build senza CUDA.
+    pub fn load_gpu_for_ingestion(model_id: &str) -> Result<Self> {
+        let device = Self::try_cuda_device(0)?;
+        let mut svc = Self::load_on(model_id, &device)?;
+        svc.device_status = DeviceStatus::Gpu;
+        Ok(svc)
     }
 
     fn load_on(model_id: &str, device: &Device) -> Result<Self> {
@@ -176,10 +209,16 @@ impl EmbeddingService {
         let model = BertModel::load(vb, &config).context("BertModel::load")?;
 
         tracing::info!(model_id, "embedding model pronto su {device:?}");
-        // device_status è un placeholder: il chiamante (load()) lo sovrascrive
-        // sempre subito dopo, in base a quale ramo (Gpu/CpuByConfig/CpuFallback)
-        // ha effettivamente prodotto questo Self.
-        Ok(Self { model, tokenizer, device: device.clone(), device_status: DeviceStatus::CpuByConfig })
+        // device_status è un placeholder: il chiamante (load(), load_cpu_parked(),
+        // load_gpu_for_ingestion()) lo sovrascrive sempre subito dopo, in base a
+        // quale device/percorso ha effettivamente prodotto questo Self.
+        Ok(Self {
+            model,
+            tokenizer,
+            device: device.clone(),
+            device_status: DeviceStatus::CpuByConfig,
+            model_id: model_id.to_owned(),
+        })
     }
 
     /// Embedding di un singolo testo, L2-normalizzato. dim=1024.
@@ -274,7 +313,7 @@ pub fn l2_normalize(v: &mut Vec<f32>) {
 fn device_is_cuda(dev: &Device) -> bool {
     #[cfg(feature = "cuda")]
     {
-        return matches!(dev, Device::Cuda(_));
+        matches!(dev, Device::Cuda(_))
     }
     #[cfg(not(feature = "cuda"))]
     {
@@ -412,6 +451,9 @@ pub fn download_target_dir(model_id: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    // Entrambi i test sotto sono #[cfg(not(feature = "cuda"))] — con "cuda"
+    // attiva questo modulo è vuoto, l'import andrebbe gated allo stesso modo.
+    #[cfg(not(feature = "cuda"))]
     use super::*;
 
     // Solo per build SENZA feature "cuda" (il caso normale di questo sandbox):

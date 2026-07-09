@@ -22,11 +22,20 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
 /// Espone lo stato reale scelto all'avvio (non solo la config desiderata) —
 /// in particolare embedding_device, cosi' un fallback CPU silenzioso (5a) resta
 /// visibile anche dopo che il log di boot e' scomparso dalla history del terminale.
+/// Con swap_during_ingestion=true riflette lo stato ATTUALE (CPU a riposo,
+/// GPU durante un'ingestione in corso) — non un valore fisso di boot.
 pub async fn info(State(state): State<AppState>) -> impl IntoResponse {
+    let (device_label, device_ok) = match state.embeddings.read() {
+        Ok(guard) => (
+            guard.device_label(),
+            guard.device_status() != crate::clients::embeddings::DeviceStatus::CpuFallback,
+        ),
+        Err(_) => ("cpu (lock poisoned — stato sconosciuto)", false),
+    };
     Json(json!({
         "service": "i3k-rag-engine",
         "version": env!("CARGO_PKG_VERSION"),
-        "embedding_device": state.embeddings.device_label(),
-        "embedding_device_ok": state.embeddings.device_status() != crate::clients::embeddings::DeviceStatus::CpuFallback,
+        "embedding_device": device_label,
+        "embedding_device_ok": device_ok,
     }))
 }

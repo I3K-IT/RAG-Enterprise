@@ -59,10 +59,16 @@ async fn prepare(
     use_history: bool,
     conversation_id: Option<&str>,
 ) -> anyhow::Result<(String, Vec<Source>)> {
-    // 1. Embed query (CPU/GPU bound)
+    // 1. Embed query (CPU/GPU bound). Con swap_during_ingestion=true bge-m3
+    // gira su CPU qui (un solo testo corto, costo accettabile) — la GPU è
+    // riservata a eullm fuori dalla finestra di ingestione.
     let svc = state.embeddings.clone();
     let q = question.to_owned();
-    let query_vec = tokio::task::spawn_blocking(move || svc.embed_text(&q)).await??;
+    let query_vec = tokio::task::spawn_blocking(move || {
+        let guard = svc.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+        guard.embed_text(&q)
+    })
+    .await??;
 
     // 2. Vector search (top_k=15, threshold=0.30 — MAPPA §5)
     let hits = state
