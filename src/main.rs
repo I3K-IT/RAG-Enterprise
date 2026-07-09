@@ -16,8 +16,21 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// -V/--version: stampa e esce SUBITO, prima di qualunque bootstrap (tracing,
+/// config, qdrant/eullm) — vedi CARGO_PKG_VERSION note sopra sul disallineamento
+/// tag/Cargo.toml: include anche BUILD_GIT_HASH (build.rs) perché la versione
+/// da sola non basta a distinguere due build con lo stesso Cargo.toml.
+fn is_version_flag(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-V" || a == "--version")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    if is_version_flag(&std::env::args().collect::<Vec<_>>()) {
+        println!("i3k-rag-engine {} ({})", env!("CARGO_PKG_VERSION"), env!("BUILD_GIT_HASH"));
+        return Ok(());
+    }
+
     observability::init_tracing();
 
     let settings = config::Settings::load()?;
@@ -204,5 +217,34 @@ async fn warmup_eullm(eullm: &clients::eullm::EullmClient) {
         ),
         Ok(_) => tracing::info!("eullm warmup completato, modello in VRAM"),
         Err(e) => tracing::warn!(error = %e, "eullm warmup fallito (si caricherà alla prima query reale)"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn version_flag_detects_short_and_long_form() {
+        assert!(is_version_flag(&args(&["i3k-rag-engine", "-V"])));
+        assert!(is_version_flag(&args(&["i3k-rag-engine", "--version"])));
+    }
+
+    #[test]
+    fn version_flag_absent_on_normal_startup() {
+        assert!(!is_version_flag(&args(&["i3k-rag-engine"])));
+        assert!(!is_version_flag(&args(&[])));
+    }
+
+    #[test]
+    fn version_flag_case_sensitive_lowercase_v_is_not_version() {
+        // -v (minuscola) non è riservata da questo binario oggi, ma non deve
+        // essere confusa con -V — se in futuro -v diventa "verbose" o simile,
+        // questo test impedisce che venga silenziosamente trattato come -V.
+        assert!(!is_version_flag(&args(&["i3k-rag-engine", "-v"])));
     }
 }

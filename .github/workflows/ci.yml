@@ -399,8 +399,12 @@ jobs:
             fi
             cp -L "$path" "stage/lib/$lib"
           done
-          tar czf dist/i3k-rag-engine-linux-x86_64.tar.gz -C stage .
-          sha256sum dist/i3k-rag-engine-linux-x86_64.tar.gz > dist/i3k-rag-engine-linux-x86_64.tar.gz.sha256
+          # Versione nel nome del tarball: GITHUB_REF su un tag è
+          # "refs/tags/v0.1.3" — questo job gira solo su tag (if: sopra),
+          # quindi è sempre valorizzato qui.
+          VERSION="${GITHUB_REF#refs/tags/}"
+          tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" -C stage .
+          sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -492,8 +496,9 @@ jobs:
             fi
             cp -L "$path" "stage/lib/$lib"
           done
-          tar czf dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz -C stage .
-          sha256sum dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz > dist/i3k-rag-engine-linux-x86_64-cuda.tar.gz.sha256
+          VERSION="${GITHUB_REF#refs/tags/}"
+          tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz" -C stage .
+          sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -561,8 +566,9 @@ jobs:
             fi
             cp -L "$path" "stage/lib/$lib"
           done
-          tar czf dist/i3k-rag-engine-linux-arm64.tar.gz -C stage .
-          sha256sum dist/i3k-rag-engine-linux-arm64.tar.gz > dist/i3k-rag-engine-linux-arm64.tar.gz.sha256
+          VERSION="${GITHUB_REF#refs/tags/}"
+          tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" -C stage .
+          sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -651,8 +657,9 @@ jobs:
             fi
             cp -L "$path" "stage/lib/$lib"
           done
-          tar czf dist/i3k-rag-engine-linux-arm64-cuda.tar.gz -C stage .
-          sha256sum dist/i3k-rag-engine-linux-arm64-cuda.tar.gz > dist/i3k-rag-engine-linux-arm64-cuda.tar.gz.sha256
+          VERSION="${GITHUB_REF#refs/tags/}"
+          tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" -C stage .
+          sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
