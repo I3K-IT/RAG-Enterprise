@@ -253,22 +253,35 @@ mod eullm_update_tests {
     }
 
     #[test]
-    fn asset_hint_matches_current_manifest_eullm_target() {
-        // L'euristica di selezione asset (EULLM_ASSET_HINT) deve combaciare
-        // col nome file dell'unico target eullm oggi pinnato in manifest.toml
-        // — se in futuro si aggiunge un target e questo test fallisce, è il
-        // segnale che EULLM_ASSET_HINT va esteso di pari passo.
+    fn asset_hint_matches_every_pinned_eullm_target() {
+        // Verifica OGNI componente eullm nel manifest, non solo il primo
+        // trovato — debolezza del test precedente che NON ha intercettato il
+        // bug reale (hint hardcoded su x86_64 mentre il manifest aveva già un
+        // secondo target aarch64-cuda pinnato: su ARM64 scaricava l'asset
+        // x86_64 sbagliato, "Exec format error" sull'Orion). Per ogni target
+        // pinnato, eullm_asset_hint deve produrre un hint riconosciuto E
+        // quell'hint deve combaciare col nome file dell'URL pinnato PER
+        // QUEL target specifico.
         let manifest = load_manifest().expect("manifest.toml deve fare parse");
-        let eullm = manifest
-            .component
-            .iter()
-            .find(|c| c.name == "eullm")
-            .expect("componente eullm mancante dal manifest");
-        let asset_name = eullm.url.rsplit('/').next().unwrap_or("");
-        assert!(
-            asset_name.contains(EULLM_ASSET_HINT),
-            "EULLM_ASSET_HINT={EULLM_ASSET_HINT:?} non combacia con l'asset pinnato {asset_name:?}"
-        );
+        let eullm_components: Vec<_> =
+            manifest.component.iter().filter(|c| c.name == "eullm").collect();
+        assert!(!eullm_components.is_empty(), "nessun componente eullm nel manifest");
+
+        for comp in eullm_components {
+            let asset_name = comp.url.rsplit('/').next().unwrap_or("");
+            let hint = eullm_asset_hint(comp.target.as_deref()).unwrap_or_else(|| {
+                panic!(
+                    "eullm_asset_hint non riconosce il target {:?} (asset pinnato: {asset_name:?}) \
+                     — estendila di pari passo quando si aggiunge un nuovo target eullm al manifest",
+                    comp.target
+                )
+            });
+            assert!(
+                asset_name.contains(hint),
+                "target {:?}: hint {hint:?} non combacia con l'asset pinnato {asset_name:?}",
+                comp.target
+            );
+        }
     }
 }
 
@@ -743,12 +756,28 @@ fn sha256_file(path: &Path) -> Result<String> {
 // esce una ancora più recente).
 
 const EULLM_RELEASES_API: &str = "https://api.github.com/repos/eullm/eullm/releases/latest";
-/// Sottostringa che identifica l'asset per la nostra piattaforma nel nome file
-/// (es. "eullm-linux-x64-cuda-12.8", vedi manifest.toml). Oggi eullm ha un solo
-/// target nel manifest (linux-x86_64-cuda); se in futuro se ne aggiungono altri
-/// questa selezione va estesa di pari passo con current_targets().
-const EULLM_ASSET_HINT: &str = "linux-x64-cuda";
 const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
+
+/// Sottostringa che identifica l'asset eullm per la nostra piattaforma nel nome
+/// file della release GitHub (es. "eullm-linux-x64-cuda-12.8" → hint
+/// "linux-x64-cuda"). Derivata dal `target` del Component GIÀ selezionato per
+/// questa macchina (current_targets() → select_components(), vedi
+/// provision_and_start_qdrant) — non una euristica separata da tenere
+/// sincronizzata a mano.
+///
+/// Bug reale che questa funzione sostituisce: prima era una const hardcoded
+/// a "linux-x64-cuda" indipendentemente dalla piattaforma — su ARM64 (Radxa
+/// Orion O6) il controllo aggiornamenti trovava comunque l'asset x86_64 e lo
+/// scaricava, causando "Exec format error" all'avvio di eullm. None = target
+/// senza asset eullm noto → skip del controllo (mai un default silenzioso
+/// sbagliato).
+fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
+    match target {
+        Some("linux-x86_64-cuda") => Some("linux-x64-cuda"),
+        Some("linux-aarch64-cuda") => Some("linux-arm64-cuda"),
+        _ => None,
+    }
+}
 
 #[derive(Debug, serde::Deserialize)]
 struct GhRelease {
@@ -901,8 +930,12 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
         return;
     }
 
-    let Some(asset) = release.assets.iter().find(|a| a.name.contains(EULLM_ASSET_HINT)) else {
-        tracing::warn!(latest = %latest_str, "nuova versione eullm trovata ma nessun asset per questa piattaforma ({EULLM_ASSET_HINT}), skip");
+    let Some(hint) = eullm_asset_hint(pinned.target.as_deref()) else {
+        tracing::warn!(target = ?pinned.target, "eullm: piattaforma senza asset di aggiornamento noto, skip controllo versione");
+        return;
+    };
+    let Some(asset) = release.assets.iter().find(|a| a.name.contains(hint)) else {
+        tracing::warn!(latest = %latest_str, hint = %hint, "nuova versione eullm trovata ma nessun asset per questa piattaforma, skip");
         return;
     };
 
