@@ -223,10 +223,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
-      # Stessa chiave del job release-linux-x86_64 — vedi commento in cima al file.
+      # shared-key (non key!) — key si AGGIUNGE alla chiave automatica per-job
+      # di rust-cache (github.job), non la sostituisce: con "key" la cache di
+      # warm-cache-x86_64 e quella di release-linux-x86_64 restavano su due
+      # chiavi diverse (…-warm-cache-x86_64-… vs …-release-linux-x86_64-…) e
+      # non si incontravano mai, anche a parità di stringa "key". Verificato
+      # nei log: stesso tempo di build a freddo su entrambi i job (~13min),
+      # nessun hit. shared-key SOSTITUISCE la chiave per-job — è la via
+      # ufficiale per condividere cache tra job con nomi diversi.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-x86_64
+          shared-key: release-x86_64
 
       - name: cargo build --release --features ocr --locked
         env:
@@ -261,10 +268,10 @@ jobs:
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
 
-      # Stessa chiave del job release-linux-x86_64-cuda — vedi commento in cima al file.
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-x86_64-cuda
+          shared-key: release-x86_64-cuda
 
       - name: cargo build --release --features ocr,cuda --locked
         env:
@@ -289,10 +296,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
-      # Stessa chiave del job release-linux-arm64 — vedi commento in cima al file.
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-arm64
+          shared-key: release-arm64
 
       - name: cargo build --release --features ocr --locked
         env:
@@ -327,10 +334,10 @@ jobs:
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
 
-      # Stessa chiave del job release-linux-arm64-cuda — vedi commento in cima al file.
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-arm64-cuda
+          shared-key: release-arm64-cuda
 
       - name: cargo build --release --features ocr,cuda --locked
         env:
@@ -359,10 +366,11 @@ jobs:
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
       # Vedi commento nel job "rust" sul perché rust-cache invece di
-      # actions/cache su target/ grezza.
+      # actions/cache su target/ grezza. shared-key, non key — vedi commento
+      # in warm-cache-x86_64 sul perché (key non condivide tra job diversi).
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-x86_64
+          shared-key: release-x86_64
 
       - uses: actions/setup-node@v4
         with:
@@ -444,9 +452,10 @@ jobs:
       # cudarc/candle-kernels da zero (~20+ min), il vero grosso dei 35 min
       # totali del workflow, non il tag/release. rust-cache pota da sé,
       # sicura anche con lo spazio già eroso dal toolkit CUDA installato sopra.
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-x86_64-cuda
+          shared-key: release-x86_64-cuda
 
       - uses: actions/setup-node@v4
         with:
@@ -518,9 +527,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libtesseract-dev libleptonica-dev
 
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-arm64
+          shared-key: release-arm64
 
       - uses: actions/setup-node@v4
         with:
@@ -605,9 +615,10 @@ jobs:
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
             cuda-nvrtc-dev-12-8 libcurand-dev-12-8
 
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-arm64-cuda
+          shared-key: release-arm64-cuda
 
       - uses: actions/setup-node@v4
         with:
