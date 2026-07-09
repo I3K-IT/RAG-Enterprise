@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod backup;
+mod bench;
 mod bootstrap;
 mod clients;
 mod config;
@@ -26,7 +27,9 @@ fn is_version_flag(args: &[String]) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    if is_version_flag(&std::env::args().collect::<Vec<_>>()) {
+    let args: Vec<String> = std::env::args().collect();
+
+    if is_version_flag(&args) {
         println!("i3k-rag-engine {} ({})", env!("CARGO_PKG_VERSION"), env!("BUILD_GIT_HASH"));
         return Ok(());
     }
@@ -84,6 +87,15 @@ async fn main() -> Result<()> {
         tracing::info!(device = embeddings.device_label(), "embedding service pronto");
         (guard, embeddings, eullm)
     };
+
+    // --bench/--benchmark: riusa lo stesso bootstrap (qdrant+eullm+embedding)
+    // di sopra, poi esce subito — niente DB, niente server HTTP. _guard resta
+    // in scope fino al return di main(), quindi qdrant/eullm vengono comunque
+    // spenti correttamente a benchmark concluso (Drop → SIGKILL figli).
+    if let Some(bench_args) = bench::parse_args(&args) {
+        tracing::info!(doc = %bench_args.doc_path.display(), "modalità benchmark");
+        return bench::run(&settings, &bench_args, &embeddings, Arc::new(eullm)).await;
+    }
 
     tracing::info!(path = %settings.database.url, "database SQLite");
     let db = db::connect(&settings.database.url).await?;
