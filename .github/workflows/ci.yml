@@ -28,6 +28,13 @@ name: CI
 # toolchain gcc-aarch64/PKG_CONFIG_ALLOW_CROSS. Tutte e 4 le varianti (incluso
 # arm64+cuda, mai testato prima) verificate con successo sul tag v0.1.0.
 #
+# qdrant su arm64 (entrambi i job): NON è l'ufficiale, è una build custom
+# scaricata da i3k.dev e bundlata in bin/qdrant nel tarball — vedi commento
+# sopra la entry qdrant/linux-aarch64 in manifest.toml per il perché
+# (jemalloc + page size 64K, es. Radxa Orion O6). bootstrap.rs salta il
+# download se trova già il file con lo sha256 giusto, quindi bundlarlo qui
+# non ha richiesto modifiche al codice di bootstrap.
+#
 # Contenuto del tarball (non solo il binario nudo — riscontrato in produzione
 # sull'Orion che senza questo il binario non parte nemmeno):
 #   - frontend/dist/ (buildato inline in ogni job release-*, npm ci + npm
@@ -344,7 +351,21 @@ jobs:
           RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: cargo build --release --features ocr --locked --verbose
 
-      - name: Impacchetta binario + lib bundlate + frontend + checksum
+      # Bundlato, non scaricato al bootstrap come gli altri componenti — vedi
+      # commento sopra la entry qdrant/linux-aarch64 in manifest.toml: build
+      # custom col fix jemalloc page-size, non l'ufficiale. bootstrap.rs
+      # controlla già "il file di destinazione esiste E lo sha256 combacia"
+      # PRIMA di scaricare (ensure_component, src/bootstrap.rs) — bundlarlo
+      # qui in bin/qdrant fa sì che quel controllo passi subito, senza
+      # nessuna modifica alla logica di bootstrap.
+      - name: Scarica qdrant (build custom, fix jemalloc page-size) e bundlalo
+        run: |
+          mkdir -p stage/bin
+          curl -fsSL -o stage/bin/qdrant "https://www.i3k.dev/bin/qdrant-1.18.2-aarch64-linux-gnu-64kpage"
+          echo "61c98880fd44d915ae20192a0c3e8554cdbd5f40562d67eeff86e60c3e04f375  stage/bin/qdrant" | sha256sum -c -
+          chmod +x stage/bin/qdrant
+
+      - name: Impacchetta binario + lib bundlate + frontend + qdrant + checksum
         run: |
           mkdir -p dist stage/lib stage/frontend
           cp target/release/i3k-rag-engine stage/
@@ -420,7 +441,17 @@ jobs:
           export PATH=/usr/local/cuda-12.8/bin:$PATH
           cargo build --release --features ocr,cuda --locked --verbose
 
-      - name: Impacchetta binario + lib bundlate + frontend + checksum
+      # Vedi commento sopra la entry qdrant/linux-aarch64 in manifest.toml e
+      # nel job arm64 CPU: build custom col fix jemalloc page-size, bundlata
+      # non scaricata al bootstrap.
+      - name: Scarica qdrant (build custom, fix jemalloc page-size) e bundlalo
+        run: |
+          mkdir -p stage/bin
+          curl -fsSL -o stage/bin/qdrant "https://www.i3k.dev/bin/qdrant-1.18.2-aarch64-linux-gnu-64kpage"
+          echo "61c98880fd44d915ae20192a0c3e8554cdbd5f40562d67eeff86e60c3e04f375  stage/bin/qdrant" | sha256sum -c -
+          chmod +x stage/bin/qdrant
+
+      - name: Impacchetta binario + lib bundlate + frontend + qdrant + checksum
         run: |
           sudo ldconfig
           mkdir -p dist stage/lib stage/frontend
