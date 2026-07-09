@@ -126,8 +126,28 @@ pub struct EmbeddingsSettings {
     /// mai passare inosservata. Default false: fallback CPU consentito ma
     /// loggato a livello error (non warn) ed esposto via GET /info.
     /// Env: EMBEDDINGS__REQUIRE_GPU (il campo Settings si chiama "embeddings").
+    ///
+    /// Con swap_during_ingestion=true smette di riguardare il caricamento
+    /// iniziale (che parte sempre su CPU in quel caso) e governa invece lo
+    /// swap verso GPU ad ogni ingestione: true = fa fallire quell'ingestione
+    /// se lo swap non riesce, false = procede su CPU (più lento ma corretto).
     #[serde(default)]
     pub require_gpu: bool,
+    /// Sposta bge-m3 dalla CPU (riposo) alla GPU SOLO durante la finestra di
+    /// ingestione, poi torna in CPU — vedi AppState::swap_embeddings_to_gpu/
+    /// _to_cpu e documents::upload(). Pensato per hardware dove bge-m3 e
+    /// qwen non entrano insieme in VRAM (es. una scheda 12GB): fuori
+    /// dall'ingestione la VRAM resta tutta a eullm, bge-m3 gira su CPU per
+    /// l'unico embedding di ogni query (un testo corto, costo accettabile).
+    /// Con VRAM abbondante (16GB+) non serve: lascialo a false, bge-m3
+    /// resta sempre in GPU come oggi.
+    ///
+    /// Richiede EULLM__UNLOAD_DURING_INGESTION=true (senza l'unload di
+    /// eullm non c'è VRAM libera in cui spostare bge-m3) e un binario
+    /// compilato con --features cuda — Settings::load() fallisce all'avvio
+    /// se una delle due condizioni manca, invece di degradare in silenzio.
+    #[serde(default)]
+    pub swap_during_ingestion: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,7 +212,13 @@ impl Default for QdrantSettings {
     }
 }
 impl Default for EmbeddingsSettings {
-    fn default() -> Self { Self { model_id: default_embedding_model(), require_gpu: false } }
+    fn default() -> Self {
+        Self {
+            model_id: default_embedding_model(),
+            require_gpu: false,
+            swap_during_ingestion: false,
+        }
+    }
 }
 impl Default for BackupSettings {
     fn default() -> Self { Self { dir: default_backup_dir() } }
@@ -267,6 +293,68 @@ impl Settings {
             s.backup.dir = data.join("backups").display().to_string();
         }
 
+        validate_swap_during_ingestion(
+            s.embeddings.swap_during_ingestion,
+            s.eullm.unload_during_ingestion,
+            cfg!(feature = "cuda"),
+        )?;
+
         Ok(s)
+    }
+}
+
+/// Estratta da Settings::load per essere testabile senza toccare env var
+/// reali (stesso motivo per cui ingestion_blocks in state.rs è una funzione
+/// libera). Fallisce forte invece di ignorare in silenzio la combinazione
+/// inconsistente — vedi EmbeddingsSettings::swap_during_ingestion.
+fn validate_swap_during_ingestion(
+    swap_during_ingestion: bool,
+    unload_during_ingestion: bool,
+    cuda_feature: bool,
+) -> Result<()> {
+    if !swap_during_ingestion {
+        return Ok(());
+    }
+    if !unload_during_ingestion {
+        anyhow::bail!(
+            "EMBEDDINGS__SWAP_DURING_INGESTION=true richiede EULLM__UNLOAD_DURING_INGESTION=true \
+             — bge-m3 si sposta in GPU solo nella VRAM che eullm libera con /api/unload, \
+             senza quello non c'è spazio in cui spostarlo."
+        );
+    }
+    if !cuda_feature {
+        anyhow::bail!(
+            "EMBEDDINGS__SWAP_DURING_INGESTION=true richiede un binario compilato con \
+             --features cuda (lo swap verso GPU non è possibile senza supporto CUDA)."
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swap_disabled_never_fails() {
+        assert!(validate_swap_during_ingestion(false, false, false).is_ok());
+        assert!(validate_swap_during_ingestion(false, true, true).is_ok());
+    }
+
+    #[test]
+    fn swap_without_unload_fails() {
+        let err = validate_swap_during_ingestion(true, false, true).unwrap_err();
+        assert!(err.to_string().contains("UNLOAD_DURING_INGESTION"));
+    }
+
+    #[test]
+    fn swap_without_cuda_feature_fails() {
+        let err = validate_swap_during_ingestion(true, true, false).unwrap_err();
+        assert!(err.to_string().contains("cuda"));
+    }
+
+    #[test]
+    fn swap_with_unload_and_cuda_ok() {
+        assert!(validate_swap_during_ingestion(true, true, true).is_ok());
     }
 }

@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use anyhow::Context;
 use sqlx::SqlitePool;
 
 use crate::clients::embeddings::EmbeddingService;
@@ -13,7 +14,14 @@ use crate::rag::vector_store::VectorStore;
 pub struct AppState {
     pub settings: Arc<Settings>,
     pub db: SqlitePool,
-    pub embeddings: Arc<EmbeddingService>,
+    /// RwLock (non solo Arc): con EmbeddingsSettings::swap_during_ingestion
+    /// l'istanza viene sostituita a runtime (CPU↔GPU, vedi
+    /// swap_embeddings_to_gpu/_to_cpu) — un semplice Arc non lo permette.
+    /// Letture (embed_text/embed_texts) e scritture (swap) avvengono sempre
+    /// da contesti sincroni (spawn_blocking), mai attraverso un .await con
+    /// il lock preso: std::sync::RwLock è la scelta più semplice, non serve
+    /// la variante async di tokio.
+    pub embeddings: Arc<RwLock<EmbeddingService>>,
     pub qdrant: Arc<dyn VectorStore>,
     pub eullm: Arc<EullmClient>,
     pub storage: Arc<FileStorage>,
@@ -57,7 +65,7 @@ impl AppState {
         Self {
             settings: Arc::new(settings),
             db,
-            embeddings: Arc::new(embeddings),
+            embeddings: Arc::new(RwLock::new(embeddings)),
             qdrant,
             eullm: Arc::new(eullm),
             storage: Arc::new(storage),
@@ -72,6 +80,39 @@ impl AppState {
     /// usato per il reload), contendendo la VRAM con l'embedding a metà ingestione.
     pub fn ingestion_blocks_queries(&self) -> bool {
         ingestion_blocks(self.settings.eullm.unload_during_ingestion, &self.active_ingestions)
+    }
+
+    /// Sposta bge-m3 su GPU per la finestra di ingestione — vedi
+    /// EmbeddingsSettings::swap_during_ingestion. Bloccante (mmap + copia
+    /// pesi): il chiamante deve eseguirlo dentro spawn_blocking, mai
+    /// direttamente su un task async.
+    pub fn swap_embeddings_to_gpu(&self) -> anyhow::Result<()> {
+        self.swap_embeddings(EmbeddingService::load_gpu_for_ingestion)
+    }
+
+    /// Riporta bge-m3 su CPU a fine ingestione. Stesso vincolo di
+    /// blocking di swap_embeddings_to_gpu.
+    pub fn swap_embeddings_to_cpu(&self) -> anyhow::Result<()> {
+        self.swap_embeddings(EmbeddingService::load_cpu_parked)
+    }
+
+    /// Il reload (mmap + copia pesi, potenzialmente qualche secondo) NON
+    /// tiene il lock: legge solo model_id sotto un read-lock breve, poi lo
+    /// rilascia prima di ricostruire il servizio — le query concorrenti
+    /// continuano a usare l'istanza corrente (corretta al momento) invece
+    /// di bloccarsi per tutta la durata dello swap.
+    fn swap_embeddings(
+        &self,
+        loader: fn(&str) -> anyhow::Result<EmbeddingService>,
+    ) -> anyhow::Result<()> {
+        let model_id = {
+            let guard = self.embeddings.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+            guard.model_id().to_owned()
+        };
+        let fresh = loader(&model_id).context("reload embedding su nuovo device")?;
+        let mut guard = self.embeddings.write().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+        *guard = fresh;
+        Ok(())
     }
 }
 

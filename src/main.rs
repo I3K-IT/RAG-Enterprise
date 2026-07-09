@@ -149,8 +149,17 @@ fn open_browser(port: u16) {
 async fn load_embedding(settings: &config::Settings) -> Result<clients::embeddings::EmbeddingService> {
     let model_id = settings.embeddings.model_id.clone();
     let require_gpu = settings.embeddings.require_gpu;
+    let swap_during_ingestion = settings.embeddings.swap_during_ingestion;
     tokio::task::spawn_blocking(move || {
-        clients::embeddings::EmbeddingService::load(&model_id, require_gpu)
+        if swap_during_ingestion {
+            // Riposo su CPU: la VRAM resta libera per eullm finché non
+            // parte un'ingestione (vedi AppState::swap_embeddings_to_gpu).
+            // require_gpu non governa più il boot in questa modalità — vedi
+            // EmbeddingsSettings::swap_during_ingestion.
+            clients::embeddings::EmbeddingService::load_cpu_parked(&model_id)
+        } else {
+            clients::embeddings::EmbeddingService::load(&model_id, require_gpu)
+        }
     })
     .await
     .context("join embedding load")?

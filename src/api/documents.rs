@@ -3,6 +3,7 @@
 //! POST   /api/documents/upload   — multipart/form-data, field "file"
 //! DELETE /api/documents/{id}
 
+use anyhow::Context;
 use axum::{
     extract::{Multipart, Path, State},
     http::{StatusCode, header},
@@ -46,15 +47,30 @@ pub async fn upload(
     // eullm da sola mentre l'embedding sta ancora usando la VRAM liberata.
     let _ingestion_guard = crate::state::IngestionGuard::start(&state.active_ingestions);
     let unload_enabled = state.settings.eullm.unload_during_ingestion;
+    let swap_enabled = state.settings.embeddings.swap_during_ingestion;
 
+    // Ordine: libera VRAM (eullm) PRIMA di occuparla (bge-m3) — e al
+    // termine, il rientro è speculare: bge-m3 lascia la VRAM PRIMA che
+    // eullm la riprenda, altrimenti il reload di eullm (--fit legge la
+    // VRAM libera in quel momento) la troverebbe ancora occupata.
     if unload_enabled {
         if let Err(e) = state.eullm.unload().await {
             tracing::error!(error = %e, "eullm: unload pre-ingestione fallito, procedo comunque (nessuna VRAM liberata)");
         }
     }
+    if swap_enabled {
+        if let Err(e) = swap_embeddings_blocking(&state, true).await {
+            tracing::error!(error = %e, "embedding: swap su GPU fallito, l'ingestione userà la CPU (più lenta)");
+        }
+    }
 
     let response = process_upload(&state, multipart).await;
 
+    if swap_enabled {
+        if let Err(e) = swap_embeddings_blocking(&state, false).await {
+            tracing::error!(error = %e, "embedding: swap su CPU fallito — bge-m3 potrebbe essere ancora in VRAM, verifica manualmente");
+        }
+    }
     if unload_enabled {
         if let Err(e) = state.eullm.reload().await {
             tracing::error!(error = %e, "eullm: reload post-ingestione fallito — il modello potrebbe non essere in VRAM, verifica manualmente");
@@ -62,6 +78,19 @@ pub async fn upload(
     }
 
     response
+}
+
+/// Esegue lo swap del device dell'embedding (bloccante: mmap + copia pesi)
+/// fuori dall'executor async. `to_gpu=true` verso GPU (inizio ingestione),
+/// `false` verso CPU (fine ingestione) — vedi
+/// EmbeddingsSettings::swap_during_ingestion.
+async fn swap_embeddings_blocking(state: &AppState, to_gpu: bool) -> anyhow::Result<()> {
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        if to_gpu { state.swap_embeddings_to_gpu() } else { state.swap_embeddings_to_cpu() }
+    })
+    .await
+    .context("join swap task")?
 }
 
 async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response {
@@ -136,7 +165,10 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     let chunk_strs: Vec<String> = chunks.clone();
     let embeddings = match tokio::task::spawn_blocking(move || {
         let refs: Vec<&str> = chunk_strs.iter().map(|s| s.as_str()).collect();
-        embeddings_svc.embed_texts(&refs)
+        let guard = embeddings_svc
+            .read()
+            .map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+        guard.embed_texts(&refs)
     })
     .await
     {
