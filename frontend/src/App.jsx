@@ -524,28 +524,123 @@ function App() {
 
     modelLoadingTimerRef.current = setTimeout(() => setIsModelLoading(true), 5000)
 
-    try {
-      const response = await axios.post(`${API_URL}/api/query`, {
-        query: userMessage.content,
-        top_k: 5,
-        use_history: true,
-        conversation_id: currentConversationId,
-      }, { timeout: 630000 })
+    // SSE: il tempo alla prima parola non cambia (dipende dal prefill), ma
+    // l'utente vede il testo comparire progressivamente invece di aspettare
+    // l'intera risposta — decisivo su risposte lunghe. Il placeholder
+    // assistant viene aggiunto solo al primo token: fino ad allora resta
+    // visibile lo spinner "Searching..." già esistente (vedi condizione di
+    // render più sotto, ora basata sull'ultimo messaggio in coda).
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 630000)
+    let assistantPushed = false
 
-      const assistantMessage = {
-        role: 'assistant',
-        content: response.data.answer,
-        sources: response.data.sources || [],
-        timestamp: new Date().toISOString()
+    const appendToken = (token) => {
+      if (!assistantPushed) {
+        assistantPushed = true
+        setIsModelLoading(false)
+        if (modelLoadingTimerRef.current) {
+          clearTimeout(modelLoadingTimerRef.current)
+          modelLoadingTimerRef.current = null
+        }
+        setMessages(prev => [...prev, {
+          role: 'assistant', content: token, sources: [], timestamp: new Date().toISOString(),
+        }])
+      } else {
+        setMessages(prev => {
+          const next = [...prev]
+          next[next.length - 1] = { ...next[next.length - 1], content: next[next.length - 1].content + token }
+          return next
+        })
       }
-      setMessages(prev => [...prev, assistantMessage])
+    }
+
+    try {
+      const authToken = localStorage.getItem('rag_auth_token')
+      const response = await fetch(`${API_URL}/api/query/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({
+          query: userMessage.content,
+          top_k: 5,
+          use_history: true,
+          conversation_id: currentConversationId,
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok || !response.body) {
+        let errMsg = `HTTP ${response.status}`
+        try {
+          const errJson = await response.json()
+          errMsg = errJson.error || errMsg
+        } catch { /* corpo non JSON, tieni lo status */ }
+        throw new Error(errMsg)
+      }
+
+      // Parser SSE minimale: eventi separati da riga vuota, payload sulla
+      // riga "data: {...}" (vedi query_stream in query.rs — un solo evento
+      // per riga, mai multi-riga, perché serde_json esegue l'escape di \n).
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const events = buffer.split('\n\n')
+        buffer = events.pop() // frammento incompleto, resta in buffer per il prossimo chunk
+
+        for (const raw of events) {
+          const dataLine = raw.split('\n').find(l => l.startsWith('data: '))
+          if (!dataLine) continue // keep-alive SSE o blocco senza payload
+          const payload = JSON.parse(dataLine.slice('data: '.length))
+
+          if (payload.token !== undefined) {
+            appendToken(payload.token)
+          } else if (payload.done) {
+            if (assistantPushed) {
+              setMessages(prev => {
+                const next = [...prev]
+                next[next.length - 1] = { ...next[next.length - 1], sources: payload.sources || [] }
+                return next
+              })
+            } else {
+              assistantPushed = true
+              setMessages(prev => [...prev, {
+                role: 'assistant', content: '(risposta vuota)', sources: payload.sources || [],
+                error: true, timestamp: new Date().toISOString(),
+              }])
+            }
+          }
+        }
+      }
+
+      if (!assistantPushed) {
+        setMessages(prev => [...prev, {
+          role: 'assistant', content: '(nessuna risposta ricevuta)', error: true, timestamp: new Date().toISOString(),
+        }])
+      }
     } catch (error) {
-      const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
+      const isTimeout = error.name === 'AbortError'
       const errorContent = isTimeout
         ? 'Il modello ha impiegato troppo tempo. Riprova.'
-        : `Errore: ${error.response?.data?.error || error.message}`
-      setMessages(prev => [...prev, { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }])
+        : `Errore: ${error.message}`
+      if (assistantPushed) {
+        setMessages(prev => {
+          const next = [...prev]
+          next[next.length - 1] = { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }
+          return next
+        })
+      } else {
+        setMessages(prev => [...prev, { role: 'assistant', content: errorContent, error: true, timestamp: new Date().toISOString() }])
+      }
     } finally {
+      clearTimeout(timeoutId)
       if (modelLoadingTimerRef.current) {
         clearTimeout(modelLoadingTimerRef.current)
         modelLoadingTimerRef.current = null
@@ -1218,7 +1313,7 @@ function App() {
               ))
             )}
 
-            {querying && (
+            {querying && messages[messages.length - 1]?.role === 'user' && (
               <div className="flex justify-start">
                 <div className="bg-slate-700 rounded-lg p-4 text-slate-300">
                   <div className="flex flex-col gap-2">
