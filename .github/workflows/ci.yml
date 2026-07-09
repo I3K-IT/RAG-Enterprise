@@ -75,6 +75,29 @@ name: CI
 # i job CUDA (che non avevano NESSUNA cache) erano la parte più lenta del
 # workflow (~20+ min a ricompilare candle/cudarc/candle-kernels da zero ad
 # ogni run) — non il tag/release in sé.
+#
+# Cache tra release diverse (job "detect-deps-change" + "warm-cache-*"):
+# verificato nella documentazione ufficiale GitHub (non un'ipotesi) —
+# "Workflow runs also cannot restore caches created for different tag
+# names." Ogni tag (v0.1.0, v0.1.1, v0.1.2…) è uno scope di cache isolato,
+# MAI condiviso con un altro tag. L'UNICO fallback disponibile per un tag è
+# la cache del branch di default (main) — ma i job release-* girano SOLO
+# sui tag (if: startsWith(github.ref, 'refs/tags/v')), quindi main non ha
+# MAI popolato le 4 chiavi release-*. Risultato: ogni tag con un nome MAI
+# usato prima parte obbligatoriamente a freddo (13-17 min), a prescindere
+# da quanto spazio di cache resta — non eviction, è lo scoping stesso di
+# GitHub. I job warm-cache-* replicano SOLO la compilazione (stessa chiave
+# cache, stessi RUSTFLAGS/env delle build release — necessario perché Cargo
+# include RUSTFLAGS nel fingerprint degli artefatti: chiave uguale ma flag
+# diversi non riuserebbe comunque gli oggetti già compilati), MAI il resto
+# (frontend/qdrant/packaging/upload, inutili per scaldare solo la cache) —
+# così un tag nuovo trova main già caldo e usa il fallback-al-branch-di-
+# default documentato da GitHub, invece di ripartire da zero. Gate su
+# Cargo.lock/Cargo.toml (non su ogni push a main): le dipendenze cambiano
+# raramente, ricompilare in --release ad ogni commit costerebbe più minuti
+# Actions di quanti ne risparmia. workflow_dispatch bypassa il gate:
+# bottone manuale per "riscalda ora" prima di tagliare una release, se si
+# sospetta che main sia rimasto indietro.
 
 on:
   # SOLO push diretto su main — niente pull_request: anche se il target di
@@ -157,6 +180,166 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Cache warm-up (solo su push a main, solo se cambiano le dipendenze) — vedi
+  # commento in cima al file ("Cache tra release diverse") per il perché.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  detect-deps-change:
+    name: Rileva modifiche a Cargo.lock/Cargo.toml
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet HEAD^ HEAD -- Cargo.lock Cargo.toml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  warm-cache-x86_64:
+    name: Riscalda cache — linux x86_64 (CPU)
+    needs: detect-deps-change
+    if: needs.detect-deps-change.outputs.changed == 'true'
+    # Solo ottimizzazione per la prossima release — un fallimento qui non
+    # deve marcare come rosso l'intero run di main.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      # Stessa chiave del job release-linux-x86_64 — vedi commento in cima al file.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-x86_64
+
+      - name: cargo build --release --features ocr --locked
+        env:
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
+        run: cargo build --release --features ocr --locked --verbose
+
+  warm-cache-x86_64-cuda:
+    name: Riscalda cache — linux x86_64 (CUDA)
+    needs: detect-deps-change
+    if: needs.detect-deps-change.outputs.changed == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Libera spazio disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      - name: "Installa CUDA Toolkit 12.8 (minimo: nvcc, cudart, cublas, nvrtc, curand)"
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+
+      # Stessa chiave del job release-linux-x86_64-cuda — vedi commento in cima al file.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-x86_64-cuda
+
+      - name: cargo build --release --features ocr,cuda --locked
+        env:
+          CUDA_COMPUTE_CAP: "80"
+          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
+        run: |
+          export PATH=/usr/local/cuda-12.8/bin:$PATH
+          cargo build --release --features ocr,cuda --locked --verbose
+
+  warm-cache-arm64:
+    name: Riscalda cache — linux arm64 (CPU)
+    needs: detect-deps-change
+    if: needs.detect-deps-change.outputs.changed == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      # Stessa chiave del job release-linux-arm64 — vedi commento in cima al file.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-arm64
+
+      - name: cargo build --release --features ocr --locked
+        env:
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
+        run: cargo build --release --features ocr --locked --verbose
+
+  warm-cache-arm64-cuda:
+    name: Riscalda cache — linux arm64 (CUDA)
+    needs: detect-deps-change
+    if: needs.detect-deps-change.outputs.changed == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Libera spazio disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+
+      - name: Installa libtesseract-dev + libleptonica-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtesseract-dev libleptonica-dev
+
+      - name: "Installa CUDA Toolkit 12.8 SBSA (minimo: nvcc, cudart, cublas, nvrtc, curand)"
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+
+      # Stessa chiave del job release-linux-arm64-cuda — vedi commento in cima al file.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-arm64-cuda
+
+      - name: cargo build --release --features ocr,cuda --locked
+        env:
+          CUDA_COMPUTE_CAP: "80"
+          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
+          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
+        run: |
+          export PATH=/usr/local/cuda-12.8/bin:$PATH
+          cargo build --release --features ocr,cuda --locked --verbose
 
   # ─────────────────────────────────────────────────────────────────────────
   # Release (solo tag v*) — vedi commento in cima al file per il perché delle
