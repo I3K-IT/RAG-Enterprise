@@ -27,6 +27,7 @@
 //!  7. Ritorna ProcessGuard — al drop i figli ricevono SIGKILL.
 
 use anyhow::{bail, Context, Result};
+use futures_util::{stream, TryStreamExt};
 use serde::Deserialize;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
@@ -377,18 +378,25 @@ pub struct ProcessGuard {
 // ── Costanti ──────────────────────────────────────────────────────────────────
 
 const DOWNLOAD_CONNECTIONS: usize = 8;
-const WRITE_BUFFER_BYTES: usize = 1 << 20; // 1 MB
 
-/// Numero di connessioni parallele per il download di ogni componente.
-/// Default 8 — aggira il tetto di banda di una singola connessione TCP su
-/// link ad alta latenza (funziona bene sulla maggior parte delle reti).
-/// Ma osservato con Starlink: 8 flussi simultanei ottengono AGGREGATO
-/// meno di 1 sola connessione (3MB/s contro 6.7MB/s con aria2c a 1
-/// connessione, stesso file, stesso server — verificato: da un'altra rete
-/// lo stesso server serve a 100MB/s, quindi non è il server) — congestione/
-/// QoS lato Starlink che penalizza traffico multi-flusso, non un limite
-/// nostro o del server. I3K_DOWNLOAD_CONNECTIONS permette di abbassarlo
-/// (anche a 1) su reti dove il default va peggio, senza ricompilare.
+/// Dimensione di ciascun pezzo scaricato via Range request — indipendente
+/// dal numero di connessioni concorrenti (vedi parallel_download). Pezzi
+/// piccoli e numerosi invece di uno enorme per connessione: su un link a
+/// banda irregolare (osservato con Starlink, dove il throughput per
+/// connessione varia molto nel tempo) un pezzo sfortunato che rallenta
+/// bloccava PRIMA l'intera connessione fino alla fine — con pezzi piccoli
+/// un worker libero prende subito il pezzo successivo in coda invece di
+/// restare fermo ad aspettare. Stesso principio di aria2c con -s più alto
+/// di -x. Confermato con aria2c contro lo stesso file (qwen3-14b, stesso
+/// URL del bootstrap): CN:8 reale, 16MiB/s — contro i ~3MB/s del nostro
+/// codice con 8 pezzi fissi da total/8 l'uno. Non era un limite di
+/// Starlink né del server: la granularità dei pezzi era il problema.
+const PIECE_SIZE_BYTES: u64 = 16 * 1024 * 1024; // 16 MB
+
+/// Numero di connessioni concorrenti per il download di ogni componente
+/// (worker che processano la coda di pezzi da PIECE_SIZE_BYTES, vedi
+/// sopra). Default 8. I3K_DOWNLOAD_CONNECTIONS permette di cambiarlo senza
+/// ricompilare, per reti con caratteristiche molto diverse dal solito.
 fn download_connections() -> usize {
     std::env::var("I3K_DOWNLOAD_CONNECTIONS")
         .ok()
@@ -1305,14 +1313,16 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     let downloaded = Arc::new(AtomicU64::new(0));
     let start = Instant::now();
 
-    let chunk_size = (total + n as u64 - 1) / n as u64;
-    let ranges: Vec<(u64, u64)> = (0..n as u64)
-        .map(|i| {
-            let s = i * chunk_size;
-            let e = (s + chunk_size - 1).min(total - 1);
-            (s, e)
-        })
-        .collect();
+    let pieces: Vec<(u64, u64)> = {
+        let mut v = Vec::new();
+        let mut s = 0u64;
+        while s < total {
+            let e = (s + PIECE_SIZE_BYTES - 1).min(total - 1);
+            v.push((s, e));
+            s += PIECE_SIZE_BYTES;
+        }
+        v
+    };
 
     use std::io::IsTerminal;
     let is_tty = std::io::stderr().is_terminal();
@@ -1366,20 +1376,20 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         }
     });
 
-    let mut tasks = Vec::with_capacity(n);
-    for (cs, ce) in ranges {
-        let client = client.clone();
-        let url = final_url.clone();
-        let file = Arc::clone(&file);
-        let dl = Arc::clone(&downloaded);
-        tasks.push(tokio::spawn(async move {
-            download_chunk(client, url, file, cs, ce, dl).await
-        }));
-    }
-
-    for t in tasks {
-        t.await.context("join chunk task")?.context("chunk download")?;
-    }
+    // n worker concorrenti pescano dalla coda di pezzi: un pezzo sfortunato
+    // che rallenta non blocca un intero worker fino alla fine come con un
+    // range enorme fisso — appena un worker libera lo slot, prende il
+    // pezzo successivo in coda (vedi commento su PIECE_SIZE_BYTES).
+    stream::iter(pieces.into_iter().map(Ok::<(u64, u64), anyhow::Error>))
+        .try_for_each_concurrent(n, |(cs, ce)| {
+            let client = client.clone();
+            let url = final_url.clone();
+            let file = Arc::clone(&file);
+            let dl = Arc::clone(&downloaded);
+            async move { download_chunk(client, url, file, cs, ce, dl).await }
+        })
+        .await
+        .context("chunk download")?;
 
     progress_task.abort();
     if is_tty {
@@ -1494,34 +1504,25 @@ async fn download_chunk(
         );
     }
 
+    // Un pezzo è al massimo PIECE_SIZE_BYTES (16MB): bufferizzarlo intero
+    // in RAM prima di scrivere è economico (con n worker concorrenti, picco
+    // ~n×16MB) ed evita di interrompere periodicamente la lettura di rete
+    // per aspettare scritture su disco a metà pezzo — la write, una sola
+    // per pezzo invece che una ogni 1MB, non compete più con la lettura.
     let mut resp = resp;
-    let mut buf: Vec<u8> = Vec::with_capacity(WRITE_BUFFER_BYTES);
-    let mut write_offset = start;
+    let expected = (end - start + 1) as usize;
+    let mut buf: Vec<u8> = Vec::with_capacity(expected);
 
     while let Some(chunk) = resp.chunk().await.context("chunk read")? {
         downloaded.fetch_add(chunk.len() as u64, Ordering::Relaxed);
         buf.extend_from_slice(&chunk);
-
-        if buf.len() >= WRITE_BUFFER_BYTES {
-            let data = std::mem::take(&mut buf);
-            let f = Arc::clone(&file);
-            let off = write_offset;
-            write_offset += data.len() as u64;
-            tokio::task::spawn_blocking(move || f.write_all_at(&data, off))
-                .await
-                .context("spawn_blocking write")?
-                .context("pwrite")?;
-        }
     }
 
-    if !buf.is_empty() {
-        let f = Arc::clone(&file);
-        let off = write_offset;
-        tokio::task::spawn_blocking(move || f.write_all_at(&buf, off))
-            .await
-            .context("spawn_blocking write (flush)")?
-            .context("pwrite (flush)")?;
-    }
+    let f = Arc::clone(&file);
+    tokio::task::spawn_blocking(move || f.write_all_at(&buf, start))
+        .await
+        .context("spawn_blocking write")?
+        .context("pwrite")?;
 
     Ok(())
 }
