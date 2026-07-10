@@ -824,7 +824,7 @@ fn write_live_report(
 pub async fn run(
     settings: &Settings,
     args: &BenchArgs,
-    embeddings: &EmbeddingService,
+    embeddings: &mut EmbeddingService,
     eullm: std::sync::Arc<EullmClient>,
 ) -> Result<()> {
     if !args.doc_path.is_file() {
@@ -839,7 +839,19 @@ pub async fn run(
         .context("init Qdrant benchmark")?;
 
     tracing::info!(doc = %args.doc_path.display(), "avvio benchmark ingestione");
-    let ingestion = run_ingestion(&args.doc_path, settings, embeddings, &qdrant).await?;
+    // Stesso swap di api/documents.rs::upload() sull'ingestione reale — senza
+    // questo, con swap_during_ingestion=true l'embedding resta CPU-parked
+    // (la VRAM è di eullm) e l'ingestione del benchmark gira su CPU mentre
+    // quella reale userebbe la GPU: misurerebbe il percorso sbagliato.
+    let swap_enabled = settings.embeddings.swap_during_ingestion;
+    if swap_enabled {
+        swap_embedding_device(embeddings, true);
+    }
+    let ingestion_result = run_ingestion(&args.doc_path, settings, embeddings, &qdrant).await;
+    if swap_enabled {
+        swap_embedding_device(embeddings, false);
+    }
+    let ingestion = ingestion_result?;
 
     let queries = if args.queries.is_empty() { default_queries() } else { args.queries.clone() };
     let mut inferences = Vec::with_capacity(queries.len());
@@ -854,6 +866,30 @@ pub async fn run(
     println!("Report completo: {}", report_path.display());
 
     Ok(())
+}
+
+/// Stessa logica di AppState::swap_embeddings_to_gpu/_to_cpu, ma qui non
+/// esiste un AppState (--bench <file> non ne costruisce uno: niente DB,
+/// niente server). Un fallimento non è fatale — come in
+/// api/documents.rs::upload(), si logga e si prosegue con il device
+/// corrente piuttosto che abortire un benchmark già in corso.
+fn swap_embedding_device(embeddings: &mut EmbeddingService, to_gpu: bool) {
+    let model_id = embeddings.model_id().to_owned();
+    let loaded = if to_gpu {
+        tracing::info!(
+            "swap_during_ingestion attivo: sposto l'embedding su GPU per l'ingestione del benchmark"
+        );
+        EmbeddingService::load_gpu_for_ingestion(&model_id)
+    } else {
+        tracing::info!("rimetto l'embedding su CPU dopo l'ingestione del benchmark");
+        EmbeddingService::load_cpu_parked(&model_id)
+    };
+    match loaded {
+        Ok(fresh) => *embeddings = fresh,
+        Err(e) => tracing::warn!(
+            error = %e, to_gpu, "swap embedding fallito, continuo con il device corrente"
+        ),
+    }
 }
 
 #[cfg(test)]
