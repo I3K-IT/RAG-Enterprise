@@ -379,6 +379,24 @@ pub struct ProcessGuard {
 const DOWNLOAD_CONNECTIONS: usize = 8;
 const WRITE_BUFFER_BYTES: usize = 1 << 20; // 1 MB
 
+/// Numero di connessioni parallele per il download di ogni componente.
+/// Default 8 — aggira il tetto di banda di una singola connessione TCP su
+/// link ad alta latenza (funziona bene sulla maggior parte delle reti).
+/// Ma osservato con Starlink: 8 flussi simultanei ottengono AGGREGATO
+/// meno di 1 sola connessione (3MB/s contro 6.7MB/s con aria2c a 1
+/// connessione, stesso file, stesso server — verificato: da un'altra rete
+/// lo stesso server serve a 100MB/s, quindi non è il server) — congestione/
+/// QoS lato Starlink che penalizza traffico multi-flusso, non un limite
+/// nostro o del server. I3K_DOWNLOAD_CONNECTIONS permette di abbassarlo
+/// (anche a 1) su reti dove il default va peggio, senza ricompilare.
+fn download_connections() -> usize {
+    std::env::var("I3K_DOWNLOAD_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(DOWNLOAD_CONNECTIONS)
+}
+
 const QDRANT_READY_TIMEOUT_SECS: u64 = 60;
 const EULLM_READY_TIMEOUT_SECS: u64 = 600;
 const POLL_INTERVAL_MS: u64 = 2_000;
@@ -539,7 +557,7 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
     let partial = dest.with_extension("partial");
     tokio::fs::remove_file(&partial).await.ok();
 
-    parallel_download(&comp.url, &partial, &comp.name, DOWNLOAD_CONNECTIONS).await?;
+    parallel_download(&comp.url, &partial, &comp.name, download_connections()).await?;
 
     match &comp.archive_member {
         Some(member) => extract_and_verify_member(comp, &partial, member, dest).await?,
@@ -987,7 +1005,7 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
         &asset.browser_download_url,
         &partial,
         &format!("eullm {latest_str}"),
-        DOWNLOAD_CONNECTIONS,
+        download_connections(),
     )
     .await
     {
@@ -1453,13 +1471,30 @@ async fn download_chunk(
     end: u64,
     downloaded: Arc<AtomicU64>,
 ) -> Result<()> {
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", format!("bytes={start}-{end}"))
         .send()
         .await
         .context("range GET")?;
 
+    // Se il server ignora la Range e risponde 200 invece di 206, questo
+    // "chunk" riceve l'INTERO file invece del solo pezzo richiesto — con 8
+    // task paralleli vorrebbe dire scaricare il file 8 volte, gran parte
+    // dei byte scartati/sovrascritti: banda sprecata, non guadagnata.
+    // Verificato solo qui perché accept-ranges nell'header della probe GET
+    // può essere dichiarato ma non onorato davvero dal server/proxy.
+    if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        tracing::warn!(
+            status = %resp.status(),
+            range = format!("bytes={start}-{end}"),
+            url = %url,
+            "server non ha risposto 206 Partial Content a una richiesta Range — \
+             probabile download ridondante dell'intero file invece del solo pezzo"
+        );
+    }
+
+    let mut resp = resp;
     let mut buf: Vec<u8> = Vec::with_capacity(WRITE_BUFFER_BYTES);
     let mut write_offset = start;
 
