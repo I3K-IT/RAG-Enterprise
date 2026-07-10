@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use anyhow::Context;
 use sqlx::SqlitePool;
 
+use crate::bench::LiveRecorder;
 use crate::clients::embeddings::EmbeddingService;
 use crate::clients::eullm::EullmClient;
 use crate::config::Settings;
@@ -33,6 +34,11 @@ pub struct AppState {
     /// temporaneamente eullm dalla VRAM durante l'ingestione (richiede
     /// l'endpoint /api/unload di eullm, non ancora rilasciato).
     pub active_ingestions: Arc<AtomicUsize>,
+    /// Some(...) solo se avviato con --bench-live: ogni ingestione/query
+    /// reale viene cronometrata e registrata qui invece che scartata — vedi
+    /// bench::LiveRecorder. None (default) costa un controllo Option a
+    /// richiesta, nessun overhead di misurazione.
+    pub live_bench: Option<Arc<LiveRecorder>>,
 }
 
 /// Guardia RAII: incrementa active_ingestions alla creazione, decrementa
@@ -60,6 +66,7 @@ impl AppState {
         embeddings: EmbeddingService,
         qdrant: Arc<dyn VectorStore>,
         eullm: EullmClient,
+        live_bench: Option<Arc<LiveRecorder>>,
     ) -> Self {
         let storage = FileStorage::new(&settings.storage.documents_dir);
         Self {
@@ -70,6 +77,7 @@ impl AppState {
             eullm: Arc::new(eullm),
             storage: Arc::new(storage),
             active_ingestions: Arc::new(AtomicUsize::new(0)),
+            live_bench,
         }
     }
 

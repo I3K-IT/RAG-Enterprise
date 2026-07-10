@@ -14,6 +14,7 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::auth::jwt::Claims;
+use crate::bench;
 use crate::db;
 use crate::rag::vector_store::ChunkPayload;
 use crate::documents::parser;
@@ -135,6 +136,9 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     }
 
     // 3. Extract text (sync, possibly heavy — run off the async executor).
+    // Timer coperto anche se --bench-live è spento: un Instant::now() costa
+    // nulla di rilevante, non vale la pena condizionarlo.
+    let extract_start = std::time::Instant::now();
     let (text, page_count) = match tokio::task::spawn_blocking({
         let tmp = tmp_path.clone();
         let data_dir = state.settings.data.data_path();
@@ -150,9 +154,12 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         Ok(Err(e)) => return err(StatusCode::UNPROCESSABLE_ENTITY, e),
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("parse task: {e}")),
     };
+    let extract_time = extract_start.elapsed();
 
     // 4. Chunk
+    let chunk_start = std::time::Instant::now();
     let chunks = chunker::split_text(&text);
+    let chunk_time = chunk_start.elapsed();
     if chunks.is_empty() {
         return err(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -161,6 +168,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     }
 
     // 5. Embed — CPU/GPU bound, spawn_blocking
+    let embed_start = std::time::Instant::now();
     let embeddings_svc = state.embeddings.clone();
     let chunk_strs: Vec<String> = chunks.clone();
     let embeddings = match tokio::task::spawn_blocking(move || {
@@ -176,6 +184,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("embedding: {e}")),
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("embed task: {e}")),
     };
+    let embed_time = embed_start.elapsed();
 
     // 6. Build Qdrant payloads and upsert
     let document_id = uuid::Uuid::new_v4().to_string();
@@ -196,8 +205,30 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         })
         .collect();
 
+    let upsert_start = std::time::Instant::now();
     if let Err(e) = state.qdrant.upsert(&embeddings, &payloads).await {
         return err(StatusCode::INTERNAL_SERVER_ERROR, format!("qdrant upsert: {e}"));
+    }
+    let upsert_time = upsert_start.elapsed();
+
+    // --bench-live: registra questa ingestione reale (vedi bench::LiveRecorder).
+    if let Some(rec) = &state.live_bench {
+        rec.record_ingestion(
+            filename.clone(),
+            bench::IngestionResult {
+                document_id: document_id.clone(),
+                stages: vec![
+                    bench::StageTiming { name: "Estrazione testo", duration: extract_time },
+                    bench::StageTiming { name: "Chunking", duration: chunk_time },
+                    bench::StageTiming { name: "Embedding", duration: embed_time },
+                    bench::StageTiming { name: "Upsert Qdrant", duration: upsert_time },
+                ],
+                page_count,
+                word_count: text.split_whitespace().count(),
+                char_count: text.chars().count(),
+                chunk_count: chunks.len(),
+            },
+        );
     }
 
     // 7. Persist metadata in SQLite

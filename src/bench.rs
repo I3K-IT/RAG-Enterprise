@@ -8,6 +8,7 @@
 //! run) per non toccare mai i dati reali dell'utente.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -46,6 +47,17 @@ pub fn parse_args(args: &[String]) -> Option<BenchArgs> {
     Some(BenchArgs { doc_path, queries })
 }
 
+/// `--bench-live`: modalità alternativa a `--bench <file>` — il server e il
+/// frontend partono normalmente, e OGNI ingestione/query reale fatta durante
+/// la sessione viene cronometrata e registrata (vedi LiveRecorder). Il
+/// report viene scritto alla chiusura (SIGINT/SIGTERM, vedi main.rs). A
+/// differenza di `--bench <file>` il carico non è fisso: utile per capire il
+/// comportamento sotto uso reale, non per confrontare hardware diversi a
+/// parità di carico (per quello serve `--bench <file>`, riproducibile).
+pub fn live_mode_requested(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--bench-live")
+}
+
 fn default_queries() -> Vec<String> {
     vec![
         "Riassumi in breve il contenuto di questo documento.".to_owned(),
@@ -55,16 +67,16 @@ fn default_queries() -> Vec<String> {
 
 // ── Hardware ─────────────────────────────────────────────────────────────────
 
-struct HardwareInfo {
-    cpu_model: String,
-    cpu_cores: usize,
-    ram_total_mb: u64,
-    gpu_name: Option<String>,
-    gpu_vram_total_mb: Option<u64>,
-    gpu_vram_free_mb: Option<u64>,
-    os: String,
-    embedding_device: String,
-    eullm_model: String,
+pub struct HardwareInfo {
+    pub cpu_model: String,
+    pub cpu_cores: usize,
+    pub ram_total_mb: u64,
+    pub gpu_name: Option<String>,
+    pub gpu_vram_total_mb: Option<u64>,
+    pub gpu_vram_free_mb: Option<u64>,
+    pub os: String,
+    pub embedding_device: String,
+    pub eullm_model: String,
 }
 
 fn cpu_model() -> String {
@@ -137,7 +149,7 @@ fn gpu_info() -> (Option<String>, Option<u64>, Option<u64>) {
     }
 }
 
-fn collect_hardware_info(embeddings: &EmbeddingService, eullm_model: &str) -> HardwareInfo {
+pub fn collect_hardware_info(embeddings: &EmbeddingService, eullm_model: &str) -> HardwareInfo {
     let (gpu_name, gpu_vram_total_mb, gpu_vram_free_mb) = gpu_info();
     HardwareInfo {
         cpu_model: cpu_model(),
@@ -154,9 +166,9 @@ fn collect_hardware_info(embeddings: &EmbeddingService, eullm_model: &str) -> Ha
 
 // ── Timing ───────────────────────────────────────────────────────────────────
 
-struct StageTiming {
-    name: &'static str,
-    duration: Duration,
+pub struct StageTiming {
+    pub name: &'static str,
+    pub duration: Duration,
 }
 
 impl StageTiming {
@@ -165,13 +177,13 @@ impl StageTiming {
     }
 }
 
-struct IngestionResult {
-    document_id: String,
-    stages: Vec<StageTiming>,
-    page_count: Option<u32>,
-    word_count: usize,
-    char_count: usize,
-    chunk_count: usize,
+pub struct IngestionResult {
+    pub document_id: String,
+    pub stages: Vec<StageTiming>,
+    pub page_count: Option<u32>,
+    pub word_count: usize,
+    pub char_count: usize,
+    pub chunk_count: usize,
 }
 
 impl IngestionResult {
@@ -180,23 +192,23 @@ impl IngestionResult {
     }
 }
 
-struct InferenceResult {
-    query: String,
-    embed_query: Duration,
-    search: Duration,
-    prompt_build: Duration,
-    ttft: Duration,
-    total_generation: Duration,
-    tokens_generated: usize,
-    chunks_retrieved: usize,
-    chunks_from_bench_doc: usize,
+pub struct InferenceResult {
+    pub query: String,
+    pub embed_query: Duration,
+    pub search: Duration,
+    pub prompt_build: Duration,
+    pub ttft: Duration,
+    pub total_generation: Duration,
+    pub tokens_generated: usize,
+    pub chunks_retrieved: usize,
+    pub chunks_from_bench_doc: usize,
 }
 
 impl InferenceResult {
     /// token/sec nella sola fase di decode (esclude il prefill/TTFT) — è la
     /// velocità "di regime", quella che conta per risposte lunghe. Con un
     /// solo token generato non è definita (nessun intervallo decode misurabile).
-    fn decode_tokens_per_sec(&self) -> Option<f64> {
+    pub fn decode_tokens_per_sec(&self) -> Option<f64> {
         if self.tokens_generated < 2 {
             return None;
         }
@@ -524,6 +536,269 @@ fn write_markdown_report(
     Ok(path)
 }
 
+// ── Modalità live (--bench-live) ────────────────────────────────────────────
+
+/// Registra tempi/hardware di ogni ingestione e query REALI fatte da
+/// frontend durante la sessione — a differenza di `--bench <file>`, che
+/// misura un unico documento sintetico. Costruito una volta all'avvio se
+/// `--bench-live` è passato (vedi main.rs) e condiviso via
+/// `AppState::live_bench`. Il report è scritto alla chiusura del server
+/// (SIGINT/SIGTERM, vedi main.rs) — niente endpoint dedicato nell'MVP.
+pub struct LiveRecorder {
+    hardware: HardwareInfo,
+    started_at: String,
+    ingestions: Mutex<Vec<LiveIngestion>>,
+    inferences: Mutex<Vec<LiveInference>>,
+}
+
+struct LiveIngestion {
+    at: String,
+    filename: String,
+    result: IngestionResult,
+}
+
+struct LiveInference {
+    at: String,
+    result: InferenceResult,
+}
+
+impl LiveRecorder {
+    pub fn new(embeddings: &EmbeddingService, eullm_model: &str) -> Self {
+        Self {
+            hardware: collect_hardware_info(embeddings, eullm_model),
+            started_at: now_string(),
+            ingestions: Mutex::new(Vec::new()),
+            inferences: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Mai fallire la richiesta reale per colpa della registrazione: un
+    /// lock avvelenato scarta l'evento con un warning invece di propagare
+    /// un errore al chiamante (upload/query reali dell'utente).
+    pub fn record_ingestion(&self, filename: String, result: IngestionResult) {
+        match self.ingestions.lock() {
+            Ok(mut v) => v.push(LiveIngestion { at: now_string(), filename, result }),
+            Err(_) => tracing::warn!("bench-live: lock ingestioni avvelenato, evento perso"),
+        }
+    }
+
+    pub fn record_inference(&self, result: InferenceResult) {
+        match self.inferences.lock() {
+            Ok(mut v) => v.push(LiveInference { at: now_string(), result }),
+            Err(_) => tracing::warn!("bench-live: lock inferenze avvelenato, evento perso"),
+        }
+    }
+
+    /// Scrive il report aggregato. `Ok(None)` se non è stata registrata
+    /// nessuna ingestione/query (server avviato e chiuso senza uso reale nel
+    /// frattempo) — niente report vuoto a confondere un run reale.
+    pub fn write_report(&self) -> Result<Option<PathBuf>> {
+        let ingestions = self
+            .ingestions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("bench-live: lock ingestioni avvelenato"))?;
+        let inferences = self
+            .inferences
+            .lock()
+            .map_err(|_| anyhow::anyhow!("bench-live: lock inferenze avvelenato"))?;
+        if ingestions.is_empty() && inferences.is_empty() {
+            return Ok(None);
+        }
+        write_live_report(&self.hardware, &self.started_at, &ingestions, &inferences).map(Some)
+    }
+}
+
+fn now_string() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn avg_ms<'a>(durations: impl Iterator<Item = &'a Duration>) -> f64 {
+    let (sum, n) = durations.fold((0.0_f64, 0usize), |(s, n), d| (s + d.as_secs_f64() * 1000.0, n + 1));
+    if n == 0 { 0.0 } else { sum / n as f64 }
+}
+
+fn write_live_report(
+    hw: &HardwareInfo,
+    started_at: &str,
+    ingestions: &[LiveIngestion],
+    inferences: &[LiveInference],
+) -> Result<PathBuf> {
+    let now = now_string();
+    let path = PathBuf::from(format!(
+        "benchmark-live-report-{}.md",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    ));
+
+    let mut md = String::new();
+    md.push_str(&format!(
+        "# Benchmark live i3k-rag-engine — sessione avviata {started_at}, report generato {now}\n\n"
+    ));
+    md.push_str(&format!(
+        "Registrate {} ingestioni e {} query reali durante la sessione (uso da frontend, carico non \
+         controllato — per confrontare hardware diversi a parità di carico usa `--bench <file>`, non questa modalità).\n\n",
+        ingestions.len(),
+        inferences.len()
+    ));
+
+    md.push_str("## Hardware\n\n");
+    md.push_str("| Componente | Dettaglio |\n|---|---|\n");
+    md.push_str(&format!("| CPU | {} ({} core) |\n", hw.cpu_model, hw.cpu_cores));
+    md.push_str(&format!("| RAM | {} MB |\n", hw.ram_total_mb));
+    match (&hw.gpu_name, hw.gpu_vram_total_mb, hw.gpu_vram_free_mb) {
+        (Some(name), Some(total), Some(free)) => {
+            md.push_str(&format!("| GPU | {name} |\n"));
+            md.push_str(&format!("| VRAM | {free} MB liberi / {total} MB totali (all'avvio) |\n"));
+        }
+        _ => md.push_str("| GPU | non rilevata (nvidia-smi non disponibile o nessuna GPU) |\n"),
+    }
+    md.push_str(&format!("| OS | {} |\n", hw.os));
+    md.push_str(&format!("| Device embedding | {} |\n", hw.embedding_device));
+    md.push_str(&format!("| Modello eullm | {} |\n", hw.eullm_model));
+
+    let mut bottleneck_stages: Vec<(&str, f64)> = Vec::new();
+
+    if !ingestions.is_empty() {
+        md.push_str("\n## Ingestioni\n\n");
+        md.push_str(
+            "| Ora | File | Pagine | Parole | Chunk | Estrazione (ms) | Chunking (ms) | Embedding (ms) | Upsert (ms) | Totale (ms) |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        );
+        for ing in ingestions {
+            let stage_ms = |name: &str| {
+                ing.result.stages.iter().find(|s| s.name == name).map(|s| s.ms()).unwrap_or(0.0)
+            };
+            md.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} |\n",
+                ing.at,
+                ing.filename,
+                hw_opt(ing.result.page_count),
+                ing.result.word_count,
+                ing.result.chunk_count,
+                stage_ms("Estrazione testo"),
+                stage_ms("Chunking"),
+                stage_ms("Embedding"),
+                stage_ms("Upsert Qdrant"),
+                ing.result.total().as_secs_f64() * 1000.0,
+            ));
+        }
+
+        let by_stage = |name: &'static str| {
+            avg_ms(
+                ingestions
+                    .iter()
+                    .filter_map(move |i| i.result.stages.iter().find(|s| s.name == name))
+                    .map(|s| &s.duration),
+            )
+        };
+        let extract_avg = by_stage("Estrazione testo");
+        let chunk_avg = by_stage("Chunking");
+        let embed_avg = by_stage("Embedding");
+        let upsert_avg = by_stage("Upsert Qdrant");
+
+        md.push_str(&format!(
+            "\n**Medie su {} ingestioni**: estrazione {extract_avg:.0} ms, chunking {chunk_avg:.0} ms, embedding {embed_avg:.0} ms, upsert {upsert_avg:.0} ms — totale medio {:.0} ms.\n",
+            ingestions.len(),
+            extract_avg + chunk_avg + embed_avg + upsert_avg
+        ));
+
+        md.push_str("\n```mermaid\npie title Tempo medio di ingestione per fase\n");
+        md.push_str(&format!("    \"Estrazione testo\" : {:.1}\n", extract_avg.max(0.1)));
+        md.push_str(&format!("    \"Chunking\" : {:.1}\n", chunk_avg.max(0.1)));
+        md.push_str(&format!("    \"Embedding\" : {:.1}\n", embed_avg.max(0.1)));
+        md.push_str(&format!("    \"Upsert Qdrant\" : {:.1}\n", upsert_avg.max(0.1)));
+        md.push_str("```\n");
+
+        bottleneck_stages.push(("Ingestione: estrazione testo", extract_avg));
+        bottleneck_stages.push(("Ingestione: chunking", chunk_avg));
+        bottleneck_stages.push(("Ingestione: embedding", embed_avg));
+        bottleneck_stages.push(("Ingestione: upsert Qdrant", upsert_avg));
+    }
+
+    if !inferences.is_empty() {
+        md.push_str("\n## Query\n\n");
+        md.push_str(
+            "| Ora | Domanda | Chunk trovati | Embed query (ms) | Ricerca (ms) | Prompt (ms) | TTFT (ms) | Generazione tot (ms) | Token | Decode tok/s |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        );
+        for inf in inferences {
+            let tps = inf
+                .result
+                .decode_tokens_per_sec()
+                .map(|v| format!("{v:.1}"))
+                .unwrap_or_else(|| "N/A".to_owned());
+            md.push_str(&format!(
+                "| {} | {} | {} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} | {} | {} |\n",
+                inf.at,
+                truncate(&inf.result.query, 50),
+                inf.result.chunks_retrieved,
+                inf.result.embed_query.as_secs_f64() * 1000.0,
+                inf.result.search.as_secs_f64() * 1000.0,
+                inf.result.prompt_build.as_secs_f64() * 1000.0,
+                inf.result.ttft.as_secs_f64() * 1000.0,
+                inf.result.total_generation.as_secs_f64() * 1000.0,
+                inf.result.tokens_generated,
+                tps,
+            ));
+        }
+
+        let embed_avg = avg_ms(inferences.iter().map(|i| &i.result.embed_query));
+        let search_avg = avg_ms(inferences.iter().map(|i| &i.result.search));
+        let prompt_avg = avg_ms(inferences.iter().map(|i| &i.result.prompt_build));
+        let ttft_avg = avg_ms(inferences.iter().map(|i| &i.result.ttft));
+        let decode_durations: Vec<Duration> = inferences
+            .iter()
+            .map(|i| i.result.total_generation.saturating_sub(i.result.ttft))
+            .collect();
+        let decode_avg = avg_ms(decode_durations.iter());
+        let tps_values: Vec<f64> =
+            inferences.iter().filter_map(|i| i.result.decode_tokens_per_sec()).collect();
+        let tps_avg = if tps_values.is_empty() {
+            None
+        } else {
+            Some(tps_values.iter().sum::<f64>() / tps_values.len() as f64)
+        };
+
+        md.push_str(&format!(
+            "\n**Medie su {} query**: embed query {embed_avg:.0} ms, ricerca {search_avg:.0} ms, prompt {prompt_avg:.0} ms, TTFT {ttft_avg:.0} ms, decode {decode_avg:.0} ms",
+            inferences.len()
+        ));
+        match tps_avg {
+            Some(v) => md.push_str(&format!(", velocità decode media {v:.1} token/sec.\n")),
+            None => md.push_str(" (velocità decode: N/A, troppo pochi token per query).\n"),
+        }
+
+        md.push_str("\n```mermaid\npie title Tempo medio di inferenza per fase\n");
+        md.push_str(&format!("    \"Embedding query\" : {:.1}\n", embed_avg.max(0.1)));
+        md.push_str(&format!("    \"Ricerca Qdrant\" : {:.1}\n", search_avg.max(0.1)));
+        md.push_str(&format!("    \"Costruzione prompt\" : {:.1}\n", prompt_avg.max(0.1)));
+        md.push_str(&format!("    \"Prefill (TTFT)\" : {:.1}\n", ttft_avg.max(0.1)));
+        md.push_str(&format!("    \"Decode\" : {:.1}\n", decode_avg.max(0.1)));
+        md.push_str("```\n");
+
+        bottleneck_stages.push(("Query: embedding", embed_avg));
+        bottleneck_stages.push(("Query: ricerca Qdrant", search_avg));
+        bottleneck_stages.push(("Query: costruzione prompt", prompt_avg));
+        bottleneck_stages.push(("Query: prefill/TTFT", ttft_avg));
+        bottleneck_stages.push(("Query: decode", decode_avg));
+    }
+
+    if !bottleneck_stages.is_empty() {
+        md.push_str("\n## Riepilogo colli di bottiglia\n\n");
+        bottleneck_stages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        md.push_str("Fasi ordinate per tempo MEDIO assoluto (dalla più lenta):\n\n");
+        md.push_str("| Fase | Tempo medio (ms) |\n|---|---|\n");
+        for (name, ms) in &bottleneck_stages {
+            md.push_str(&format!("| {name} | {ms:.0} |\n"));
+        }
+        if let Some((name, ms)) = bottleneck_stages.first() {
+            md.push_str(&format!(
+                "\n**Fase più lenta in media**: {name} ({ms:.0} ms) — è il primo posto da guardare per ottimizzare.\n"
+            ));
+        }
+    }
+
+    std::fs::write(&path, md).with_context(|| format!("scrittura report {}", path.display()))?;
+    Ok(path)
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 pub async fn run(
@@ -602,6 +877,24 @@ mod tests {
     #[test]
     fn parse_args_missing_path_returns_none() {
         assert!(parse_args(&args(&["i3k-rag-engine", "--bench"])).is_none());
+    }
+
+    #[test]
+    fn live_mode_requires_flag() {
+        assert!(!live_mode_requested(&args(&["i3k-rag-engine"])));
+        assert!(live_mode_requested(&args(&["i3k-rag-engine", "--bench-live"])));
+    }
+
+    #[test]
+    fn avg_ms_empty_iterator_is_zero() {
+        let v: Vec<Duration> = vec![];
+        assert_eq!(avg_ms(v.iter()), 0.0);
+    }
+
+    #[test]
+    fn avg_ms_computes_mean() {
+        let v = [Duration::from_millis(100), Duration::from_millis(200), Duration::from_millis(300)];
+        assert!((avg_ms(v.iter()) - 200.0).abs() < 0.01);
     }
 
     #[test]
