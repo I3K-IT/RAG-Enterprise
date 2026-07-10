@@ -839,17 +839,31 @@ pub async fn run(
         .context("init Qdrant benchmark")?;
 
     tracing::info!(doc = %args.doc_path.display(), "avvio benchmark ingestione");
-    // Stesso swap di api/documents.rs::upload() sull'ingestione reale — senza
-    // questo, con swap_during_ingestion=true l'embedding resta CPU-parked
-    // (la VRAM è di eullm) e l'ingestione del benchmark gira su CPU mentre
-    // quella reale userebbe la GPU: misurerebbe il percorso sbagliato.
+    // Stesso ordine di api/documents.rs::upload() sull'ingestione reale:
+    // libera VRAM (eullm) PRIMA di occuparla (bge-m3), rientro speculare a
+    // fine ingestione. Senza unload_during_ingestion, eullm resta piazzato
+    // con la sua allocazione fissa (qui non si adatta, vedi eullm.fit) e lo
+    // swap dell'embedding su GPU può non trovare VRAM sufficiente e
+    // fallire silenziosamente (log "swap embedding fallito") — misurando di
+    // nuovo il percorso sbagliato: CPU invece di GPU.
+    let unload_enabled = settings.eullm.unload_during_ingestion;
     let swap_enabled = settings.embeddings.swap_during_ingestion;
+    if unload_enabled {
+        if let Err(e) = eullm.unload().await {
+            tracing::error!(error = %e, "eullm: unload pre-ingestione fallito, procedo comunque (nessuna VRAM liberata)");
+        }
+    }
     if swap_enabled {
         swap_embedding_device(embeddings, true);
     }
     let ingestion_result = run_ingestion(&args.doc_path, settings, embeddings, &qdrant).await;
     if swap_enabled {
         swap_embedding_device(embeddings, false);
+    }
+    if unload_enabled {
+        if let Err(e) = eullm.reload().await {
+            tracing::error!(error = %e, "eullm: reload post-ingestione fallito — il modello potrebbe non essere in VRAM, verifica manualmente");
+        }
     }
     let ingestion = ingestion_result?;
 
