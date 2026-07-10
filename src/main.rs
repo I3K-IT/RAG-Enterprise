@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     // _guard: usato solo per Drop (kill_on_drop dei processi figlio) da qui
     // in poi — il path GGUF di eullm è già stato consumato da
     // build_eullm_client() dentro ciascun branch, prima di questa tupla.
-    let (_guard, embeddings, eullm) = if settings.eullm.fit {
+    let (_guard, mut embeddings, eullm) = if settings.eullm.fit {
         tracing::info!(
             "eullm.fit=true: carico l'embedding PRIMA di avviare eullm, così --fit vede la VRAM già ridotta"
         );
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     // spenti correttamente a benchmark concluso (Drop → SIGKILL figli).
     if let Some(bench_args) = bench::parse_args(&args) {
         tracing::info!(doc = %bench_args.doc_path.display(), "modalità benchmark");
-        return bench::run(&settings, &bench_args, &embeddings, Arc::new(eullm)).await;
+        return bench::run(&settings, &bench_args, &mut embeddings, Arc::new(eullm)).await;
     }
 
     // --bench-live: server e frontend partono normalmente, ma ogni
