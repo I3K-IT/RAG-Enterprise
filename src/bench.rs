@@ -237,6 +237,10 @@ async fn run_ingestion(
         .context("join estrazione testo")?
         .with_context(|| format!("estrazione testo da {}", doc_path.display()))?;
     let extract_time = t.elapsed();
+    tracing::info!(
+        pages = ?page_count, chars = text.chars().count(), ms = extract_time.as_millis(),
+        "estrazione completata"
+    );
 
     let word_count = text.split_whitespace().count();
     let char_count = text.chars().count();
@@ -247,11 +251,19 @@ async fn run_ingestion(
     if chunks.is_empty() {
         anyhow::bail!("nessun testo estratto da {} — impossibile fare benchmark", doc_path.display());
     }
+    // Silenzio radio tra qui e la fine dell'embedding può durare minuti sui
+    // documenti grandi (centinaia di chunk, un'unica chiamata embed_texts) —
+    // questo log evita che sembri bloccato quando sta solo lavorando.
+    tracing::info!(
+        chunks = chunks.len(), ms = chunk_time.as_millis(),
+        "chunking completato, avvio embedding (può richiedere qualche minuto sui documenti grandi)"
+    );
 
     let t = Instant::now();
     let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
     let embedding_vecs = embeddings.embed_texts(&chunk_refs).context("embedding chunk")?;
     let embed_time = t.elapsed();
+    tracing::info!(ms = embed_time.as_millis(), "embedding completato, avvio upsert su Qdrant");
 
     let document_id = uuid::Uuid::new_v4().to_string();
     let filename = doc_path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
@@ -275,6 +287,7 @@ async fn run_ingestion(
     let t = Instant::now();
     qdrant.upsert(&embedding_vecs, &payloads).await.context("upsert Qdrant")?;
     let upsert_time = t.elapsed();
+    tracing::info!(ms = upsert_time.as_millis(), "upsert completato, ingestione finita");
 
     Ok(IngestionResult {
         document_id,
@@ -310,6 +323,7 @@ async fn run_inference(
         .await
         .context("ricerca Qdrant")?;
     let search = t.elapsed();
+    tracing::info!(chunks_retrieved = hits.len(), ms = search.as_millis(), "ricerca completata");
 
     let chunks_from_bench_doc = hits.iter().filter(|h| h.payload.document_id == bench_document_id).count();
 
@@ -323,6 +337,7 @@ async fn run_inference(
     let full_prompt = prompt::build_prompt(&context, query, &[]);
     let prompt_build = t.elapsed();
 
+    tracing::info!("avvio generazione eullm");
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
     let eullm_task = eullm.clone();
     let prompt_for_task = full_prompt.clone();
@@ -334,11 +349,16 @@ async fn run_inference(
     while let Some(_token) = rx.recv().await {
         if ttft.is_none() {
             ttft = Some(gen_start.elapsed());
+            tracing::info!(ttft_ms = gen_start.elapsed().as_millis(), "primo token ricevuto");
         }
         tokens_generated += 1;
     }
     let total_generation = gen_start.elapsed();
     gen_handle.await.context("join generazione eullm")?.context("eullm invoke_stream")?;
+    tracing::info!(
+        tokens = tokens_generated, ms = total_generation.as_millis(),
+        "generazione completata"
+    );
 
     Ok(InferenceResult {
         query: query.to_owned(),
