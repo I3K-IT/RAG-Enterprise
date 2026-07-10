@@ -351,12 +351,30 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # Release (solo tag v*) — vedi commento in cima al file per il perché delle
   # 4 varianti separate e dei parametri CUDA.
+  #
+  # Ogni job pubblica il proprio tarball DIRETTAMENTE come asset della
+  # GitHub Release (softprops/action-gh-release), non più via
+  # actions/upload-artifact + un job "publish-release" finale che li
+  # riscarica. Motivo: gli artifact di Actions hanno una quota di storage a
+  # parte (500MB su GitHub Free, ricalcolata ogni 6-12h) — con 4 tarball
+  # CUDA-bundled a centinaia di MB l'uno, uno o due tag bastavano a saturarla
+  # e bloccare l'upload (osservato in produzione sul tag v0.1.8: "Failed to
+  # CreateArtifact: Artifact storage quota has been hit"). Gli asset di una
+  # Release vivono in uno storage separato, senza questo tetto — pubblicare
+  # lì direttamente elimina il problema alla radice invece di rincorrere
+  # retention-days più corti o cancellazioni manuali. softprops/action-gh-
+  # release è idempotente sul tag: la prima chiamata crea la Release, le
+  # successive (dai job paralleli) aggiungono solo il proprio asset a quella
+  # già esistente — pattern comune per release multi-piattaforma, non serve
+  # serializzare i 4 job con `needs`.
   # ─────────────────────────────────────────────────────────────────────────
 
   release-linux-x86_64:
     name: Release — linux x86_64 (CPU)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -414,16 +432,17 @@ jobs:
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: softprops/action-gh-release@v3
         with:
-          name: release-linux-x86_64
-          path: dist/*
-          retention-days: 7
+          files: dist/*
+          fail_on_unmatched_files: true
 
   release-linux-x86_64-cuda:
     name: Release — linux x86_64 (CUDA)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -509,16 +528,17 @@ jobs:
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: softprops/action-gh-release@v3
         with:
-          name: release-linux-x86_64-cuda
-          path: dist/*
-          retention-days: 7
+          files: dist/*
+          fail_on_unmatched_files: true
 
   release-linux-arm64:
     name: Release — linux arm64 (CPU)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -580,16 +600,17 @@ jobs:
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: softprops/action-gh-release@v3
         with:
-          name: release-linux-arm64
-          path: dist/*
-          retention-days: 7
+          files: dist/*
+          fail_on_unmatched_files: true
 
   release-linux-arm64-cuda:
     name: Release — linux arm64 (CUDA)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -671,30 +692,6 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz.sha256"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-linux-arm64-cuda
-          path: dist/*
-          retention-days: 7
-
-  publish-release:
-    name: Pubblica i binari sulla GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs:
-      - release-linux-x86_64
-      - release-linux-x86_64-cuda
-      - release-linux-arm64
-      - release-linux-arm64-cuda
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          pattern: release-*
-          merge-multiple: true
 
       - uses: softprops/action-gh-release@v3
         with:
