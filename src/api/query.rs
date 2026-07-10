@@ -5,6 +5,8 @@
 //! DELETE /api/chat/history → { deleted }
 
 use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -20,6 +22,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth::jwt::Claims;
+use crate::bench;
 use crate::db;
 use crate::rag::{prompt, retrieval, sources::Source};
 use crate::state::AppState;
@@ -52,16 +55,27 @@ fn ingestion_busy_response() -> Response {
 
 // ── Shared setup: embed → search → load history → build prompt ────────────────
 
+/// Tempi per fase di prepare() — usati da query_stream() per registrare
+/// InferenceResult quando --bench-live è attivo (vedi bench::LiveRecorder).
+/// query() (non-streaming) li ignora oggi: non instrumentata, vedi nota in
+/// query_stream — è il percorso che il frontend usa davvero.
+pub(crate) struct PrepareTimings {
+    pub(crate) embed_query: Duration,
+    pub(crate) search: Duration,
+    pub(crate) prompt_build: Duration,
+}
+
 async fn prepare(
     state: &AppState,
     question: &str,
     user_id: i64,
     use_history: bool,
     conversation_id: Option<&str>,
-) -> anyhow::Result<(String, Vec<Source>)> {
+) -> anyhow::Result<(String, Vec<Source>, PrepareTimings)> {
     // 1. Embed query (CPU/GPU bound). Con swap_during_ingestion=true bge-m3
     // gira su CPU qui (un solo testo corto, costo accettabile) — la GPU è
     // riservata a eullm fuori dalla finestra di ingestione.
+    let t = Instant::now();
     let svc = state.embeddings.clone();
     let q = question.to_owned();
     let query_vec = tokio::task::spawn_blocking(move || {
@@ -69,14 +83,18 @@ async fn prepare(
         guard.embed_text(&q)
     })
     .await??;
+    let embed_query = t.elapsed();
 
     // 2. Vector search (top_k=15, threshold=0.30 — MAPPA §5)
+    let t = Instant::now();
     let hits = state
         .qdrant
         .search(query_vec, retrieval::TOP_K, Some(retrieval::RELEVANCE_THRESHOLD))
         .await?;
+    let search = t.elapsed();
 
-    // 3. Build sources and context string
+    // 3. Build sources and context string (non cronometrato: string join
+    // trascurabile, stessa convenzione di bench::run_inference)
     let sources: Vec<Source> = hits
         .iter()
         .map(|h| Source {
@@ -94,21 +112,25 @@ async fn prepare(
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
 
-    // 4. Load last 3 exchanges from history if requested
+    // 4. Load last 3 exchanges from history if requested, poi costruisci il
+    // prompt — un'unica fase "prompt_build" (include la query SQLite della
+    // history, che bench::run_inference non ha: lì la history è sempre vuota).
+    let t = Instant::now();
     let history = if use_history {
         build_history_pairs(state, user_id, conversation_id).await?
     } else {
         vec![]
     };
-
     let full_prompt = prompt::build_prompt(&context, question, &history);
+    let prompt_build = t.elapsed();
+
     tracing::info!(
         chars = full_prompt.len(),
         chunks = sources.len(),
         history_pairs = history.len(),
         "prompt costruito"
     );
-    Ok((full_prompt, sources))
+    Ok((full_prompt, sources, PrepareTimings { embed_query, search, prompt_build }))
 }
 
 async fn build_history_pairs(
@@ -148,7 +170,9 @@ pub async fn query(
         return ingestion_busy_response();
     }
     let conv_id = req.conversation_id.as_deref();
-    let (full_prompt, sources) =
+    // _timings: non instrumentato — il frontend usa /api/query/stream (vedi
+    // query_stream), che è dove --bench-live registra le query reali.
+    let (full_prompt, sources, _timings) =
         match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
             Ok(v) => v,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -189,6 +213,27 @@ pub async fn query(
 
 // ── POST /api/query/stream ────────────────────────────────────────────────────
 
+/// Stato threaded attraverso l'unfold che produce lo stream SSE — una
+/// struct invece di una tupla perché ha guadagnato troppi campi (query()
+/// non-streaming non ne ha bisogno, vedi sopra: solo questo percorso misura
+/// TTFT/decode per --bench-live, dato che è quello che il frontend usa).
+struct StreamState {
+    rx: tokio::sync::mpsc::Receiver<String>,
+    acc: String,
+    sources: Vec<Source>,
+    db: sqlx::SqlitePool,
+    uid: i64,
+    cid: Option<String>,
+    done: bool,
+    gen_start: Instant,
+    ttft: Option<Duration>,
+    tokens: usize,
+    live_bench: Option<Arc<bench::LiveRecorder>>,
+    timings: PrepareTimings,
+    chunks_retrieved: usize,
+    query_text: String,
+}
+
 pub async fn query_stream(
     State(state): State<AppState>,
     claims: Claims,
@@ -200,11 +245,12 @@ pub async fn query_stream(
     let conv_id = req.conversation_id.as_deref();
     // Run setup synchronously before opening the SSE stream so we can return
     // a proper HTTP error if embed/search fails.
-    let (full_prompt, sources) =
+    let (full_prompt, sources, timings) =
         match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
             Ok(v) => v,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
         };
+    let chunks_retrieved = sources.len();
 
     // Persist user question (answer is stored when the stream finishes).
     let _ = db::conversations::insert(
@@ -223,43 +269,78 @@ pub async fn query_stream(
         }
     });
 
+    let stream_state = StreamState {
+        rx,
+        acc: String::new(),
+        sources,
+        db: state.db.clone(),
+        uid: claims.user_id,
+        cid: req.conversation_id.clone(),
+        done: false,
+        gen_start: Instant::now(),
+        ttft: None,
+        tokens: 0,
+        live_bench: state.live_bench.clone(),
+        timings,
+        chunks_retrieved,
+        query_text: req.query.clone(),
+    };
+
     // Convert mpsc receiver into an SSE stream.
-    // State: (rx, accumulated_answer, sources, db_pool, user_id, conv_id, is_done)
-    let db = state.db.clone();
-    let uid = claims.user_id;
-    let stream_conv_id = req.conversation_id.clone();
-    let stream = unfold(
-        (rx, String::new(), sources, db, uid, stream_conv_id, false),
-        |(mut rx, mut acc, sources, db, uid, cid, done)| async move {
-            if done {
-                return None;
-            }
-            match rx.recv().await {
-                Some(token) => {
-                    acc.push_str(&token);
-                    let ev = Event::default().data(json!({ "token": token }).to_string());
-                    Some((Ok::<_, Infallible>(ev), (rx, acc, sources, db, uid, cid, false)))
+    let stream = unfold(stream_state, |mut s| async move {
+        if s.done {
+            return None;
+        }
+        match s.rx.recv().await {
+            Some(token) => {
+                if s.ttft.is_none() {
+                    s.ttft = Some(s.gen_start.elapsed());
                 }
-                None => {
-                    // Channel closed — persist assistant reply (se non vuota: vedi
-                    // query() non-streaming per il motivo) ed emette l'evento finale.
-                    if !acc.trim().is_empty() {
-                        let sources_json = serde_json::to_string(&sources).unwrap_or_default();
-                        let _ = db::conversations::insert(
-                            &db, uid, "assistant", &acc, Some(&sources_json),
-                            cid.as_deref(),
-                        )
-                        .await;
-                    } else {
-                        tracing::warn!("eullm stream: risposta vuota, non persistita");
-                    }
-                    let ev = Event::default()
-                        .data(json!({ "done": true, "sources": sources }).to_string());
-                    Some((Ok::<_, Infallible>(ev), (rx, acc, vec![], db, uid, cid, true)))
-                }
+                s.tokens += 1;
+                s.acc.push_str(&token);
+                let ev = Event::default().data(json!({ "token": token }).to_string());
+                Some((Ok::<_, Infallible>(ev), s))
             }
-        },
-    );
+            None => {
+                // Channel closed — persist assistant reply (se non vuota: vedi
+                // query() non-streaming per il motivo) ed emette l'evento finale.
+                let total_generation = s.gen_start.elapsed();
+                if !s.acc.trim().is_empty() {
+                    let sources_json = serde_json::to_string(&s.sources).unwrap_or_default();
+                    let _ = db::conversations::insert(
+                        &s.db, s.uid, "assistant", &s.acc, Some(&sources_json),
+                        s.cid.as_deref(),
+                    )
+                    .await;
+                } else {
+                    tracing::warn!("eullm stream: risposta vuota, non persistita");
+                }
+
+                if let Some(rec) = &s.live_bench {
+                    rec.record_inference(bench::InferenceResult {
+                        query: s.query_text.clone(),
+                        embed_query: s.timings.embed_query,
+                        search: s.timings.search,
+                        prompt_build: s.timings.prompt_build,
+                        ttft: s.ttft.unwrap_or(total_generation),
+                        total_generation,
+                        tokens_generated: s.tokens,
+                        chunks_retrieved: s.chunks_retrieved,
+                        // Non applicabile fuori da --bench <file>: lì confronta
+                        // i chunk recuperati con l'unico documento appena
+                        // ingerito, qui la collection reale ne contiene molti.
+                        chunks_from_bench_doc: 0,
+                    });
+                }
+
+                let sources_for_event = std::mem::take(&mut s.sources);
+                let ev = Event::default()
+                    .data(json!({ "done": true, "sources": sources_for_event }).to_string());
+                s.done = true;
+                Some((Ok::<_, Infallible>(ev), s))
+            }
+        }
+    });
 
     Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }

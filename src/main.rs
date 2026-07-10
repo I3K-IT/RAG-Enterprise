@@ -97,6 +97,18 @@ async fn main() -> Result<()> {
         return bench::run(&settings, &bench_args, &embeddings, Arc::new(eullm)).await;
     }
 
+    // --bench-live: server e frontend partono normalmente, ma ogni
+    // ingestione/query reale viene cronometrata (vedi api/documents.rs,
+    // api/query.rs) e accumulata qui. Report scritto alla chiusura, sotto.
+    let live_bench = if bench::live_mode_requested(&args) {
+        tracing::info!(
+            "--bench-live attivo: registro tempi/hardware di ogni ingestione e query reali di questa sessione, report scritto alla chiusura"
+        );
+        Some(Arc::new(bench::LiveRecorder::new(&embeddings, &settings.eullm.model)))
+    } else {
+        None
+    };
+
     tracing::info!(path = %settings.database.url, "database SQLite");
     let db = db::connect(&settings.database.url).await?;
     db::migrate(&db).await?;
@@ -127,7 +139,10 @@ async fn main() -> Result<()> {
     });
 
     let app_state =
-        state::AppState::new(settings, db, embeddings, Arc::new(qdrant), eullm);
+        state::AppState::new(settings, db, embeddings, Arc::new(qdrant), eullm, live_bench);
+    // Handle separato: app_state viene consumato da api::router() sotto, ma
+    // serve ancora dopo la select! di shutdown per scrivere il report.
+    let live_bench_for_shutdown = app_state.live_bench.clone();
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -155,6 +170,18 @@ async fn main() -> Result<()> {
         tokio::select! {
             r = axum::serve(listener, router) => r?,
             _ = tokio::signal::ctrl_c() => { tracing::info!("SIGINT ricevuto, shutdown"); }
+        }
+    }
+
+    // --bench-live: scrive il report aggregato della sessione appena
+    // conclusa, se è stata registrata almeno un'ingestione o una query.
+    if let Some(rec) = &live_bench_for_shutdown {
+        match rec.write_report() {
+            Ok(Some(path)) => tracing::info!(path = %path.display(), "report benchmark live scritto"),
+            Ok(None) => tracing::info!(
+                "--bench-live: nessuna ingestione/query registrata in questa sessione, nessun report scritto"
+            ),
+            Err(e) => tracing::warn!(error = %e, "scrittura report benchmark live fallita"),
         }
     }
 
