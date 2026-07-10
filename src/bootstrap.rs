@@ -1267,26 +1267,65 @@ async fn wait_for_url(url: &str, timeout_secs: u64, label: &str) -> Result<()> {
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
 
 async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize) -> Result<()> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(3600)).build()?;
+    // http1_only: se il server negozia HTTP/2, reqwest multiplexerebbe le N
+    // richieste Range "concorrenti" sulla STESSA connessione TCP — niente
+    // aggregazione di banda reale, tutte condividono un'unica finestra di
+    // congestione, sostanzialmente la velocità di UNA connessione (esatto
+    // sintomo osservato: il nostro codice non supera mai ~3MB/s mentre
+    // aria2c, HTTP/1.1 con connessioni realmente separate per pezzo, sullo
+    // stesso file/server sostiene 15-16MB/s). Con HTTP/1.1 ogni richiesta
+    // concorrente apre la propria connessione, aggregando banda per davvero.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .http1_only()
+        .build()?;
 
-    let probe = client.get(url).send().await.context("probe GET")?;
-    if !probe.status().is_success() {
-        bail!("HTTP {} — {display_name} ({url})", probe.status());
+    // Probe con Range: bytes=0-0 (1 byte) invece di una GET piena: se il
+    // server risponde 206 il supporto Range è verificato per davvero (non
+    // solo dichiarato in accept-ranges, che alcuni server/proxy annunciano
+    // senza onorarlo — vedi il controllo 206 in fetch_chunk_once) e la size
+    // totale si legge da Content-Range: bytes 0-0/{total} nella stessa
+    // risposta, senza una richiesta separata.
+    let probe = client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+        .context("probe GET")?;
+    let probe_status = probe.status();
+
+    if probe_status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        // Range non valido su questo file (tipicamente 0 byte): richiesta
+        // pulita senza Range invece di trattarlo come errore fatale.
+        drop(probe);
+        let full = client.get(url).send().await.context("GET (fallback 416)")?;
+        if !full.status().is_success() {
+            bail!("HTTP {} — {display_name} ({url})", full.status());
+        }
+        return download_streaming(full, dest, display_name).await;
+    }
+    if !probe_status.is_success() && probe_status != reqwest::StatusCode::PARTIAL_CONTENT {
+        bail!("HTTP {probe_status} — {display_name} ({url})");
     }
     let final_url = probe.url().to_string();
+    let accepts_ranges = probe_status == reqwest::StatusCode::PARTIAL_CONTENT;
 
-    let total: u64 = probe
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
-    let accepts_ranges = probe
-        .headers()
-        .get("accept-ranges")
-        .map(|v| v != "none")
-        .unwrap_or(true);
+    let total: u64 = if accepts_ranges {
+        probe
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.rsplit('/').next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    } else {
+        probe
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    };
 
     if total == 0 || !accepts_ranges {
         tracing::info!("{display_name}: download streaming (Range non supportato)");
@@ -1473,6 +1512,17 @@ async fn download_streaming(
     Ok(())
 }
 
+const CHUNK_MAX_ATTEMPTS: u32 = 5;
+const CHUNK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Un pezzo (max PIECE_SIZE_BYTES) può capitare su una connessione che un
+/// micro-drop da handover satellitare (~ogni 15s su Starlink) degrada a
+/// metà scaricamento — senza retry, quella connessione resta lenta finché
+/// TCP non rifà da sola la slow-start. Qui invece: fino a 5 tentativi,
+/// ciascuno con un timeout di 120s, backoff 1s/2s/4s/8s tra un tentativo e
+/// l'altro — un tentativo scaduto/fallito si abbandona e il successivo
+/// riparte su una connessione NUOVA invece di aspettare che quella vecchia
+/// si riprenda. Stessi parametri usati da eullm per lo stesso problema.
 async fn download_chunk(
     client: reqwest::Client,
     url: String,
@@ -1481,19 +1531,65 @@ async fn download_chunk(
     end: u64,
     downloaded: Arc<AtomicU64>,
 ) -> Result<()> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=CHUNK_MAX_ATTEMPTS {
+        match tokio::time::timeout(CHUNK_ATTEMPT_TIMEOUT, fetch_chunk_once(&client, &url, start, end)).await {
+            Ok(Ok(buf)) => {
+                // downloaded/scrittura solo qui, a tentativo riuscito: un
+                // retry dopo un fallimento parziale non deve né contare né
+                // scrivere due volte gli stessi byte (vedi fetch_chunk_once,
+                // che non tocca downloaded finché il pezzo non è completo).
+                downloaded.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                let f = Arc::clone(&file);
+                tokio::task::spawn_blocking(move || f.write_all_at(&buf, start))
+                    .await
+                    .context("spawn_blocking write")?
+                    .context("pwrite")?;
+                return Ok(());
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    attempt, max_attempts = CHUNK_MAX_ATTEMPTS, error = %e,
+                    range = format!("bytes={start}-{end}"),
+                    "pezzo fallito, riprovo su connessione nuova"
+                );
+                last_err = Some(e);
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    attempt, max_attempts = CHUNK_MAX_ATTEMPTS,
+                    range = format!("bytes={start}-{end}"),
+                    timeout_s = CHUNK_ATTEMPT_TIMEOUT.as_secs(),
+                    "pezzo troppo lento (timeout), riprovo su connessione nuova"
+                );
+                last_err = Some(anyhow::anyhow!("timeout dopo {}s", CHUNK_ATTEMPT_TIMEOUT.as_secs()));
+            }
+        }
+        if attempt < CHUNK_MAX_ATTEMPTS {
+            tokio::time::sleep(Duration::from_secs(1u64 << (attempt - 1))).await; // 1s,2s,4s,8s
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download pezzo fallito dopo {CHUNK_MAX_ATTEMPTS} tentativi")))
+}
+
+/// Un solo tentativo: scarica l'intero pezzo [start,end] in un buffer in
+/// RAM (max PIECE_SIZE_BYTES). Nessun effetto su stato condiviso
+/// (downloaded/file) — quello è responsabilità del chiamante, una volta
+/// sola, solo a tentativo riuscito (vedi download_chunk).
+async fn fetch_chunk_once(client: &reqwest::Client, url: &str, start: u64, end: u64) -> Result<Vec<u8>> {
     let resp = client
-        .get(&url)
+        .get(url)
         .header("Range", format!("bytes={start}-{end}"))
         .send()
         .await
         .context("range GET")?;
 
     // Se il server ignora la Range e risponde 200 invece di 206, questo
-    // "chunk" riceve l'INTERO file invece del solo pezzo richiesto — con 8
-    // task paralleli vorrebbe dire scaricare il file 8 volte, gran parte
+    // "pezzo" riceve l'INTERO file invece del solo pezzo richiesto — con n
+    // worker paralleli vorrebbe dire scaricare il file n volte, gran parte
     // dei byte scartati/sovrascritti: banda sprecata, non guadagnata.
-    // Verificato solo qui perché accept-ranges nell'header della probe GET
-    // può essere dichiarato ma non onorato davvero dal server/proxy.
+    // Verificato solo qui (non nella probe) perché accept-ranges dichiarato
+    // può non essere onorato davvero dal server/proxy per ogni richiesta.
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         tracing::warn!(
             status = %resp.status(),
@@ -1504,27 +1600,13 @@ async fn download_chunk(
         );
     }
 
-    // Un pezzo è al massimo PIECE_SIZE_BYTES (16MB): bufferizzarlo intero
-    // in RAM prima di scrivere è economico (con n worker concorrenti, picco
-    // ~n×16MB) ed evita di interrompere periodicamente la lettura di rete
-    // per aspettare scritture su disco a metà pezzo — la write, una sola
-    // per pezzo invece che una ogni 1MB, non compete più con la lettura.
     let mut resp = resp;
     let expected = (end - start + 1) as usize;
     let mut buf: Vec<u8> = Vec::with_capacity(expected);
-
     while let Some(chunk) = resp.chunk().await.context("chunk read")? {
-        downloaded.fetch_add(chunk.len() as u64, Ordering::Relaxed);
         buf.extend_from_slice(&chunk);
     }
-
-    let f = Arc::clone(&file);
-    tokio::task::spawn_blocking(move || f.write_all_at(&buf, start))
-        .await
-        .context("spawn_blocking write")?
-        .context("pwrite")?;
-
-    Ok(())
+    Ok(buf)
 }
 
 // ── Formattatori ─────────────────────────────────────────────────────────────
