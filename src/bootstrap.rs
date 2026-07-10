@@ -1301,6 +1301,8 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     let dl_ref = Arc::clone(&downloaded);
     let name_str = display_name.to_owned();
     let progress_task = tokio::spawn(async move {
+        let mut last_done = 0u64;
+        let mut last_tick = Instant::now();
         loop {
             tokio::time::sleep(Duration::from_secs(3)).await;
             let done = dl_ref.load(Ordering::Relaxed);
@@ -1308,8 +1310,17 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
                 continue;
             }
             let pct = done as f64 / total as f64 * 100.0;
-            let elapsed = start.elapsed().as_secs_f64().max(0.001);
-            let rate = done as f64 / elapsed;
+            // Velocità nella finestra recente (~3s), non la media cumulativa
+            // dall'inizio: quella risponde troppo lentamente a rallentamenti
+            // o riprese reali (es. micro-stalli da handoff satellitari su
+            // Starlink) — un numero basso all'inizio del download resta
+            // "congelato" per minuti anche se la velocità reale è già
+            // tornata alta, mostrando un dato fuorviante.
+            let now = Instant::now();
+            let window = now.duration_since(last_tick).as_secs_f64().max(0.001);
+            let rate = done.saturating_sub(last_done) as f64 / window;
+            last_done = done;
+            last_tick = now;
             let eta = if rate > 0.0 {
                 fmt_eta(((total - done) as f64 / rate) as u64)
             } else {
