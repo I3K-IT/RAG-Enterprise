@@ -114,6 +114,23 @@ pub struct EullmSettings {
     /// fino al reload.
     #[serde(default)]
     pub unload_during_ingestion: bool,
+    /// Override del modello da avviare, SOLO quando manage_subprocesses=true
+    /// (altrimenti usa già `model` così com'è — vedi sopra). Se Some, bypassa
+    /// la ricerca del componente "qwen3-14b" pinnato nel manifest e passa
+    /// questo valore direttamente a `eullm run` — path GGUF locale o
+    /// riferimento `hf.co/utente/repo:quant` che eullm risolve/scarica da sé,
+    /// fuori dal nostro manifest sha256-pinnato: la verifica di integrità in
+    /// quel caso è responsabilità di eullm/dell'hub HF, non nostra.
+    #[serde(default)]
+    pub model_override: Option<String>,
+    /// Numero di layer di esperti MoE tenuti su CPU RAM (`--n-cpu-moe N`,
+    /// eullm ≥ v0.6.11 — versioni precedenti non hanno il flag). None = non
+    /// passato (nessun effetto su modelli dense). N più basso = più esperti
+    /// in VRAM = più veloce ma più rischio OOM — va tarato a mano per la
+    /// singola GPU (vedi log di tuning nel repo), non c'è un default
+    /// sensato universale.
+    #[serde(default)]
+    pub n_cpu_moe: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

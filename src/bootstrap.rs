@@ -120,6 +120,8 @@ mod eullm_args_tests {
             cache_type_v: None,
             fit: false,
             unload_during_ingestion: false,
+            model_override: None,
+            n_cpu_moe: None,
         }
     }
 
@@ -175,6 +177,20 @@ mod eullm_args_tests {
         let mut cfg = base_cfg();
         cfg.fit = true;
         assert!(eullm_args(&cfg).contains(&"--fit".to_owned()));
+    }
+
+    #[test]
+    fn n_cpu_moe_absent_by_default() {
+        assert!(!eullm_args(&base_cfg()).contains(&"--n-cpu-moe".to_owned()));
+    }
+
+    #[test]
+    fn n_cpu_moe_present_when_configured() {
+        let mut cfg = base_cfg();
+        cfg.n_cpu_moe = Some(24);
+        let args = eullm_args(&cfg);
+        let pos = args.iter().position(|a| a == "--n-cpu-moe").expect("--n-cpu-moe assente");
+        assert_eq!(args[pos + 1], "24");
     }
 }
 
@@ -504,10 +520,18 @@ pub async fn start_eullm(
         // eullm — decisione di avvio basata su presenza su disco, non sul target.
         // Il target filtra i DOWNLOAD (non scaricare CUDA binary su CPU);
         // ma se il file c'è, lo avviamo — il RAG dipende da eullm.
-        match (
-            find_by_name(&manifest, "eullm", &data_dir),
-            find_by_name(&manifest, "qwen3-14b", &data_dir),
-        ) {
+        //
+        // EULLM__MODEL_OVERRIDE, se impostato, bypassa la ricerca del
+        // componente "qwen3-14b" pinnato nel manifest (vedi EullmSettings::
+        // model_override) — usato per puntare a un modello non pinnato,
+        // es. un riferimento hf.co che eullm risolve/scarica da sé.
+        let gguf = settings
+            .eullm
+            .model_override
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| find_by_name(&manifest, "qwen3-14b", &data_dir));
+        match (find_by_name(&manifest, "eullm", &data_dir), gguf) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
                 children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
@@ -515,7 +539,7 @@ pub async fn start_eullm(
                 eullm_model_path = Some(gguf);
             }
             _ => tracing::warn!(
-                "eullm o qwen3-14b non trovati in {} — RAG senza LLM",
+                "eullm o modello (qwen3-14b / EULLM__MODEL_OVERRIDE) non trovati in {} — RAG senza LLM",
                 data_dir.display()
             ),
         }
@@ -1214,6 +1238,10 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
         args.push("--cache-type-v".to_owned());
         args.push(vt.clone());
     }
+    if let Some(n) = cfg.n_cpu_moe {
+        args.push("--n-cpu-moe".to_owned());
+        args.push(n.to_string());
+    }
     if cfg.fit {
         args.push("--fit".to_owned());
     }
@@ -1533,13 +1561,11 @@ async fn download_chunk(
 ) -> Result<()> {
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 1..=CHUNK_MAX_ATTEMPTS {
-        match tokio::time::timeout(CHUNK_ATTEMPT_TIMEOUT, fetch_chunk_once(&client, &url, start, end)).await {
+        match tokio::time::timeout(CHUNK_ATTEMPT_TIMEOUT, fetch_chunk_once(&client, &url, start, end, &downloaded)).await {
             Ok(Ok(buf)) => {
-                // downloaded/scrittura solo qui, a tentativo riuscito: un
-                // retry dopo un fallimento parziale non deve né contare né
-                // scrivere due volte gli stessi byte (vedi fetch_chunk_once,
-                // che non tocca downloaded finché il pezzo non è completo).
-                downloaded.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                // I byte sono già stati aggiunti a downloaded in streaming da
+                // fetch_chunk_once (ProgressGuard, committato a tentativo
+                // riuscito) — qui resta solo la scrittura su disco.
                 let f = Arc::clone(&file);
                 tokio::task::spawn_blocking(move || f.write_all_at(&buf, start))
                     .await
@@ -1572,11 +1598,91 @@ async fn download_chunk(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download pezzo fallito dopo {CHUNK_MAX_ATTEMPTS} tentativi")))
 }
 
-/// Un solo tentativo: scarica l'intero pezzo [start,end] in un buffer in
-/// RAM (max PIECE_SIZE_BYTES). Nessun effetto su stato condiviso
-/// (downloaded/file) — quello è responsabilità del chiamante, una volta
-/// sola, solo a tentativo riuscito (vedi download_chunk).
-async fn fetch_chunk_once(client: &reqwest::Client, url: &str, start: u64, end: u64) -> Result<Vec<u8>> {
+/// Contabilizza i byte di un tentativo su `downloaded` MAN MANO che
+/// arrivano dalla rete, non in un solo scatto da PIECE_SIZE_BYTES a fine
+/// pezzo — è quello scatto in blocco il motivo per cui il rate mostrato a
+/// video "oscillava" (5/11/16/21/27/32/37 MB/s): con tick del progress_task
+/// ogni 3s e un pezzo da 16MB completato ogni ~8s per worker, il contatore
+/// restava fermo per tick interi e poi saltava di N*16MB tutti insieme —
+/// N=1,2,3,4,5,6,7 pezzi completati nello stesso tick spiega ESATTAMENTE
+/// 5.3/10.7/16.0/21.3/26.7/32.0/37.3 MB/s, i valori osservati (vedi log
+/// reale del 2026-07-10). La velocità media era già corretta (~15MB/s), era
+/// solo la lettura istantanea a essere quantizzata.
+///
+/// Se il tentativo fallisce o viene abbandonato per timeout (drop della
+/// future da parte di tokio::time::timeout in download_chunk — nessun punto
+/// di ritorno esplicito da cui richiamare un rollback esplicito), il Drop di
+/// questa guardia sottrae esattamente quanto aggiunto da QUESTO tentativo:
+/// il contatore resta corretto anche quando un pezzo va ritentato, senza
+/// doppio conteggio. commit() disarma il rollback a tentativo riuscito.
+struct ProgressGuard<'a> {
+    counter: &'a AtomicU64,
+    added: u64,
+}
+
+impl<'a> ProgressGuard<'a> {
+    fn new(counter: &'a AtomicU64) -> Self {
+        Self { counter, added: 0 }
+    }
+
+    fn add(&mut self, n: u64) {
+        self.counter.fetch_add(n, Ordering::Relaxed);
+        self.added += n;
+    }
+
+    fn commit(mut self) {
+        self.added = 0;
+    }
+}
+
+impl Drop for ProgressGuard<'_> {
+    fn drop(&mut self) {
+        if self.added > 0 {
+            self.counter.fetch_sub(self.added, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(test)]
+mod progress_guard_tests {
+    use super::*;
+
+    #[test]
+    fn commit_leaves_counter_incremented() {
+        let counter = AtomicU64::new(0);
+        let mut guard = ProgressGuard::new(&counter);
+        guard.add(100);
+        guard.add(50);
+        guard.commit();
+        assert_eq!(counter.load(Ordering::Relaxed), 150);
+    }
+
+    #[test]
+    fn drop_without_commit_rolls_back_only_this_attempt() {
+        let counter = AtomicU64::new(1_000); // byte già committati da altri pezzi
+        {
+            let mut guard = ProgressGuard::new(&counter);
+            guard.add(100);
+            guard.add(50);
+            assert_eq!(counter.load(Ordering::Relaxed), 1_150);
+            // guard esce dallo scope senza commit() — es. errore o timeout
+        }
+        assert_eq!(counter.load(Ordering::Relaxed), 1_000);
+    }
+}
+
+/// Un solo tentativo: scarica il pezzo [start,end] in un buffer in RAM (max
+/// PIECE_SIZE_BYTES), contabilizzando i byte su `downloaded` in streaming
+/// via ProgressGuard man mano che arrivano (vedi sopra). La scrittura su
+/// disco resta responsabilità del chiamante, una volta sola, solo a
+/// tentativo riuscito (vedi download_chunk).
+async fn fetch_chunk_once(
+    client: &reqwest::Client,
+    url: &str,
+    start: u64,
+    end: u64,
+    downloaded: &AtomicU64,
+) -> Result<Vec<u8>> {
     let resp = client
         .get(url)
         .header("Range", format!("bytes={start}-{end}"))
@@ -1603,9 +1709,12 @@ async fn fetch_chunk_once(client: &reqwest::Client, url: &str, start: u64, end: 
     let mut resp = resp;
     let expected = (end - start + 1) as usize;
     let mut buf: Vec<u8> = Vec::with_capacity(expected);
+    let mut guard = ProgressGuard::new(downloaded);
     while let Some(chunk) = resp.chunk().await.context("chunk read")? {
+        guard.add(chunk.len() as u64);
         buf.extend_from_slice(&chunk);
     }
+    guard.commit();
     Ok(buf)
 }
 
