@@ -120,6 +120,8 @@ mod eullm_args_tests {
             cache_type_v: None,
             fit: false,
             unload_during_ingestion: false,
+            model_override: None,
+            n_cpu_moe: None,
         }
     }
 
@@ -175,6 +177,20 @@ mod eullm_args_tests {
         let mut cfg = base_cfg();
         cfg.fit = true;
         assert!(eullm_args(&cfg).contains(&"--fit".to_owned()));
+    }
+
+    #[test]
+    fn n_cpu_moe_absent_by_default() {
+        assert!(!eullm_args(&base_cfg()).contains(&"--n-cpu-moe".to_owned()));
+    }
+
+    #[test]
+    fn n_cpu_moe_present_when_configured() {
+        let mut cfg = base_cfg();
+        cfg.n_cpu_moe = Some(24);
+        let args = eullm_args(&cfg);
+        let pos = args.iter().position(|a| a == "--n-cpu-moe").expect("--n-cpu-moe assente");
+        assert_eq!(args[pos + 1], "24");
     }
 }
 
@@ -504,10 +520,18 @@ pub async fn start_eullm(
         // eullm — decisione di avvio basata su presenza su disco, non sul target.
         // Il target filtra i DOWNLOAD (non scaricare CUDA binary su CPU);
         // ma se il file c'è, lo avviamo — il RAG dipende da eullm.
-        match (
-            find_by_name(&manifest, "eullm", &data_dir),
-            find_by_name(&manifest, "qwen3-14b", &data_dir),
-        ) {
+        //
+        // EULLM__MODEL_OVERRIDE, se impostato, bypassa la ricerca del
+        // componente "qwen3-14b" pinnato nel manifest (vedi EullmSettings::
+        // model_override) — usato per puntare a un modello non pinnato,
+        // es. un riferimento hf.co che eullm risolve/scarica da sé.
+        let gguf = settings
+            .eullm
+            .model_override
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| find_by_name(&manifest, "qwen3-14b", &data_dir));
+        match (find_by_name(&manifest, "eullm", &data_dir), gguf) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
                 children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
@@ -515,7 +539,7 @@ pub async fn start_eullm(
                 eullm_model_path = Some(gguf);
             }
             _ => tracing::warn!(
-                "eullm o qwen3-14b non trovati in {} — RAG senza LLM",
+                "eullm o modello (qwen3-14b / EULLM__MODEL_OVERRIDE) non trovati in {} — RAG senza LLM",
                 data_dir.display()
             ),
         }
@@ -1213,6 +1237,10 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
     if let Some(vt) = &cfg.cache_type_v {
         args.push("--cache-type-v".to_owned());
         args.push(vt.clone());
+    }
+    if let Some(n) = cfg.n_cpu_moe {
+        args.push("--n-cpu-moe".to_owned());
+        args.push(n.to_string());
     }
     if cfg.fit {
         args.push("--fit".to_owned());
