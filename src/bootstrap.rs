@@ -1292,6 +1292,66 @@ async fn wait_for_url(url: &str, timeout_secs: u64, label: &str) -> Result<()> {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct EullmTagsResponse {
+    #[serde(default)]
+    models: Vec<EullmTagEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EullmTagEntry {
+    name: String,
+}
+
+/// Interroga /api/tags e ritorna il `name` del PRIMO modello in lista — è
+/// quello attivo (eullm non implementa /api/ps: "first model in the list
+/// is the active one", stesso comportamento documentato per rag-
+/// enterprise-pro). Serve perché per un riferimento hf.co (a differenza di
+/// un path GGUF locale) eullm normalizza il nome in un formato canonico
+/// DIVERSO da quello con cui è stato lanciato — osservato in produzione:
+/// lanciato con "hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M",
+/// /api/tags lo riporta come "qwen_qwen3.6-35b-a3b-gguf-q4_k_m", e SOLO
+/// quel nome canonico è accettato nel campo "model" di /api/generate — il
+/// riferimento hf.co originale dà 500 "Model ... not found" (i due punti
+/// vengono mangiati da una normalizzazione lato eullm pensata per i tag
+/// stile Ollama, che rompe la sintassi repo:quant di hf.co). None se la
+/// query fallisce o la lista è vuota: il chiamante ricade sul nome di
+/// lancio (vedi build_eullm_client in main.rs).
+pub async fn fetch_active_model_name(eullm_url: &str) -> Option<String> {
+    let resp = reqwest::Client::new()
+        .get(format!("{eullm_url}/api/tags"))
+        .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .send()
+        .await
+        .ok()?;
+    let body: EullmTagsResponse = resp.json().await.ok()?;
+    body.models.into_iter().next().map(|m| m.name)
+}
+
+#[cfg(test)]
+mod eullm_tags_tests {
+    use super::*;
+
+    #[test]
+    fn parses_real_tags_response_first_model_is_active() {
+        // Fixture: risposta reale di /api/tags su Orion con Qwen3.6-35B-A3B
+        // caricato via riferimento hf.co (eullm v0.6.11) — il PRIMO modello
+        // in lista è quello attivo.
+        let json = r#"{"models":[
+            {"details":{"family":"","format":"gguf","parameter_size":"","quantization_level":"Q4_K_M"},"digest":"","name":"qwen_qwen3.6-35b-a3b-gguf-q4_k_m","size":0},
+            {"details":{"display_name":"Qwen3 0.6B Instruct","domain":"general","family":"qwen3","format":"gguf","parameter_size":"0.6B","quantization_level":"Q4_K_M","source_model":"unsloth/Qwen3-0.6B-GGUF"},"digest":"","name":"qwen-0.6b","size":500000000}
+        ]}"#;
+        let parsed: EullmTagsResponse = serde_json::from_str(json).expect("deve fare parse");
+        assert_eq!(parsed.models[0].name, "qwen_qwen3.6-35b-a3b-gguf-q4_k_m");
+    }
+
+    #[test]
+    fn empty_models_list_parses_ok() {
+        let parsed: EullmTagsResponse = serde_json::from_str(r#"{"models":[]}"#).unwrap();
+        assert!(parsed.models.is_empty());
+    }
+}
+
 // ── Download parallelo multi-chunk ────────────────────────────────────────────
 
 async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize) -> Result<()> {

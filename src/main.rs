@@ -76,12 +76,12 @@ async fn main() -> Result<()> {
         let embeddings = load_embedding(&settings).await?;
         tracing::info!(device = embeddings.device_label(), "embedding service pronto (prima di eullm)");
         let guard = bootstrap::start_eullm(&settings, phase1, qdrant_children).await?;
-        let eullm = build_eullm_client(&settings, &guard);
+        let eullm = build_eullm_client(&settings, &guard).await;
         warmup_eullm(&eullm).await;
         (guard, embeddings, eullm)
     } else {
         let guard = bootstrap::ensure_ready(&settings).await?;
-        let eullm = build_eullm_client(&settings, &guard);
+        let eullm = build_eullm_client(&settings, &guard).await;
         warmup_eullm(&eullm).await;
         let embeddings = load_embedding(&settings).await?;
         tracing::info!(device = embeddings.device_label(), "embedding service pronto");
@@ -218,19 +218,32 @@ async fn load_embedding(settings: &config::Settings) -> Result<clients::embeddin
     .context("embedding service load")
 }
 
-/// Se bootstrap ha avviato eullm, usa lo STESSO path GGUF come "model" nelle
-/// richieste — eullm lo accetta direttamente (vedi ProcessGuard), niente
-/// registrazione/import-ollama necessaria. Altrimenti (eullm esterno,
-/// manage_subprocesses=false) usa Settings.eullm.model così com'è.
-fn build_eullm_client(
+/// Se bootstrap ha avviato eullm con un path GGUF locale (manifest, nessun
+/// model_override), usa lo STESSO path come "model" nelle richieste — eullm
+/// lo accetta direttamente (vedi ProcessGuard), niente registrazione
+/// necessaria. Se invece è stato avviato con un model_override (es. un
+/// riferimento hf.co), quel riferimento NON è accettato tale e quale da
+/// /api/generate — eullm lo normalizza in un nome canonico diverso per il
+/// proprio registry interno (osservato: "hf.co/bartowski/Qwen_Qwen3.6-35B-
+/// A3B-GGUF:Q4_K_M" in avvio → "qwen_qwen3.6-35b-a3b-gguf-q4_k_m" in
+/// /api/tags — l'originale dà 500 "Model ... not found"), quindi si
+/// interroga /api/tags per il nome vero invece di indovinare la regola di
+/// normalizzazione (vedi bootstrap::fetch_active_model_name). Fallback sul
+/// path di lancio se la query fallisce. Se eullm è esterno
+/// (manage_subprocesses=false) usa Settings.eullm.model così com'è.
+async fn build_eullm_client(
     settings: &config::Settings,
     guard: &bootstrap::ProcessGuard,
 ) -> clients::eullm::EullmClient {
-    let eullm_model = guard
-        .eullm_model_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| settings.eullm.model.clone());
+    let eullm_model = match &guard.eullm_model_path {
+        Some(path) if settings.eullm.model_override.is_some() => {
+            bootstrap::fetch_active_model_name(&settings.eullm.url)
+                .await
+                .unwrap_or_else(|| path.display().to_string())
+        }
+        Some(path) => path.display().to_string(),
+        None => settings.eullm.model.clone(),
+    };
 
     clients::eullm::EullmClient::new(
         settings.eullm.url.clone(),
