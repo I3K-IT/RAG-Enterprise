@@ -2478,7 +2478,7 @@ dependencies = [
 
 [[package]]
 name = "i3k-rag-engine"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "argon2",
