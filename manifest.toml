@@ -161,6 +161,38 @@ size    = 867041280
 dest    = "{data}/bin/eullm"
 exec    = true
 
+# ARM64 CPU-only, SENZA CUDA — mancava del tutto: prima di questa entry,
+# su un ARM64 senza GPU NVIDIA rilevata (es. Radxa Orion O6 dopo rimozione
+# della RTX 3060 esterna) select_components() non trovava NESSUN target
+# eullm utilizzabile, perché l'unico pin ARM64 esistente richiedeva CUDA.
+# Bootstrap ricadeva sul ramo "eullm o modello non trovati — RAG senza
+# LLM" (main.rs) — appariva silenziosamente senza motore di inferenza.
+# sha256 confermato da checksums.txt della release EuLLM-v0.6.60
+# (github.com/eullm/eullm/releases/download/EuLLM-v0.6.60/checksums.txt,
+# riga "eullm-linux-arm64/eullm-linux-arm64"). size approssimata (14.9 MB
+# dalla UI GitHub, non byte esatti — vedi nota sopra sullo stesso principio).
+#
+# NOTA: esiste ANCHE una build "eullm-linux-arm64-cix-p1" (11.2 MB,
+# sha256 ee893c06e60130b8acb3329deb9544ef7ea1d0d428091b90c015b5190e1d9a7d),
+# verosimilmente ottimizzata per le estensioni Armv9.2 del CIX P1
+# (SVE2/BF16/I8MM — le stesse usate dalla build llama.cpp che CIX stessa
+# distribuisce). NON pinnata qui ancora: farla scegliere automaticamente
+# dal bootstrap richiede insegnare a detect_platform_targets() a
+# riconoscere questo SoC specifico (es. leggendo /proc/cpuinfo o
+# /sys/firmware/devicetree/base/model) — serve la stringa REALE letta
+# sull'hardware, non indovinata. Prossimo step, non bloccante per questa
+# entry generica.
+[[component]]
+name    = "eullm"
+version = "0.6.60"
+kind    = "binary"
+target  = "linux-aarch64"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.60/eullm-linux-arm64"
+sha256  = "fbab83ca24b6e55a303eb9036121457a899e3d612f81ecab214ff335168054cf"
+size    = 15624908
+dest    = "{data}/bin/eullm"
+exec    = true
+
 # pdfium (OCR, feature "ocr"): libreria bundlata, no dipendenza host — vedi
 # ocr.rs::resolve_pdfium_library_path(), che cerca proprio in {data}/lib/.
 # url punta DIRETTAMENTE alle release ufficiali di bblanchon/pdfium-binaries

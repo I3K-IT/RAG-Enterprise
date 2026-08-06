@@ -825,6 +825,7 @@ fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
     match target {
         Some("linux-x86_64-cuda") => Some("linux-x64-cuda"),
         Some("linux-aarch64-cuda") => Some("linux-arm64-cuda"),
+        Some("linux-aarch64") => Some("linux-arm64"),
         _ => None,
     }
 }
