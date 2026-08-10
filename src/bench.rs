@@ -841,8 +841,9 @@ pub async fn run(
     tracing::info!(doc = %args.doc_path.display(), "avvio benchmark ingestione");
     // Stesso ordine di api/documents.rs::upload() sull'ingestione reale:
     // libera VRAM (eullm) PRIMA di occuparla (bge-m3), rientro speculare a
-    // fine ingestione. Senza unload_during_ingestion, eullm resta piazzato
-    // con la sua allocazione fissa (qui non si adatta, vedi eullm.fit) e lo
+    // fine ingestione. Senza unload_during_ingestion, eullm resta piazzato con
+    // l'allocazione decisa al proprio avvio (il sizing avviene una volta, al
+    // load, non si ridimensiona a caldo per far spazio) e lo
     // swap dell'embedding su GPU può non trovare VRAM sufficiente e
     // fallire silenziosamente (log "swap embedding fallito") — misurando di
     // nuovo il percorso sbagliato: CPU invece di GPU.

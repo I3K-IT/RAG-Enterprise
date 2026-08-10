@@ -118,7 +118,6 @@ mod eullm_args_tests {
             batch_size: 1,
             cache_type_k: None,
             cache_type_v: None,
-            fit: false,
             unload_during_ingestion: false,
             model_override: None,
             n_cpu_moe: None,
@@ -158,25 +157,19 @@ mod eullm_args_tests {
     }
 
     #[test]
-    fn no_fit_flag_unless_configured() {
-        // --fit esiste solo da EuLLM-v0.6.9 in poi (verificato nel sorgente
-        // eullm) — la pin di oggi per x86_64 è ancora v0.6.6, che clap
-        // rifiuterebbe come flag sconosciuto. Di default (fit=false, il
-        // default di EullmSettings) non deve mai comparire.
+    fn fit_flag_never_passed() {
+        // Dalla pin 0.6.80 --fit non si passa mai: il sizing è automatico a
+        // prescindere e il flag servirebbe solo alla conferma interattiva, che
+        // richiede stdin E stdout TTY — spawn_eullm mette stdin su null.
+        // Nessuna combinazione di config deve farlo ricomparire.
         for cfg in [base_cfg(), {
             let mut c = base_cfg();
             c.cache_type_k = Some("q8_0".into());
+            c.n_cpu_moe = Some(4);
             c
         }] {
             assert!(!eullm_args(&cfg).contains(&"--fit".to_owned()));
         }
-    }
-
-    #[test]
-    fn fit_flag_present_when_configured() {
-        let mut cfg = base_cfg();
-        cfg.fit = true;
-        assert!(eullm_args(&cfg).contains(&"--fit".to_owned()));
     }
 
     #[test]
@@ -442,7 +435,7 @@ pub struct Phase1 {
 /// caricare l'embedding PRIMA quando settings.eullm.fit=true — --fit di
 /// eullm legge la VRAM libera con cudaMemGetInfo al proprio avvio, quindi
 /// deve vedere la VRAM già ridotta dall'embedding per offloadare i layer di
-/// conseguenza (vedi audit Fase 1, punto 5a, e EullmSettings::fit).
+/// conseguenza (vedi audit Fase 1, punto 5a, e l'ordine di avvio in main.rs).
 pub async fn provision_and_start_qdrant(
     settings: &Settings,
 ) -> Result<(Phase1, Vec<tokio::process::Child>)> {
@@ -557,15 +550,13 @@ pub async fn start_eullm(
     Ok(ProcessGuard { _children: children, eullm_model_path })
 }
 
-/// Percorso classico (settings.eullm.fit=false, il default): qdrant ed eullm
-/// avviati insieme, l'embedding carica dopo (vedi main.rs) — comportamento
-/// INVARIATO rispetto a prima dello split in provision_and_start_qdrant +
-/// start_eullm. Chi vuole l'ordine invertito (fit=true) chiama le due fasi
-/// separatamente per intercalarci il caricamento dell'embedding.
-pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
-    let (phase1, children) = provision_and_start_qdrant(settings).await?;
-    start_eullm(settings, phase1, children).await
-}
+// NOTA: qui c'era ensure_ready(), che avviava qdrant ed eullm insieme
+// lasciando l'embedding per ultimo. Rimossa con la pin 0.6.80: era il ramo
+// usato quando eullm non si adattava alla VRAM già occupata, e ora che il
+// sizing è sempre automatico quell'ordine farebbe partire eullm prima
+// dell'embedding, lasciandolo senza VRAM. L'unico percorso è la coppia
+// provision_and_start_qdrant + start_eullm, con load_embedding in mezzo
+// (main.rs).
 
 // ── Componente: verifica / download atomico ───────────────────────────────────
 
@@ -1243,9 +1234,11 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
         args.push("--n-cpu-moe".to_owned());
         args.push(n.to_string());
     }
-    if cfg.fit {
-        args.push("--fit".to_owned());
-    }
+    // --fit non viene più passato: dalla 0.6.80 il sizing è automatico a
+    // prescindere, e il flag serve solo a chiedere conferma su uno split
+    // parziale quando stdin E stdout sono entrambi TTY (fit.rs:851 nel
+    // sorgente eullm). spawn_eullm mette stdin su null, quindi la condizione
+    // è falsa per costruzione e il flag era un no-op.
     args
 }
 

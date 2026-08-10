@@ -54,37 +54,34 @@ async fn main() -> Result<()> {
     // (drop → SIGKILL); espone anche il path GGUF esatto con cui ha avviato
     // eullm (se lo gestisce).
     //
-    // Ordine di avvio eullm/embedding: dipende da settings.eullm.fit.
-    //   fit=false (default, es. x86_64 pinnato su eullm senza --fit oggi):
-    //     eullm PRIMA, poi embedding — eullm non si adatta alla VRAM già
-    //     occupata, quindi deve prendersi la sua allocazione fissa per primo
-    //     (vedi audit Fase 1, punto 5a: il warmup forza il caricamento reale,
-    //     non solo /api/tags che conferma solo il processo in ascolto).
-    //   fit=true (eullm ≥ v0.6.9, --fit disponibile — vedi EullmSettings::fit):
-    //     embedding PRIMA, poi eullm con --fit — --fit legge la VRAM libera
-    //     con cudaMemGetInfo al proprio avvio, quindi deve vedere la VRAM già
-    //     ridotta dall'embedding per offloadare i layer di conseguenza
-    //     (altrimenti i due si contenderebbero la VRAM al boot).
-    // _guard: usato solo per Drop (kill_on_drop dei processi figlio) da qui
-    // in poi — il path GGUF di eullm è già stato consumato da
-    // build_eullm_client() dentro ciascun branch, prima di questa tupla.
-    let (_guard, mut embeddings, eullm) = if settings.eullm.fit {
-        tracing::info!(
-            "eullm.fit=true: carico l'embedding PRIMA di avviare eullm, così --fit vede la VRAM già ridotta"
-        );
+    // Ordine di avvio: embedding PRIMA, eullm DOPO. Incondizionato.
+    //
+    // Dalla 0.6.80 eullm dimensiona l'offload GPU da sé SEMPRE, non più solo
+    // con --fit, e il budget lo calcola sulla VRAM *libera* letta con
+    // cudaMemGetInfo al proprio avvio (free_vram * 0.97 - 640 MiB, vedi
+    // VRAM_SAFETY_FRACTION e COMPUTE_BUFFER_RESERVE_BYTES nel sorgente eullm).
+    // Quindi l'unico ordine corretto è caricare bge-m3 per primo: eullm vede
+    // la VRAM già ridotta e si adatta.
+    //
+    // L'ordine inverso, che prima era il default (eullm per primo, con warmup
+    // a forzare l'allocazione reale), su 0.6.80 diventa una trappola: eullm si
+    // prenderebbe quasi tutta la VRAM libera e l'embedding non troverebbe più
+    // spazio — bge-m3 sono 2,27 GB di soli pesi. Per questo il ramo è stato
+    // rimosso invece che lasciato come opzione.
+    //
+    // _guard: usato solo per Drop (kill_on_drop dei processi figlio) da qui in
+    // poi — il path GGUF di eullm è già stato consumato da
+    // build_eullm_client(), prima di questa tupla.
+    let (_guard, mut embeddings, eullm) = {
         let (phase1, qdrant_children) = bootstrap::provision_and_start_qdrant(&settings).await?;
         let embeddings = load_embedding(&settings).await?;
-        tracing::info!(device = embeddings.device_label(), "embedding service pronto (prima di eullm)");
+        tracing::info!(
+            device = embeddings.device_label(),
+            "embedding service pronto (prima di eullm, così il sizing di eullm vede la VRAM già ridotta)"
+        );
         let guard = bootstrap::start_eullm(&settings, phase1, qdrant_children).await?;
         let eullm = build_eullm_client(&settings, &guard).await;
         warmup_eullm(&eullm).await;
-        (guard, embeddings, eullm)
-    } else {
-        let guard = bootstrap::ensure_ready(&settings).await?;
-        let eullm = build_eullm_client(&settings, &guard).await;
-        warmup_eullm(&eullm).await;
-        let embeddings = load_embedding(&settings).await?;
-        tracing::info!(device = embeddings.device_label(), "embedding service pronto");
         (guard, embeddings, eullm)
     };
 

@@ -128,36 +128,32 @@ size    = 76168120
 dest    = "{data}/bin/qdrant"
 exec    = true
 
+# Tutti i target eullm sono pinnati alla STESSA versione (0.6.80). Prima
+# divergevano (0.6.6 / 0.6.10 / 0.6.60) perché ogni entry veniva bumpata da
+# sola quando serviva: il risultato era che la piattaforma di produzione più
+# comune, x86_64+CUDA, girava sulla pin più vecchia delle tre. sha256 e size
+# sono byte esatti, presi da checksums.txt e dal content-length della release
+# (non più approssimati dalla UI GitHub).
 [[component]]
 name    = "eullm"
-version = "0.6.6"
+version = "0.6.80"
 kind    = "binary"
 target  = "linux-x86_64-cuda"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.6/eullm-linux-x64-cuda-12.8"
-sha256  = "3642149cea0b66d2dcb0c3ef411986bca9bee22982146cb435843bae2bb2a649"
-size    = 905274848
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-x64-cuda-12.8"
+sha256  = "465ae9e37829fb6b824e015a7e68af711f79ce284772177a182ce8191c55b191"
+size    = 901988832
 dest    = "{data}/bin/eullm"
 exec    = true
 
-# ARM64+CUDA (es. Radxa Orion O6 con GPU NVIDIA esterna via PCIe). Versione
-# più recente della pin x86_64 (0.6.10 vs 0.6.6) — ha --fit (vedi
-# EullmSettings::fit) E l'endpoint /api/unload (EullmSettings::
-# unload_during_ingestion, EmbeddingsSettings::swap_during_ingestion),
-# verificati nel sorgente eullm; la pin x86_64 non li ha ancora, non
-# bumpata insieme di proposito (decisione separata).
-# sha256 confermato dall'utente da checksums.txt della release
-# EuLLM-v0.6.10 (non scaricabile qui: repo eullm/eullm fuori dallo scope
-# GitHub di questa sessione). size approssimata (827 MB dalla UI GitHub,
-# non byte esatti — usata solo per il pre-check disco, l'integrità è
-# sullo sha256, non sulla size).
+# ARM64+CUDA (es. Radxa Orion O6 con GPU NVIDIA esterna via PCIe).
 [[component]]
 name    = "eullm"
-version = "0.6.10"
+version = "0.6.80"
 kind    = "binary"
 target  = "linux-aarch64-cuda"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.10/eullm-linux-arm64-cuda-12.8"
-sha256  = "cb7861cbce527ac61f03db79cbb16965417a89dbd12fa8f1b221673cd813915c"
-size    = 867041280
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64-cuda-12.8"
+sha256  = "07dd91216c13d552628c4f104fde66617b96a5bda57ec0fc47b17b26e8291577"
+size    = 862953528
 dest    = "{data}/bin/eullm"
 exec    = true
 
@@ -167,29 +163,35 @@ exec    = true
 # eullm utilizzabile, perché l'unico pin ARM64 esistente richiedeva CUDA.
 # Bootstrap ricadeva sul ramo "eullm o modello non trovati — RAG senza
 # LLM" (main.rs) — appariva silenziosamente senza motore di inferenza.
-# sha256 confermato da checksums.txt della release EuLLM-v0.6.60
-# (github.com/eullm/eullm/releases/download/EuLLM-v0.6.60/checksums.txt,
-# riga "eullm-linux-arm64/eullm-linux-arm64"). size approssimata (14.9 MB
-# dalla UI GitHub, non byte esatti — vedi nota sopra sullo stesso principio).
 #
-# NOTA: esiste ANCHE una build "eullm-linux-arm64-cix-p1" (11.2 MB,
-# sha256 ee893c06e60130b8acb3329deb9544ef7ea1d0d428091b90c015b5190e1d9a7d),
-# verosimilmente ottimizzata per le estensioni Armv9.2 del CIX P1
-# (SVE2/BF16/I8MM — le stesse usate dalla build llama.cpp che CIX stessa
-# distribuisce). NON pinnata qui ancora: farla scegliere automaticamente
-# dal bootstrap richiede insegnare a detect_platform_targets() a
-# riconoscere questo SoC specifico (es. leggendo /proc/cpuinfo o
-# /sys/firmware/devicetree/base/model) — serve la stringa REALE letta
-# sull'hardware, non indovinata. Prossimo step, non bloccante per questa
-# entry generica.
+# NOTA: esiste ANCHE una build "eullm-linux-arm64-cix-p1" (13.843.264 byte,
+# sha256 b68021f7dc269cbdbe3d98a2f40bf41ed00401652f58a4d5b1ebec6bab8fc41d
+# per la 0.6.80), compilata per le estensioni Armv9.2 del CIX P1 — la CI di
+# eullm la costruisce con GGML_CPU_ARM_ARCH=armv9.2-a+sve2+bf16+i8mm+dotprod
+# (job build-arm-cix-p1 in release-engine.yml, verificato nel sorgente).
+# NON pinnata qui, e la ragione NON è pigrizia: quel binario va in SIGILL su
+# qualunque ARM64 privo di quelle estensioni (Raspberry Pi, Graviton…), ed è
+# per questo che upstream la tiene come artefatto separato dalla arm64
+# generica. Servirla a un aarch64 qualsiasi ucciderebbe il motore all'avvio,
+# peggio del fallback attuale. Per pinnarla va prima insegnato a
+# current_targets() (bootstrap.rs) a riconoscere il SoC leggendo
+# /sys/firmware/devicetree/base/model — serve la stringa REALE letta
+# sull'hardware, non indovinata.
+#
+# Nota sul guadagno atteso, per non riporci aspettative sbagliate: SVE2/i8mm
+# accelerano l'aritmetica, quindi si vedono nel PREFILL (matmul batchata,
+# compute-bound). Il decode di un token è limitato dalla banda DRAM — deve
+# streammare tutti i pesi comunque — e non si muove. Per il RAG il prefill è
+# la parte calda (prompt lunghi di chunk recuperati), quindi avrebbe senso,
+# ma nessuno ha ancora misurato un A/B generico-vs-cix.
 [[component]]
 name    = "eullm"
-version = "0.6.60"
+version = "0.6.80"
 kind    = "binary"
 target  = "linux-aarch64"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.60/eullm-linux-arm64"
-sha256  = "fbab83ca24b6e55a303eb9036121457a899e3d612f81ecab214ff335168054cf"
-size    = 15624908
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64"
+sha256  = "de8f011feb02d2eb1b2455a27bc7e16a956f0538f12eaf2458dd1c0bbbddb6d3"
+size    = 18774016
 dest    = "{data}/bin/eullm"
 exec    = true
 
