@@ -76,24 +76,45 @@ pub async fn rename_conversation(
 }
 
 /// Elimina la conversazione e tutti i suoi messaggi (cascade manuale).
+///
+/// SICUREZZA (IDOR): verifica l'ownership PRIMA di toccare i messaggi. La
+/// versione precedente cancellava `chat_messages` per conv_id senza filtro
+/// utente, poi filtrava per user_id solo sulla conversazione — così un utente
+/// poteva cancellare i messaggi delle conversazioni altrui passando un conv_id
+/// non suo. Ora: transazione atomica, la conversazione (filtrata per user_id)
+/// va rimossa per prima; se non appartiene all'utente `rows_affected == 0`,
+/// rollback, nessun messaggio toccato. I messaggi sono anch'essi filtrati per
+/// user_id come difesa in profondità.
 pub async fn delete_conversation(
     pool: &SqlitePool,
     conv_id: &str,
     user_id: i64,
 ) -> Result<bool> {
-    sqlx::query("DELETE FROM chat_messages WHERE conversation_id = ?")
-        .bind(conv_id)
-        .execute(pool)
-        .await?;
+    let mut tx = pool.begin().await?;
+
     let affected = sqlx::query(
         "DELETE FROM conversations WHERE id = ? AND user_id = ?"
     )
     .bind(conv_id)
     .bind(user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
-    Ok(affected > 0)
+
+    if affected == 0 {
+        // Non è dell'utente (o non esiste): non toccare nessun messaggio.
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    sqlx::query("DELETE FROM chat_messages WHERE conversation_id = ? AND user_id = ?")
+        .bind(conv_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Aggiorna updated_at della conversazione (chiamato dopo insert messaggio).

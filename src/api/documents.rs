@@ -38,9 +38,13 @@ pub async fn list(State(state): State<AppState>, _claims: Claims) -> Response {
 
 pub async fn upload(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
     multipart: Multipart,
 ) -> Response {
+    // RBAC (parità Python: require_upload_permission → admin|super_user).
+    if !claims.role.can_upload() {
+        return err(StatusCode::FORBIDDEN, "permessi insufficienti per caricare documenti");
+    }
     // La guardia resta viva (quindi active_ingestions > 0, vedi
     // AppState::ingestion_blocks_queries) per l'INTERA finestra
     // unload → estrazione/chunk/embed → reload, non solo la fase pesante:
@@ -301,44 +305,50 @@ pub async fn download(
 
 pub async fn delete(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
     Path(document_id): Path<String>,
 ) -> Response {
-    // Verify the document exists and is not already soft-deleted
-    match db::documents::find_by_id(&state.db, &document_id).await {
-        Ok(Some(doc)) if doc.is_deleted != 0 => {
-            return err(StatusCode::NOT_FOUND, "document not found")
-        }
-        Ok(None) => return err(StatusCode::NOT_FOUND, "document not found"),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
-        Ok(Some(_)) => {}
+    // RBAC (parità Python: require_delete_permission → admin|super_user).
+    if !claims.role.can_delete() {
+        return err(StatusCode::FORBIDDEN, "permessi insufficienti per eliminare documenti");
     }
-
-    // INVARIANTE (CLAUDE.md): Qdrant first, then SQLite — never reverse this order.
-    if let Err(e) = state.qdrant.delete_document(&document_id).await {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("qdrant delete: {e}"),
-        );
-    }
-
-    let doc = db::documents::find_by_id(&state.db, &document_id)
-        .await
-        .ok()
-        .flatten();
-
-    match db::documents::soft_delete(&state.db, &document_id).await {
-        Ok(true) => {
-            // Best-effort: remove stored original file
-            if let Some(d) = doc {
-                let file_path = state.storage.path_for(&document_id, &d.filename);
-                let dir_path = state.storage.path_for(&document_id, "");
-                let _ = std::fs::remove_file(&file_path);
-                let _ = std::fs::remove_dir(dir_path.parent().unwrap_or(&file_path));
-            }
-            Json(json!({ "deleted": true })).into_response()
-        }
+    match purge_document(&state, &document_id).await {
+        Ok(true) => Json(json!({ "deleted": true })).into_response(),
         Ok(false) => err(StatusCode::NOT_FOUND, "document not found"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
+}
+
+/// Punto di ingresso UNICO per la cancellazione di un documento (CLAUDE.md:
+/// invariante sync SQLite↔Qdrant — "un solo punto di ingresso per delete").
+/// Ordine obbligatorio: **Qdrant PRIMA, poi SQLite**, poi il file originale.
+/// La cancellazione Qdrant è idempotente (safe anche su 0 vettori), così
+/// l'endpoint admin può usarla anche per ripulire eventuali orfani.
+/// Ritorna `Ok(false)` se il documento non esiste o era già soft-deleted.
+pub(crate) async fn purge_document(state: &AppState, document_id: &str) -> anyhow::Result<bool> {
+    // Recupera il filename (per il cleanup del file) prima di toccare gli store.
+    let doc = db::documents::find_by_id(&state.db, document_id).await?;
+
+    // INVARIANTE: Qdrant PRIMA. Se fallisce, ci fermiamo: SQLite resta coerente
+    // (documento ancora "attivo") anziché diventare un orfano senza vettori.
+    state.qdrant.delete_document(document_id).await?;
+
+    // SQLite dopo. soft_delete tocca solo righe con is_deleted = 0: ritorna
+    // false se il documento non esisteva o era già cancellato.
+    let removed = db::documents::soft_delete(&state.db, document_id).await?;
+
+    // Best-effort: rimuove il file originale e la sua cartella {base}/{id}.
+    if removed {
+        if let Some(d) = &doc {
+            let file_path = state.storage.path_for(document_id, &d.filename);
+            let _ = std::fs::remove_file(&file_path);
+            // parent() = {base}/{document_id}; remove_dir fallisce (ignorato) se
+            // non è vuota, quindi non tocca mai nulla che non sia nostro.
+            if let Some(parent) = file_path.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+    }
+
+    Ok(removed)
 }

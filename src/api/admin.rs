@@ -143,24 +143,15 @@ pub async fn qdrant_delete_document(
     Path(document_id): Path<String>,
 ) -> Response {
     if let Some(r) = require_admin(&claims) { return r; }
-    let url = format!(
-        "{}/collections/{}/points/delete?wait=true",
-        state.settings.qdrant.url, state.settings.qdrant.collection
-    );
-    let body = json!({
-        "filter": {
-            "must": [{ "key": "document_id", "match": { "value": document_id } }]
-        }
-    });
-    let client = reqwest::Client::new();
-    match client.post(&url).json(&body).send().await {
-        Ok(r) if r.status().is_success() => Json(json!({ "deleted": true })).into_response(),
-        Ok(r) => {
-            let status = r.status().as_u16();
-            let msg = r.text().await.unwrap_or_default();
-            err(StatusCode::BAD_GATEWAY, format!("qdrant {status}: {msg}"))
-        }
-        Err(e) => err(StatusCode::BAD_GATEWAY, e),
+    // INVARIANTE (CLAUDE.md): usa il punto di ingresso UNICO condiviso col
+    // delete utente — Qdrant E SQLite insieme, Qdrant prima. Prima questo
+    // handler cancellava SOLO da Qdrant via REST, lasciando la riga SQLite
+    // "attiva" senza vettori: un orfano, esattamente il secondo punto di
+    // ingresso che l'invariante vieta.
+    match crate::api::documents::purge_document(&state, &document_id).await {
+        Ok(true) => Json(json!({ "deleted": true })).into_response(),
+        Ok(false) => err(StatusCode::NOT_FOUND, "document not found"),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
 
