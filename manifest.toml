@@ -178,12 +178,18 @@ exec    = true
 # /sys/firmware/devicetree/base/model — serve la stringa REALE letta
 # sull'hardware, non indovinata.
 #
-# Nota sul guadagno atteso, per non riporci aspettative sbagliate: SVE2/i8mm
-# accelerano l'aritmetica, quindi si vedono nel PREFILL (matmul batchata,
-# compute-bound). Il decode di un token è limitato dalla banda DRAM — deve
-# streammare tutti i pesi comunque — e non si muove. Per il RAG il prefill è
-# la parte calda (prompt lunghi di chunk recuperati), quindi avrebbe senso,
-# ma nessuno ha ancora misurato un A/B generico-vs-cix.
+# Guadagno MISURATO su Orion reale (bench/arm_cpu_bench.py di eullm,
+# qwen3-4b, 4 thread, generico vs cix-p1):
+#   prefill 145 tok:   8,8 → 27,1 tok/s  (3,08x)   TTFT 16,6 s → 5,3 s
+#   prefill 580 tok:  11,4 → 25,5 tok/s  (2,24x)   TTFT 51,1 s → 22,7 s
+#   decode:            6,9 → 12,2 tok/s  (1,77x)
+# Per il RAG conta il TTFT: i nostri prompt sono lunghi (chunk recuperati
+# infilati nel contesto), quindi il risparmio assoluto è maggiore di quello
+# misurato a 580 token. Due cautele sui numeri: il test è su qwen3-4b, non
+# sul 14b che pinniamo in produzione, e il decode è un solo campione
+# (--decode-repeats 1) — il prefill invece ha due punti coerenti.
+# Nota: la §7 del profilo CIX di eullm dà il decode per bandwidth-bound e
+# quindi invariante; la misura la contraddice.
 [[component]]
 name    = "eullm"
 version = "0.6.80"
@@ -192,6 +198,23 @@ target  = "linux-aarch64"
 url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64"
 sha256  = "de8f011feb02d2eb1b2455a27bc7e16a956f0538f12eaf2458dd1c0bbbddb6d3"
 size    = 18774016
+dest    = "{data}/bin/eullm"
+exec    = true
+
+# ARM64 con ISA Armv9.2 COMPLETA (CIX P1, es. Radxa Orion O6 senza GPU
+# NVIDIA). Selezionata solo se current_targets() verifica via getauxval che la
+# CPU esponga sve2+bf16+i8mm+dotprod tutte insieme — vedi has_cix_p1_isa(): il
+# binario è compilato con -march=armv9.2-a+... e va in SIGILL se ne manca una.
+# Sta fra -cuda e il generico nell'ordine di specificità: con una GPU NVIDIA
+# presente vince comunque -cuda, perché questa build è CPU-only.
+[[component]]
+name    = "eullm"
+version = "0.6.80"
+kind    = "binary"
+target  = "linux-aarch64-cix"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64-cix-p1"
+sha256  = "b68021f7dc269cbdbe3d98a2f40bf41ed00401652f58a4d5b1ebec6bab8fc41d"
+size    = 13843264
 dest    = "{data}/bin/eullm"
 exec    = true
 
