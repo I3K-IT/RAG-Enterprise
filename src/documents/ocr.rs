@@ -1,28 +1,30 @@
-//! OCR per PDF scansionati: pdfium-render → leptess (Tesseract ita+eng).
-//! Tessdata cercata in {data_dir}/tessdata/ (stesso data_dir del manifest/bootstrap),
-//! poi TESSDATA_PREFIX di sistema. Attivazione: cargo build --features ocr
+//! OCR for scanned PDFs: pdfium-render → leptess (Tesseract ita+eng).
+//! Tessdata is looked up in {data_dir}/tessdata/ — the same data_dir the
+//! manifest and bootstrap use — then in the system TESSDATA_PREFIX. Enabled
+//! with `cargo build --features ocr`.
 //!
-//! libpdfium è **bundlabile**: caricata a runtime (dlopen) cercando, in ordine,
-//! PDFIUM_DYNAMIC_LIB_PATH → accanto all'eseguibile → ./lib/ accanto all'eseguibile
-//! → ricerca di sistema (comoda in sviluppo, non richiesta in una build distribuita).
-//! I binari ufficiali per ogni piattaforma sono su github.com/bblanchon/pdfium-binaries.
+//! libpdfium is **bundlable**: loaded at runtime through dlopen, searching in
+//! order PDFIUM_DYNAMIC_LIB_PATH → next to the executable → ./lib/ next to the
+//! executable → the system search, which is convenient in development but not
+//! required for a distributed build. Official binaries for every platform live
+//! at github.com/bblanchon/pdfium-binaries.
 //!
-//! leptess/Tesseract invece si linka **a compile-time** (non ha un equivalente di
-//! bind_to_library): richiede ancora libtesseract + libleptonica sul sistema di build
-//! e — per una build distribuita "no dipendenza host" — un rpath verso una ./lib/
-//! bundlata. Non ancora impostato: vedi discussione bundling cross-platform.
+//! leptess/Tesseract, by contrast, links **at compile time** and has no
+//! equivalent of bind_to_library: it still needs libtesseract and libleptonica
+//! on the build system and — for a distributed build with no host dependency —
+//! an rpath pointing at a bundled ./lib/. Not set up yet.
 
 #[cfg(feature = "ocr")]
 fn resolve_pdfium_library_path() -> std::path::PathBuf {
     use pdfium_render::prelude::Pdfium;
 
-    // 1. Override esplicito (sviluppo locale o layout di deploy custom).
+    // 1. Explicit override (local development, or a custom deploy layout).
     if let Ok(p) = std::env::var("PDFIUM_DYNAMIC_LIB_PATH") {
         return std::path::PathBuf::from(p);
     }
 
-    // 2. Accanto all'eseguibile, poi in ./lib/ accanto all'eseguibile — il layout
-    //    di una build distribuita bundlata (no install system-wide richiesta).
+    // 2. Next to the executable, then in ./lib/ beside it — the layout of a
+    //    bundled distributed build, needing no system-wide install.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = Pdfium::pdfium_platform_library_name_at_path(dir);
@@ -36,14 +38,15 @@ fn resolve_pdfium_library_path() -> std::path::PathBuf {
         }
     }
 
-    // 3. Fallback: nome "nudo" → ricerca di sistema (dlopen standard). Comodo in
-    //    sviluppo con libpdfium installata via apt/brew; non è il path previsto
-    //    per le build distribuite.
+    // 3. Fallback: the bare name → standard dlopen system search. Handy in
+    //    development with libpdfium installed via apt or brew; not the path
+    //    intended for distributed builds.
     std::path::PathBuf::from(Pdfium::pdfium_platform_library_name())
 }
 
-/// `data_dir` è la stessa radice dati risolta da `Settings.data.data_path()`
-/// (bootstrap/manifest scaricano la tessdata in `{data_dir}/tessdata/`).
+/// `data_dir` is the same data root resolved by `Settings.data.data_path()`;
+/// the bootstrap and manifest download the tessdata into
+/// `{data_dir}/tessdata/`.
 #[cfg(feature = "ocr")]
 pub fn ocr_pdf(
     path: &std::path::Path,
@@ -57,16 +60,17 @@ pub fn ocr_pdf(
     let pdfium = Pdfium::new(
         Pdfium::bind_to_library(resolve_pdfium_library_path()).map_err(|e| {
             anyhow::anyhow!(
-                "libpdfium non trovata: {e}\n  → posizionala accanto all'eseguibile (o in ./lib/), oppure imposta PDFIUM_DYNAMIC_LIB_PATH"
+                "libpdfium not found: {e}\n  → place it next to the executable (or in ./lib/), or set PDFIUM_DYNAMIC_LIB_PATH"
             )
         })?,
     );
     let doc = pdfium
         .load_pdf_from_file(path, None)
-        .map_err(|e| anyhow::anyhow!("pdfium: caricamento {:?}: {e}", path))?;
+        .map_err(|e| anyhow::anyhow!("pdfium: loading {:?}: {e}", path))?;
 
-    // Cerca tessdata in {data_dir}/tessdata/ (dove il manifest la scarica);
-    // se manca (dev senza bootstrap) usa TESSDATA_PREFIX di sistema.
+    // Look for tessdata in {data_dir}/tessdata/, where the manifest downloads
+    // it; if absent (development without the bootstrap) fall back to the
+    // system TESSDATA_PREFIX.
     let tessdata_path = Some(data_dir.join("tessdata"))
         .filter(|p| p.is_dir())
         .map(|p| p.display().to_string());
@@ -127,13 +131,15 @@ pub fn ocr_pdf(
 mod smoke_test {
     use super::*;
 
-    /// I due test qui sotto mutano PDFIUM_DYNAMIC_LIB_PATH (env var di processo).
-    /// cargo test esegue i test in parallelo di default: senza serializzazione,
-    /// un test potrebbe leggere l'env var che l'altro ha appena settato/rimosso.
+    /// The two tests below mutate PDFIUM_DYNAMIC_LIB_PATH, a process-wide
+    /// environment variable. cargo test runs tests in parallel by default, so
+    /// without serialisation one test could read the variable the other has
+    /// just set or removed.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Costruisce un PDF minimo (senza dipendenze) con una riga di testo vettoriale,
-    /// cosi' la pipeline pdfium(rasterizza)->leptess(OCR) ha qualcosa di reale da leggere.
+    /// Builds a minimal PDF with no dependencies, containing one line of
+    /// vector text, so the pdfium (rasterise) → leptess (OCR) pipeline has
+    /// something real to read.
     fn minimal_pdf_with_text(text: &str) -> Vec<u8> {
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -167,65 +173,68 @@ mod smoke_test {
         out
     }
 
-    /// Golden-smoke-test: verifica che libpdfium venga risolta e caricata da un path
-    /// NON di sistema (accanto all'eseguibile di test, layout "bundlato"), e che la
-    /// pipeline pdfium->PNG->leptess estragga davvero il testo atteso.
+    /// Smoke test: checks that libpdfium is resolved and loaded from a
+    /// NON-system path — next to the test executable, the "bundled" layout —
+    /// and that the pdfium → PNG → leptess pipeline really does extract the
+    /// expected text.
     ///
-    /// Richiede (solo in locale, non in CI):
-    ///   - PDFIUM_LIB_FOR_TEST=/path/a/libpdfium.so   (una copia scaricata da
-    ///     github.com/bblanchon/pdfium-binaries; NON deve essere in un path di sistema)
-    ///   - tessdata ita+eng installate (vedi BUILD.md §2a)
+    /// Requires (locally only, not in CI):
+    ///   - PDFIUM_LIB_FOR_TEST=/path/to/libpdfium.so (a copy downloaded from
+    ///     github.com/bblanchon/pdfium-binaries; it must NOT be on a system path)
+    ///   - tessdata ita+eng installed (see BUILD.md §2a)
     #[test]
     fn bundled_pdfium_path_resolution_and_ocr_roundtrip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let Ok(scratch_lib) = std::env::var("PDFIUM_LIB_FOR_TEST") else {
-            eprintln!("PDFIUM_LIB_FOR_TEST non impostata — skip (vedi doc del test)");
+            eprintln!("PDFIUM_LIB_FOR_TEST unset — skipping (see the test docs)");
             return;
         };
 
-        // Simula il layout di release: copia libpdfium accanto all'eseguibile di
-        // test corrente, poi rimuove qualunque override esplicito così la
-        // resolve_pdfium_library_path() e' costretta a passare dal ramo
-        // "accanto all'eseguibile" (il ramo nuovo, non ancora testato prima d'ora).
+        // Simulate the release layout: copy libpdfium next to the current test
+        // executable, then remove any explicit override so
+        // resolve_pdfium_library_path() is forced down the "next to the
+        // executable" branch.
         std::env::remove_var("PDFIUM_DYNAMIC_LIB_PATH");
         let exe = std::env::current_exe().expect("current_exe");
         let dir = exe.parent().expect("exe parent");
         let dest = dir.join(
             pdfium_render::prelude::Pdfium::pdfium_platform_library_name(),
         );
-        std::fs::copy(&scratch_lib, &dest).expect("copia libpdfium accanto al binario di test");
+        std::fs::copy(&scratch_lib, &dest).expect("copying libpdfium next to the test binary");
 
         let pdf_bytes = minimal_pdf_with_text("i3k OCR bundling smoke test");
         let tmp_pdf = std::env::temp_dir().join("i3k_ocr_smoke.pdf");
-        std::fs::write(&tmp_pdf, &pdf_bytes).expect("scrittura PDF di test");
+        std::fs::write(&tmp_pdf, &pdf_bytes).expect("writing the test PDF");
 
-        // data_dir "vuota": nessun tessdata/ dentro → ocr_pdf ricade sul
-        // TESSDATA_PREFIX di sistema, esattamente come prima di questo test.
+        // An "empty" data_dir with no tessdata/ inside, so ocr_pdf falls back
+        // to the system TESSDATA_PREFIX.
         let empty_data_dir = std::env::temp_dir().join("i3k_ocr_smoke_empty_data_dir");
         let _ = std::fs::create_dir_all(&empty_data_dir);
 
         let result = ocr_pdf(&tmp_pdf, 1, &empty_data_dir);
 
-        // Pulizia prima degli assert, per non lasciare file anche se il test fallisce.
+        // Clean up before the assertions, so nothing is left behind even if
+        // the test fails.
         let _ = std::fs::remove_file(&dest);
         let _ = std::fs::remove_file(&tmp_pdf);
         let _ = std::fs::remove_dir_all(&empty_data_dir);
 
-        let text = result.expect("ocr_pdf deve riuscire con libpdfium bundlata accanto all'eseguibile");
+        let text = result.expect("ocr_pdf must succeed with libpdfium bundled next to the executable");
         assert!(
             text.to_lowercase().contains("bundling") || text.to_lowercase().contains("smoke"),
-            "testo OCR inatteso: {text:?}"
+            "unexpected OCR text: {text:?}"
         );
     }
 
-    /// Verifica che la tessdata venga letta da {data_dir}/tessdata/ (il path dove il
-    /// manifest la scarica), NON da una variabile d'ambiente slegata dal resto del
-    /// sistema (bug precedente: leggeva I3K_DATA_DIR, mai impostata da nessuno).
+    /// Checks that tessdata is read from {data_dir}/tessdata/, the path the
+    /// manifest downloads it to, and NOT from an environment variable
+    /// disconnected from the rest of the system — an earlier bug read
+    /// I3K_DATA_DIR, which nothing ever set.
     ///
-    /// Richiede TESSDATA_DIR_FOR_TEST=/path/a/cartella/con/tessdata/{ita,eng}.traineddata
-    /// (root "dati", stessa struttura di {data} nel manifest — non la cartella
-    /// tessdata stessa). Skip gracioso se non impostata.
+    /// Requires TESSDATA_DIR_FOR_TEST=/path/to/dir/containing/tessdata/{ita,eng}.traineddata
+    /// — the data root, mirroring {data} in the manifest, not the tessdata
+    /// folder itself. Skipped gracefully when unset.
     #[test]
     fn tessdata_resolved_from_data_dir() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -234,24 +243,24 @@ mod smoke_test {
             std::env::var("PDFIUM_LIB_FOR_TEST"),
             std::env::var("TESSDATA_DIR_FOR_TEST"),
         ) else {
-            eprintln!("PDFIUM_LIB_FOR_TEST/TESSDATA_DIR_FOR_TEST non impostate — skip");
+            eprintln!("PDFIUM_LIB_FOR_TEST/TESSDATA_DIR_FOR_TEST unset — skipping");
             return;
         };
         std::env::set_var("PDFIUM_DYNAMIC_LIB_PATH", &scratch_lib);
 
         let pdf_bytes = minimal_pdf_with_text("data dir tessdata roundtrip");
         let tmp_pdf = std::env::temp_dir().join("i3k_ocr_smoke_datadir.pdf");
-        std::fs::write(&tmp_pdf, &pdf_bytes).expect("scrittura PDF di test");
+        std::fs::write(&tmp_pdf, &pdf_bytes).expect("writing the test PDF");
 
         let result = ocr_pdf(&tmp_pdf, 1, std::path::Path::new(&data_dir));
 
         std::env::remove_var("PDFIUM_DYNAMIC_LIB_PATH");
         let _ = std::fs::remove_file(&tmp_pdf);
 
-        let text = result.expect("ocr_pdf deve riuscire leggendo tessdata da {data_dir}/tessdata/");
+        let text = result.expect("ocr_pdf must succeed reading tessdata from {data_dir}/tessdata/");
         assert!(
             text.to_lowercase().contains("roundtrip") || text.to_lowercase().contains("data dir"),
-            "testo OCR inatteso: {text:?}"
+            "unexpected OCR text: {text:?}"
         );
     }
 }

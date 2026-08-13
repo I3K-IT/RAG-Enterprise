@@ -35,8 +35,8 @@ pub struct QueryRequest {
     pub top_k: Option<u64>,
     #[serde(default)]
     pub use_history: bool,
-    /// ID della conversazione SQLite. Se presente, i messaggi vengono salvati
-    /// in quella conversazione e la history viene letta solo da essa.
+    /// SQLite conversation ID. When present, messages are stored in that
+    /// conversation and history is read only from it.
     pub conversation_id: Option<String>,
 }
 
@@ -44,8 +44,8 @@ fn err(status: StatusCode, msg: impl std::fmt::Display) -> Response {
     (status, Json(json!({ "error": msg.to_string() }))).into_response()
 }
 
-/// eullm è scaricato dalla VRAM (o in procinto) per via di
-/// `unload_during_ingestion` — vedi AppState::ingestion_blocks_queries.
+/// eullm has been evicted from VRAM, or is about to be, because of
+/// `unload_during_ingestion` — see AppState::ingestion_blocks_queries.
 fn ingestion_busy_response() -> Response {
     err(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -55,10 +55,11 @@ fn ingestion_busy_response() -> Response {
 
 // ── Shared setup: embed → search → load history → build prompt ────────────────
 
-/// Tempi per fase di prepare() — usati da query_stream() per registrare
-/// InferenceResult quando --bench-live è attivo (vedi bench::LiveRecorder).
-/// query() (non-streaming) li ignora oggi: non instrumentata, vedi nota in
-/// query_stream — è il percorso che il frontend usa davvero.
+/// Per-stage timings from prepare(), used by query_stream() to record an
+/// InferenceResult when --bench-live is enabled (see bench::LiveRecorder).
+/// The non-streaming query() currently ignores them: it is not instrumented,
+/// because the streaming path is the one the frontend actually uses (see the
+/// note in query_stream).
 pub(crate) struct PrepareTimings {
     pub(crate) embed_query: Duration,
     pub(crate) search: Duration,
@@ -72,9 +73,10 @@ async fn prepare(
     use_history: bool,
     conversation_id: Option<&str>,
 ) -> anyhow::Result<(String, Vec<Source>, PrepareTimings)> {
-    // 1. Embed query (CPU/GPU bound). Con swap_during_ingestion=true bge-m3
-    // gira su CPU qui (un solo testo corto, costo accettabile) — la GPU è
-    // riservata a eullm fuori dalla finestra di ingestione.
+    // 1. Embed the query (CPU/GPU bound). With swap_during_ingestion=true
+    // bge-m3 runs on CPU here — a single short text, so the cost is
+    // acceptable — because the GPU is reserved for eullm outside the ingestion
+    // window.
     let t = Instant::now();
     let svc = state.embeddings.clone();
     let q = question.to_owned();
@@ -93,8 +95,8 @@ async fn prepare(
         .await?;
     let search = t.elapsed();
 
-    // 3. Build sources and context string (non cronometrato: string join
-    // trascurabile, stessa convenzione di bench::run_inference)
+    // 3. Build sources and context string (not timed: the string join is
+    // negligible, same convention as bench::run_inference)
     let sources: Vec<Source> = hits
         .iter()
         .map(|h| Source {
@@ -112,9 +114,10 @@ async fn prepare(
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
 
-    // 4. Load last 3 exchanges from history if requested, poi costruisci il
-    // prompt — un'unica fase "prompt_build" (include la query SQLite della
-    // history, che bench::run_inference non ha: lì la history è sempre vuota).
+    // 4. Load the last 3 exchanges from history if requested, then build the
+    // prompt — a single "prompt_build" stage, which includes the SQLite
+    // history query that bench::run_inference does not have, since history is
+    // always empty there.
     let t = Instant::now();
     let history = if use_history {
         build_history_pairs(state, user_id, conversation_id).await?
@@ -170,8 +173,8 @@ pub async fn query(
         return ingestion_busy_response();
     }
     let conv_id = req.conversation_id.as_deref();
-    // _timings: non instrumentato — il frontend usa /api/query/stream (vedi
-    // query_stream), che è dove --bench-live registra le query reali.
+    // _timings: not instrumented — the frontend uses /api/query/stream (see
+    // query_stream), which is where --bench-live records real queries.
     let (full_prompt, sources, _timings) =
         match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
             Ok(v) => v,
@@ -183,11 +186,12 @@ pub async fn query(
         Err(e) => return err(StatusCode::BAD_GATEWAY, format!("eullm: {e}")),
     };
 
-    // Risposta vuota (es. il modello ha prodotto solo un blocco <think> poi
-    // ripulito): NON persistere — un turno "assistant" vuoto in cronologia
-    // contaminerebbe i prompt dei tentativi successivi (use_history=true).
+    // Empty answer — for instance the model produced only a <think> block that
+    // was then stripped. Do NOT persist it: an empty "assistant" turn in the
+    // history would contaminate the prompts of later attempts when
+    // use_history=true.
     if answer.trim().is_empty() {
-        tracing::warn!(query = %req.query, "eullm: risposta vuota");
+        tracing::warn!(query = %req.query, "eullm: empty answer");
         return err(StatusCode::BAD_GATEWAY, "il modello non ha prodotto una risposta, riprova");
     }
 
@@ -213,10 +217,11 @@ pub async fn query(
 
 // ── POST /api/query/stream ────────────────────────────────────────────────────
 
-/// Stato threaded attraverso l'unfold che produce lo stream SSE — una
-/// struct invece di una tupla perché ha guadagnato troppi campi (query()
-/// non-streaming non ne ha bisogno, vedi sopra: solo questo percorso misura
-/// TTFT/decode per --bench-live, dato che è quello che il frontend usa).
+/// State threaded through the unfold that produces the SSE stream. A struct
+/// rather than a tuple because it accumulated too many fields. The
+/// non-streaming query() does not need it (see above): only this path measures
+/// TTFT and decode for --bench-live, since this is the one the frontend
+/// uses.
 struct StreamState {
     rx: tokio::sync::mpsc::Receiver<String>,
     acc: String,
@@ -302,8 +307,9 @@ pub async fn query_stream(
                 Some((Ok::<_, Infallible>(ev), s))
             }
             None => {
-                // Channel closed — persist assistant reply (se non vuota: vedi
-                // query() non-streaming per il motivo) ed emette l'evento finale.
+                // Channel closed — persist the assistant reply, if non-empty
+                // (see the non-streaming query() for why), and emit the final
+                // event.
                 let total_generation = s.gen_start.elapsed();
                 if !s.acc.trim().is_empty() {
                     let sources_json = serde_json::to_string(&s.sources).unwrap_or_default();
@@ -313,7 +319,7 @@ pub async fn query_stream(
                     )
                     .await;
                 } else {
-                    tracing::warn!("eullm stream: risposta vuota, non persistita");
+                    tracing::warn!("eullm stream: empty answer, not persisted");
                 }
 
                 if let Some(rec) = &s.live_bench {
@@ -326,9 +332,10 @@ pub async fn query_stream(
                         total_generation,
                         tokens_generated: s.tokens,
                         chunks_retrieved: s.chunks_retrieved,
-                        // Non applicabile fuori da --bench <file>: lì confronta
-                        // i chunk recuperati con l'unico documento appena
-                        // ingerito, qui la collection reale ne contiene molti.
+                        // Not applicable outside --bench <file>: there it
+                        // compares the retrieved chunks against the single
+                        // just-ingested document, whereas the real collection
+                        // holds many.
                         chunks_from_bench_doc: 0,
                     });
                 }
