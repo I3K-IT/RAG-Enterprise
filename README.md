@@ -1,6 +1,13 @@
 # i3k RAG Engine — Community
 
-Open-source Rust port of the [RAG Enterprise](https://github.com/i3k-it/RAG-Enterprise) Python backend.
+Open-source Rust rewrite of the RAG Enterprise Python backend, replacing it as
+of v2. A single binary: no Java, no Docker Compose, no orchestration — it
+downloads and verifies its own components, bundles the compiled frontend, and
+serves the API.
+
+The Python version this replaces is preserved on the
+[`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags. It is
+no longer developed, but it remains available for anyone still running it.
 
 ## Architecture
 
