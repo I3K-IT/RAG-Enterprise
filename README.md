@@ -11,9 +11,15 @@ questions in plain language, get answers grounded in what those documents
 actually say, with the sources cited. No data ever leaves your server — there
 is no telemetry, and nothing is sent to an external API.
 
-> **v2 is a complete rewrite in Rust.** The Python version this replaces is
-> preserved on the [`python-legacy`](../../tree/python-legacy) branch and in the
-> `1.x` tags. See [Upgrading from 1.x](#upgrading-from-1x).
+> **v2 is a complete rewrite in Rust.** v1 was a Python stack: four containers
+> under Docker Compose — backend, frontend, Qdrant, Ollama — two of them built
+> on your machine, plus seven volumes to keep straight. v2 is one binary. It
+> starts Qdrant and the inference engine itself; there is nothing to compose and
+> nothing to build.
+>
+> The Python version is preserved on the
+> [`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags — see
+> [Upgrading from 1.x](#upgrading-from-1x).
 
 ## Why
 
@@ -151,9 +157,14 @@ query of a session and reports on shutdown.
 ## Upgrading from 1.x
 
 There is no automatic migration path, because v2 changes both the storage
-layout and the runtime model. In practice: install v2 alongside the old system,
-re-upload your documents, then decommission the Python stack once you are
-satisfied.
+layout and the runtime model: v1 kept its state in Docker volumes shared
+between containers, v2 keeps it in one data directory next to the binary.
+
+The two cannot run at the same time on one machine: they both want ports 8000,
+6333 and 11434. Stop the Compose stack before starting v2 — you are re-uploading
+anyway, so there is no moment where you need both. Your v1 data stays in its
+Docker volumes until you remove them, so you can go back by bringing Compose up
+again. Once you are satisfied, `docker compose down -v` retires it for good.
 
 The 1.x Python version remains available on the
 [`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags. It is
