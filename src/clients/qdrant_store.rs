@@ -4,8 +4,8 @@
 //! - Collection: "rag_documents", size 1024, distance COSINE
 //! - upsert: batch 1000, wait=true, id=UUID4 str
 //! - Payload: document_id, chunk_index, filename, upload_date, text, chunk_size,
-//!            document_type, structured_fields (opzionale)
-//! - search: score_threshold opzionale; restituisce {id, similarity, payload}
+//!            document_type, structured_fields (optional)
+//! - search: optional score_threshold; returns {id, similarity, payload}
 //! - delete_document: filters by document_id
 
 use anyhow::{Context, Result};

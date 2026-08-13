@@ -10,7 +10,7 @@ use crate::config::Settings;
 use crate::documents::storage::FileStorage;
 use crate::rag::vector_store::VectorStore;
 
-/// Stato condiviso clonato in ogni handler axum.
+/// Shared state, cloned into every axum handler.
 #[derive(Clone)]
 pub struct AppState {
     pub settings: Arc<Settings>,

@@ -49,7 +49,7 @@ fn err(status: StatusCode, msg: impl std::fmt::Display) -> Response {
 fn ingestion_busy_response() -> Response {
     err(
         StatusCode::SERVICE_UNAVAILABLE,
-        "ingestione documento in corso: il modello è temporaneamente scaricato dalla VRAM, riprova tra qualche secondo",
+        "a document is being ingested: the model is temporarily unloaded from VRAM, try again in a few seconds",
     )
 }
 

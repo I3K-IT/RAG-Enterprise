@@ -21,8 +21,8 @@ impl Role {
         matches!(self, Role::Admin | Role::SuperUser)
     }
 
-    // Usato quando gli endpoint di gestione utenti passeranno da stub a reali
-    // (api/auth.rs). Finché sono stub, resta legittimamente non chiamato.
+    // Used once the user-management endpoints in api/auth.rs stop being
+    // stubs. While they are, this is legitimately never called.
     #[allow(dead_code)]
     pub fn can_manage_users(self) -> bool {
         matches!(self, Role::Admin)

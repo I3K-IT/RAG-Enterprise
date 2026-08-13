@@ -239,12 +239,12 @@ async fn run_ingestion(
     let t = Instant::now();
     let (text, page_count) = tokio::task::spawn_blocking(move || parser::extract_text(&doc_path_owned, &data_dir))
         .await
-        .context("join estrazione testo")?
-        .with_context(|| format!("estrazione testo da {}", doc_path.display()))?;
+        .context("join text extraction")?
+        .with_context(|| format!("text extraction from {}", doc_path.display()))?;
     let extract_time = t.elapsed();
     tracing::info!(
         pages = ?page_count, chars = text.chars().count(), ms = extract_time.as_millis(),
-        "estrazione completata"
+        "extraction complete"
     );
 
     let word_count = text.split_whitespace().count();
@@ -292,7 +292,7 @@ async fn run_ingestion(
     let t = Instant::now();
     qdrant.upsert(&embedding_vecs, &payloads).await.context("upsert Qdrant")?;
     let upsert_time = t.elapsed();
-    tracing::info!(ms = upsert_time.as_millis(), "upsert completato, ingestione finita");
+    tracing::info!(ms = upsert_time.as_millis(), "upsert complete, ingestion finished");
 
     Ok(IngestionResult {
         document_id,
@@ -548,7 +548,7 @@ fn write_markdown_report(
         ));
     }
     all_stages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    md.push_str("Fasi ordinate per tempo assoluto (dalla più lenta):\n\n");
+    md.push_str("Stages by absolute time, slowest first:\n\n");
     md.push_str("| Stage | Time (ms) |\n|---|---|\n");
     for (name, ms) in all_stages.iter().take(10) {
         md.push_str(&format!("| {name} | {ms:.0} |\n"));
@@ -557,7 +557,7 @@ fn write_markdown_report(
         md.push_str(&format!("\n**Slowest stage overall**: {name} ({ms:.0} ms) — the first place to look when optimising.\n"));
     }
 
-    std::fs::write(&path, md).with_context(|| format!("scrittura report {}", path.display()))?;
+    std::fs::write(&path, md).with_context(|| format!("writing report {}", path.display()))?;
     Ok(path)
 }
 
@@ -721,13 +721,13 @@ fn write_live_report(
         let upsert_avg = by_stage("Qdrant upsert");
 
         md.push_str(&format!(
-            "\n**Medie su {} ingestioni**: estrazione {extract_avg:.0} ms, chunking {chunk_avg:.0} ms, embedding {embed_avg:.0} ms, upsert {upsert_avg:.0} ms — totale medio {:.0} ms.\n",
+            "\n**Averages over {} ingestions**: extraction {extract_avg:.0} ms, chunking {chunk_avg:.0} ms, embedding {embed_avg:.0} ms, upsert {upsert_avg:.0} ms — {:.0} ms total on average.\n",
             ingestions.len(),
             extract_avg + chunk_avg + embed_avg + upsert_avg
         ));
 
         md.push_str("\n```mermaid\npie title Average ingestion time per stage\n");
-        md.push_str(&format!("    \"Estrazione testo\" : {:.1}\n", extract_avg.max(0.1)));
+        md.push_str(&format!("    \"Text extraction\" : {:.1}\n", extract_avg.max(0.1)));
         md.push_str(&format!("    \"Chunking\" : {:.1}\n", chunk_avg.max(0.1)));
         md.push_str(&format!("    \"Embedding\" : {:.1}\n", embed_avg.max(0.1)));
         md.push_str(&format!("    \"Upsert Qdrant\" : {:.1}\n", upsert_avg.max(0.1)));
@@ -809,7 +809,7 @@ fn write_live_report(
     if !bottleneck_stages.is_empty() {
         md.push_str("\n## Bottleneck summary\n\n");
         bottleneck_stages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        md.push_str("Fasi ordinate per tempo MEDIO assoluto (dalla più lenta):\n\n");
+        md.push_str("Stages by average absolute time, slowest first:\n\n");
         md.push_str("| Stage | Average time (ms) |\n|---|---|\n");
         for (name, ms) in &bottleneck_stages {
             md.push_str(&format!("| {name} | {ms:.0} |\n"));
@@ -821,7 +821,7 @@ fn write_live_report(
         }
     }
 
-    std::fs::write(&path, md).with_context(|| format!("scrittura report {}", path.display()))?;
+    std::fs::write(&path, md).with_context(|| format!("writing report {}", path.display()))?;
     Ok(path)
 }
 
@@ -907,7 +907,7 @@ fn swap_embedding_device(embeddings: &mut EmbeddingService, to_gpu: bool) {
     match loaded {
         Ok(fresh) => *embeddings = fresh,
         Err(e) => tracing::warn!(
-            error = %e, to_gpu, "swap embedding fallito, continuo con il device corrente"
+            error = %e, to_gpu, "embedding swap failed, continuing on the current device"
         ),
     }
 }
@@ -942,12 +942,12 @@ mod tests {
             "--bench",
             "doc.pdf",
             "--bench-query",
-            "prima domanda",
+            "first question",
             "--bench-query",
-            "seconda domanda",
+            "second question",
         ]))
         .unwrap();
-        assert_eq!(a.queries, vec!["prima domanda".to_owned(), "seconda domanda".to_owned()]);
+        assert_eq!(a.queries, vec!["first question".to_owned(), "second question".to_owned()]);
     }
 
     #[test]

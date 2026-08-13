@@ -1,9 +1,9 @@
 //! Document text extraction.
 //!
 //! Extraction chain, following ocr_service.py:
-//! 1. .txt/.md/.csv  → lettura diretta UTF-8
+//! 1. .txt/.md/.csv  → read directly as UTF-8
 //! 2. PDF            → pdf_oxide (text_ratio > 0.5 AND len > 500)
-//!                     → OCR opzionale se feature "ocr" attiva
+//!                     → optional OCR when the "ocr" feature is enabled
 //! 3. DOCX           → docx-rs
 //! 4. XLSX/XLS       → calamine
 //! 5. HTML           → scraper
@@ -29,7 +29,7 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>
     match ext.as_str() {
         "txt" | "md" | "csv" => {
             let text = std::fs::read_to_string(path)
-                .with_context(|| format!("lettura {}", path.display()))?;
+                .with_context(|| format!("reading {}", path.display()))?;
             Ok((text, None))
         }
         "pdf" => extract_pdf(path, data_dir),
@@ -80,7 +80,7 @@ fn extract_pdf(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
         return Ok((full_text, Some(page_count)));
     }
 
-    // Testo insufficiente: OCR opzionale
+    // Not enough text: fall back to OCR when available
     #[cfg(feature = "ocr")]
     {
         let ocr_text = super::ocr::ocr_pdf(path, page_count, data_dir)?;
@@ -102,7 +102,7 @@ fn extract_pdf(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
 
 fn extract_docx(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)
-        .with_context(|| format!("lettura docx {}", path.display()))?;
+        .with_context(|| format!("reading docx {}", path.display()))?;
     let docx = docx_rs::read_docx(&bytes)
         .map_err(|e| anyhow::anyhow!("docx parse: {e:?}"))?;
     Ok(collect_docx_text(&docx))
@@ -172,7 +172,7 @@ fn extract_xlsx(path: &Path) -> Result<String> {
 
 fn extract_html(path: &Path) -> Result<String> {
     let html = std::fs::read_to_string(path)
-        .with_context(|| format!("lettura html {}", path.display()))?;
+        .with_context(|| format!("reading html {}", path.display()))?;
     let document = scraper::Html::parse_document(&html);
     let selector =
         scraper::Selector::parse("p, h1, h2, h3, h4, h5, h6, li, td, th").unwrap();
