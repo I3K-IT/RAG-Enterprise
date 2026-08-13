@@ -2,7 +2,7 @@
 
 **100% local Retrieval-Augmented Generation (RAG) system** for businesses that need complete data privacy and control.
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -423,7 +423,7 @@ Real-world performance results from the community. Run `python benchmark/rag_ben
 - ✅ **Zero external calls**: Everything runs locally
 - ✅ **No telemetry**: No tracking or analytics
 - ✅ **Local models**: LLM and embeddings on-premise
-- ✅ **AGPL-3.0 License**: If you modify and deploy as a service, you must share source code
+- ✅ **Auditable**: fully open source under Apache-2.0 — you can read, verify and modify every line that touches your data
 
 **Ideal for**: Law firms, healthcare, finance, government, enterprises with sensitive data.
 
@@ -455,17 +455,31 @@ If you use RAG Enterprise in academic research, EU grant proposals, or technical
 **Plain text**:
 > Francesco Marchetti. (2026). RAG Enterprise — Self-hosted document intelligence platform (v1.2.1) [Software]. https://doi.org/10.5281/zenodo.20413005
 
+> The citation above describes the archived **v1.2.1** deposit, which was
+> released under AGPL-3.0 — the licence field is left unchanged because a
+> Zenodo record is immutable and must keep describing what was actually
+> deposited. Later releases are Apache-2.0 (see [License](#license)) and will
+> carry their own DOI.
+
 ---
 
 ## License
 
-This project is licensed under **AGPL-3.0** - see [LICENSE](LICENSE) file.
+This project is licensed under **Apache-2.0** — see the [LICENSE](LICENSE) file.
 
 **What this means:**
-- ✅ Free to use and modify
-- ✅ Must share modifications if you offer it as a service
-- ✅ Protects against proprietary SaaS parasites
-- ✅ Still fully open-source
+- ✅ Free to use, modify and redistribute, including commercially
+- ✅ Usable inside closed-source products, with attribution
+- ✅ Includes an explicit patent grant
+- ✅ No copyleft: your changes stay yours
+
+> **Licence change.** Releases up to and including **v1.2.1** were published
+> under AGPL-3.0 and remain available under that licence — a licence already
+> granted cannot be revoked. From the next release onward the project is
+> Apache-2.0. The change was made by the sole copyright holder and was
+> motivated by adoption: the AGPL's network-service clause defends against
+> hosted redistribution, which is the opposite of this project's on-premise
+> purpose, while many corporate legal departments prohibit AGPL outright.
 
 ---
 

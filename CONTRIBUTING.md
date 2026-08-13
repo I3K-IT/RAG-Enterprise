@@ -203,4 +203,9 @@ Feel free to open an issue with the `question` label or start a discussion.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the AGPL-3.0 License.
+By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+
+Note that Apache-2.0 permits incorporation into proprietary software. This
+project follows an open-core model: the maintainers may reuse accepted
+contributions in the commercial Pro edition. If you are not comfortable with
+that, please do not submit a contribution.
