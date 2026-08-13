@@ -90,24 +90,18 @@ pub struct EullmSettings {
     pub cache_type_k: Option<String>,
     #[serde(default)]
     pub cache_type_v: Option<String>,
-    /// Passa --fit a eullm (verificato presente da EuLLM-v0.6.9 — versioni
-    /// pinnate precedenti, es. v0.6.6 su x86_64 oggi, NON hanno questo flag:
-    /// clap lo rifiuterebbe come argomento sconosciuto. Attivalo solo se il
-    /// binario pinnato per la piattaforma lo supporta davvero.
-    ///
-    /// Con fit=true cambia anche l'ORDINE di avvio (vedi main.rs): l'embedding
-    /// carica PRIMA di eullm, così il probe VRAM di --fit (cudaMemGetInfo,
-    /// letto a caldo all'avvio di eullm) vede la VRAM già ridotta dal modello
-    /// di embedding e adatta di conseguenza quanti layer offloadare su
-    /// GPU/CPU — invece di rischiare che i due si contendano la VRAM
-    /// all'avvio (vedi audit Fase 1, punto 5a).
-    #[serde(default)]
-    pub fit: bool,
+    // NOTA: il campo `fit` è stato rimosso con la pin 0.6.80. Da quella
+    // versione eullm dimensiona l'offload GPU da sé, SEMPRE, a prescindere dal
+    // flag: `--fit` passato esplicitamente serve solo a far chiedere conferma
+    // su uno split parziale, e solo quando stdin E stdout sono entrambi TTY
+    // (fit.rs:851 nel sorgente eullm) — noi lanciamo con stdin su null, quindi
+    // per noi era un no-op. L'ordine di avvio che il flag governava è ora
+    // incondizionato in main.rs. Config esistenti con `fit = ...` continuano a
+    // caricare: la struct non usa deny_unknown_fields, il campo viene ignorato.
     /// Scarica eullm dalla VRAM durante l'ingestione documenti (POST
-    /// /api/unload — estensione EULLM da EuLLM-v0.6.10, verificata nel
-    /// sorgente eullm) e lo ricarica al termine. Richiede un binario pinnato
-    /// che abbia davvero l'endpoint — versioni precedenti (es. v0.6.6 su
-    /// x86_64 oggi) risponderebbero 404. Con questo attivo, la chat non
+    /// /api/unload — estensione EULLM verificata nel sorgente eullm:
+    /// api_routes() registra `.route("/unload", post(unload_model))`, ed è
+    /// montata sotto /api). Con questo attivo, la chat non
     /// funziona per la durata dell'ingestione (eullm non è in VRAM) — la UI
     /// mostra "ingestione in corso" ma non blocca l'invio, quindi una
     /// domanda fatta in quella finestra fallirebbe o resterebbe in attesa
@@ -123,12 +117,24 @@ pub struct EullmSettings {
     /// quel caso è responsabilità di eullm/dell'hub HF, non nostra.
     #[serde(default)]
     pub model_override: Option<String>,
-    /// Numero di layer di esperti MoE tenuti su CPU RAM (`--n-cpu-moe N`,
-    /// eullm ≥ v0.6.11 — versioni precedenti non hanno il flag). None = non
-    /// passato (nessun effetto su modelli dense). N più basso = più esperti
-    /// in VRAM = più veloce ma più rischio OOM — va tarato a mano per la
-    /// singola GPU (vedi log di tuning nel repo), non c'è un default
-    /// sensato universale.
+    /// Numero di layer di esperti MoE tenuti su CPU RAM (`--n-cpu-moe N`).
+    /// None = non passato, ed è il default giusto: dalla 0.6.80 eullm calcola
+    /// da sé quanti esperti spostare, leggendo i byte reali per tensore dalla
+    /// sezione tensor-info del GGUF (non una stima su tipo e shape), e il
+    /// modello si carica sempre — al peggio più lento, mai un OOM da
+    /// dimensione.
+    ///
+    /// ATTENZIONE, è il motivo per cui questo campo NON va usato come tuning:
+    /// l'auto-sizing di eullm si applica solo "when the user hasn't already
+    /// chosen --cpu-moe/--n-cpu-moe themselves". Impostarlo qui DISATTIVA il
+    /// calcolo automatico e inchioda il valore, quasi sempre peggio di quello
+    /// che eullm ricaverebbe da solo.
+    ///
+    /// Resta utile per un caso solo: RISERVARE VRAM per qualcos'altro che al
+    /// momento dell'avvio di eullm non è ancora allocato, e che quindi il suo
+    /// probe (free_vram * 0.97 - 640 MiB) non può vedere. Per l'embedding
+    /// residente non serve — lo copre l'ordine di avvio in main.rs, che carica
+    /// bge-m3 prima di eullm proprio perché il probe lo veda.
     #[serde(default)]
     pub n_cpu_moe: Option<u32>,
 }

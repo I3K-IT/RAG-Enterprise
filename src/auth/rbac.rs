@@ -12,7 +12,6 @@ pub enum Role {
     User,
 }
 
-#[allow(dead_code)]
 impl Role {
     pub fn can_upload(self) -> bool {
         matches!(self, Role::Admin | Role::SuperUser)
@@ -22,6 +21,9 @@ impl Role {
         matches!(self, Role::Admin | Role::SuperUser)
     }
 
+    // Usato quando gli endpoint di gestione utenti passeranno da stub a reali
+    // (api/auth.rs). Finché sono stub, resta legittimamente non chiamato.
+    #[allow(dead_code)]
     pub fn can_manage_users(self) -> bool {
         matches!(self, Role::Admin)
     }

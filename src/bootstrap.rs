@@ -118,7 +118,6 @@ mod eullm_args_tests {
             batch_size: 1,
             cache_type_k: None,
             cache_type_v: None,
-            fit: false,
             unload_during_ingestion: false,
             model_override: None,
             n_cpu_moe: None,
@@ -158,25 +157,62 @@ mod eullm_args_tests {
     }
 
     #[test]
-    fn no_fit_flag_unless_configured() {
-        // --fit esiste solo da EuLLM-v0.6.9 in poi (verificato nel sorgente
-        // eullm) — la pin di oggi per x86_64 è ancora v0.6.6, che clap
-        // rifiuterebbe come flag sconosciuto. Di default (fit=false, il
-        // default di EullmSettings) non deve mai comparire.
+    fn cix_isa_requires_every_extension() {
+        use super::cix_isa::{
+            has_cix_p1_isa, HWCAP2_BF16, HWCAP2_I8MM, HWCAP2_SVE2, HWCAP_ASIMDDP, HWCAP_SVE,
+        };
+        let all = (HWCAP_ASIMDDP | HWCAP_SVE, HWCAP2_SVE2 | HWCAP2_I8MM | HWCAP2_BF16);
+        assert!(has_cix_p1_isa(all.0, all.1), "ISA completa deve abilitare il target cix");
+
+        // Togliendone UNA sola per volta il target non deve più comparire: il
+        // binario cix-p1 va in SIGILL se manca anche una sola estensione.
+        for (h, h2, mancante) in [
+            (all.0 & !HWCAP_ASIMDDP, all.1, "dotprod"),
+            (all.0 & !HWCAP_SVE, all.1, "sve"),
+            (all.0, all.1 & !HWCAP2_SVE2, "sve2"),
+            (all.0, all.1 & !HWCAP2_I8MM, "i8mm"),
+            (all.0, all.1 & !HWCAP2_BF16, "bf16"),
+        ] {
+            assert!(!has_cix_p1_isa(h, h2), "senza {mancante} il target cix non deve comparire");
+        }
+
+        // ARM64 generico (nessuna feature) e hwcap a zero — es. getauxval che
+        // non conosce la chiave — devono entrambi risultare negativi.
+        assert!(!has_cix_p1_isa(0, 0));
+    }
+
+    #[test]
+    fn asset_hint_is_exact_not_prefix() {
+        // I nomi asset di eullm sono l'uno prefisso dell'altro: con un match
+        // per sottostringa, il target aarch64 generico poteva agganciare la
+        // build cix-p1 (SIGILL) o quella cuda. L'hint deve essere il nome
+        // COMPLETO e il confronto per uguaglianza.
+        let generico = eullm_asset_hint(Some("linux-aarch64")).unwrap();
+        for altro in ["eullm-linux-arm64-cix-p1", "eullm-linux-arm64-cuda-12.8"] {
+            assert_ne!(generico, altro);
+            assert!(
+                altro.starts_with(generico),
+                "il caso pericoloso è proprio che {altro} inizi con {generico}: \
+                 se questa assunzione cade, rivedere il match in maybe_update_eullm"
+            );
+        }
+        assert_eq!(eullm_asset_hint(Some("linux-aarch64-cix")), Some("eullm-linux-arm64-cix-p1"));
+    }
+
+    #[test]
+    fn fit_flag_never_passed() {
+        // Dalla pin 0.6.80 --fit non si passa mai: il sizing è automatico a
+        // prescindere e il flag servirebbe solo alla conferma interattiva, che
+        // richiede stdin E stdout TTY — spawn_eullm mette stdin su null.
+        // Nessuna combinazione di config deve farlo ricomparire.
         for cfg in [base_cfg(), {
             let mut c = base_cfg();
             c.cache_type_k = Some("q8_0".into());
+            c.n_cpu_moe = Some(4);
             c
         }] {
             assert!(!eullm_args(&cfg).contains(&"--fit".to_owned()));
         }
-    }
-
-    #[test]
-    fn fit_flag_present_when_configured() {
-        let mut cfg = base_cfg();
-        cfg.fit = true;
-        assert!(eullm_args(&cfg).contains(&"--fit".to_owned()));
     }
 
     #[test]
@@ -304,13 +340,65 @@ mod eullm_update_tests {
 
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
+// ── Rilevamento ISA per il target linux-aarch64-cix ───────────────────────────
+
+// Compilato solo dove serve davvero (ARM64 Linux) e sotto test: altrove
+// sarebbe codice morto, e il compilatore lo segnalerebbe giustamente.
+#[cfg(any(all(target_os = "linux", target_arch = "aarch64"), test))]
+mod cix_isa {
+    // Bit hwcap aarch64 dalla ABI del kernel Linux
+    // (arch/arm64/include/uapi/asm/hwcap.h). Sono ABI stabile: nuove feature
+    // aggiungono bit, non rinumerano quelli esistenti.
+    pub const HWCAP_ASIMDDP: u64 = 1 << 20; // dotprod
+    pub const HWCAP_SVE: u64 = 1 << 22;
+    pub const HWCAP2_SVE2: u64 = 1 << 1;
+    pub const HWCAP2_I8MM: u64 = 1 << 13;
+    pub const HWCAP2_BF16: u64 = 1 << 14;
+
+    /// La CPU espone TUTTE le estensioni per cui è compilata la build cix-p1?
+///
+/// La build eullm `linux-arm64-cix-p1` è prodotta con
+/// `-march=armv9.2-a+sve2+bf16+i8mm+dotprod` (job build-arm-cix-p1 in
+/// release-engine.yml di eullm) e va in **SIGILL** su qualunque ARM64 privo
+/// anche di una sola di quelle estensioni — è il motivo per cui upstream la
+/// tiene come artefatto separato dalla arm64 generica.
+///
+/// Testiamo quindi le ESTENSIONI, non il nome del SoC: è la precondizione
+/// reale perché il binario giri, vale anche su board Armv9.2 diverse
+/// dall'Orion, e non dipende da una stringa hardware da mantenere a mano.
+/// Richiede tutte e cinque: una sola mancante = niente target cix.
+///
+    /// Funzione pura sui due valori hwcap, così è testabile su qualsiasi
+    /// architettura (la lettura vera è in `cix_p1_isa_available`).
+    pub fn has_cix_p1_isa(hwcap: u64, hwcap2: u64) -> bool {
+        hwcap & HWCAP_ASIMDDP != 0
+            && hwcap & HWCAP_SVE != 0
+            && hwcap2 & HWCAP2_SVE2 != 0
+            && hwcap2 & HWCAP2_I8MM != 0
+            && hwcap2 & HWCAP2_BF16 != 0
+    }
+}
+
+/// Legge gli hwcap dal kernel via `getauxval` e li passa a `has_cix_p1_isa`.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn cix_p1_isa_available() -> bool {
+    // SAFETY: getauxval è una funzione glibc senza out-param; su chiave
+    // sconosciuta ritorna 0, che qui si traduce in "feature assenti".
+    let (hwcap, hwcap2) =
+        unsafe { (libc::getauxval(libc::AT_HWCAP), libc::getauxval(libc::AT_HWCAP2)) };
+    cix_isa::has_cix_p1_isa(hwcap, hwcap2)
+}
+
 /// Target supportati, ordinati dal più specifico al più generico.
 /// L'ordine è importante: `select_components` prende il PRIMO match per dest.
 ///
 /// Schema target:
 ///   linux-x86_64-cuda   — Linux x86_64 con GPU NVIDIA (driver caricato)
 ///   linux-x86_64        — Linux x86_64 CPU-only / fallback
-///   linux-aarch64, darwin-arm64, darwin-x86_64, windows-x86_64, windows-arm64
+///   linux-aarch64-cuda  — Linux ARM64 con GPU NVIDIA (es. Orion + dGPU PCIe)
+///   linux-aarch64-cix   — Linux ARM64 con l'ISA Armv9.2 completa (CIX P1)
+///   linux-aarch64       — Linux ARM64 CPU-only / fallback
+///   darwin-arm64, darwin-x86_64, windows-x86_64, windows-arm64
 fn current_targets() -> Vec<&'static str> {
     let mut t = Vec::new();
 
@@ -328,6 +416,15 @@ fn current_targets() -> Vec<&'static str> {
         // PCIe (es. Radxa Orion O6 con GPU esterna), non solo Jetson/SoC.
         if std::path::Path::new("/dev/nvidia0").exists() {
             t.push("linux-aarch64-cuda");
+        }
+        // Fra -cuda e il generico: se c'è una GPU NVIDIA vince comunque quella,
+        // perché la build cix-p1 è CPU-only. Ha senso solo senza GPU — che è
+        // poi lo scenario in cui il guadagno misurato conta (vedi manifest).
+        if cix_p1_isa_available() {
+            tracing::info!(
+                "ISA Armv9.2 completa rilevata (sve2+bf16+i8mm+dotprod): abilito il target linux-aarch64-cix"
+            );
+            t.push("linux-aarch64-cix");
         }
         t.push("linux-aarch64");
     }
@@ -442,7 +539,7 @@ pub struct Phase1 {
 /// caricare l'embedding PRIMA quando settings.eullm.fit=true — --fit di
 /// eullm legge la VRAM libera con cudaMemGetInfo al proprio avvio, quindi
 /// deve vedere la VRAM già ridotta dall'embedding per offloadare i layer di
-/// conseguenza (vedi audit Fase 1, punto 5a, e EullmSettings::fit).
+/// conseguenza (vedi audit Fase 1, punto 5a, e l'ordine di avvio in main.rs).
 pub async fn provision_and_start_qdrant(
     settings: &Settings,
 ) -> Result<(Phase1, Vec<tokio::process::Child>)> {
@@ -557,15 +654,13 @@ pub async fn start_eullm(
     Ok(ProcessGuard { _children: children, eullm_model_path })
 }
 
-/// Percorso classico (settings.eullm.fit=false, il default): qdrant ed eullm
-/// avviati insieme, l'embedding carica dopo (vedi main.rs) — comportamento
-/// INVARIATO rispetto a prima dello split in provision_and_start_qdrant +
-/// start_eullm. Chi vuole l'ordine invertito (fit=true) chiama le due fasi
-/// separatamente per intercalarci il caricamento dell'embedding.
-pub async fn ensure_ready(settings: &Settings) -> Result<ProcessGuard> {
-    let (phase1, children) = provision_and_start_qdrant(settings).await?;
-    start_eullm(settings, phase1, children).await
-}
+// NOTA: qui c'era ensure_ready(), che avviava qdrant ed eullm insieme
+// lasciando l'embedding per ultimo. Rimossa con la pin 0.6.80: era il ramo
+// usato quando eullm non si adattava alla VRAM già occupata, e ora che il
+// sizing è sempre automatico quell'ordine farebbe partire eullm prima
+// dell'embedding, lasciandolo senza VRAM. L'unico percorso è la coppia
+// provision_and_start_qdrant + start_eullm, con load_embedding in mezzo
+// (main.rs).
 
 // ── Componente: verifica / download atomico ───────────────────────────────────
 
@@ -823,8 +918,10 @@ const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
 /// sbagliato).
 fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
     match target {
-        Some("linux-x86_64-cuda") => Some("linux-x64-cuda"),
-        Some("linux-aarch64-cuda") => Some("linux-arm64-cuda"),
+        Some("linux-x86_64-cuda") => Some("eullm-linux-x64-cuda-12.8"),
+        Some("linux-aarch64-cuda") => Some("eullm-linux-arm64-cuda-12.8"),
+        Some("linux-aarch64-cix") => Some("eullm-linux-arm64-cix-p1"),
+        Some("linux-aarch64") => Some("eullm-linux-arm64"),
         _ => None,
     }
 }
@@ -984,7 +1081,13 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
         tracing::warn!(target = ?pinned.target, "eullm: piattaforma senza asset di aggiornamento noto, skip controllo versione");
         return;
     };
-    let Some(asset) = release.assets.iter().find(|a| a.name.contains(hint)) else {
+    // Uguaglianza, NON contains: i nomi asset di eullm sono l'uno prefisso
+    // dell'altro ("eullm-linux-arm64" è prefisso di "eullm-linux-arm64-cix-p1"
+    // e di "eullm-linux-arm64-cuda-12.8"). Con contains, una macchina ARM64
+    // generica poteva agganciare la build cix-p1 — compilata per Armv9.2, va
+    // in SIGILL su ARM64 privo di quelle estensioni — a seconda dell'ordine in
+    // cui l'API restituisce gli asset.
+    let Some(asset) = release.assets.iter().find(|a| a.name == hint) else {
         tracing::warn!(latest = %latest_str, hint = %hint, "nuova versione eullm trovata ma nessun asset per questa piattaforma, skip");
         return;
     };
@@ -1242,9 +1345,11 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
         args.push("--n-cpu-moe".to_owned());
         args.push(n.to_string());
     }
-    if cfg.fit {
-        args.push("--fit".to_owned());
-    }
+    // --fit non viene più passato: dalla 0.6.80 il sizing è automatico a
+    // prescindere, e il flag serve solo a chiedere conferma su uno split
+    // parziale quando stdin E stdout sono entrambi TTY (fit.rs:851 nel
+    // sorgente eullm). spawn_eullm mette stdin su null, quindi la condizione
+    // è falsa per costruzione e il flag era un no-op.
     args
 }
 

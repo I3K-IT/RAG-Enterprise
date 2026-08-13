@@ -45,8 +45,16 @@ pub fn format_history(history: &[(String, String)]) -> String {
     lines.join("\n")
 }
 
-fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+/// Tronca a `max_chars` CARATTERI Unicode (parità con Python `s[:800]`, che
+/// conta code point, non byte).
+///
+/// SICUREZZA: la versione precedente faceva slicing a byte `&s[..max]`, che va
+/// in panic se `max` cade a metà di un carattere multibyte — banale da
+/// innescare con le accentate italiane in un messaggio storico > 800 byte,
+/// e raggiungibile nel percorso query principale. `chars().take()` non può
+/// mai spezzare un carattere.
+fn truncate(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
 
 /// Build the full prompt string.
@@ -57,4 +65,40 @@ pub fn build_prompt(context: &str, question: &str, history: &[(String, String)])
         .replace("{history_section}", &history_section)
         .replace("{context}", context)
         .replace("{question}", question)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_does_not_panic_on_multibyte_boundary() {
+        // 800 caratteri accentati = 1600 byte: il vecchio slicing a byte
+        // `&s[..800]` cadeva a metà di 'à' → panic. Deve troncare pulito.
+        let s: String = "à".repeat(1000);
+        let out = truncate(&s, 800);
+        assert_eq!(out.chars().count(), 800);
+        assert!(out.chars().all(|c| c == 'à'));
+    }
+
+    #[test]
+    fn truncate_counts_chars_not_bytes() {
+        // Parità Python s[:800]: conta code point, non byte.
+        let s: String = "é".repeat(500); // 500 char, 1000 byte
+        assert_eq!(truncate(&s, 800), s); // sotto soglia in CHAR → invariato
+    }
+
+    #[test]
+    fn truncate_short_ascii_unchanged() {
+        assert_eq!(truncate("hello", 800), "hello");
+    }
+
+    #[test]
+    fn format_history_survives_long_accented_message() {
+        // Percorso reale: messaggio storico lungo e accentato non deve panicare.
+        let long = "à".repeat(2000);
+        let hist = vec![(long.clone(), long)];
+        let out = format_history(&hist);
+        assert!(out.contains("CONVERSATION HISTORY:"));
+    }
 }
