@@ -458,7 +458,7 @@ mod tests {
 
     // Solo per build SENZA feature "cuda" (il caso normale di questo sandbox):
     // require_gpu=true deve fallire SUBITO, prima di toccare qualunque file
-    // modello — non deve mai degradare in silenzio su CPU (5a, CLAUDE.md
+    // modello — non deve mai degradare in silenzio su CPU (5a
     // REGOLA ZERO — "onestà sullo stato"). Un model_id inesistente basta a
     // dimostrare che l'errore arriva dal guard require_gpu e non da un
     // successivo tentativo di caricamento pesi.

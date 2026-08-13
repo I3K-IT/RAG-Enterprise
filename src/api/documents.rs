@@ -319,7 +319,7 @@ pub async fn delete(
     }
 }
 
-/// Punto di ingresso UNICO per la cancellazione di un documento (CLAUDE.md:
+/// Punto di ingresso UNICO per la cancellazione di un documento (vedi
 /// invariante sync SQLite↔Qdrant — "un solo punto di ingresso per delete").
 /// Ordine obbligatorio: **Qdrant PRIMA, poi SQLite**, poi il file originale.
 /// La cancellazione Qdrant è idempotente (safe anche su 0 vettori), così

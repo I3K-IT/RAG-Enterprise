@@ -4,7 +4,7 @@
 //! Progettata per permettere future implementazioni sqlite-vec/hnsw
 //! (trial multi-OS senza dipendenza da Qdrant).
 //!
-//! INVARIANTE (CLAUDE.md): delete_document / reindex devono toccare SQLite E Qdrant.
+//! INVARIANTE: delete_document / reindex devono toccare SQLite E Qdrant.
 //! Un solo punto di ingresso — mai bypassarlo.
 
 use anyhow::Result;

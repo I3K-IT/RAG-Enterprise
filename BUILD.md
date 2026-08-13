@@ -29,7 +29,7 @@ Non è necessaria la toolchain nightly.
 
 `leptess` si linka **a compile-time** contro `libtesseract`/`libleptonica` di sistema —
 servono le dev libs sulla macchina di build (bundling cross-platform: rimandato a
-Fase 4, packaging — vedi CLAUDE.md):
+Fase 4, packaging):
 
 ```sh
 # Ubuntu 22.04 / 24.04
@@ -106,7 +106,7 @@ cargo test --features ocr bundled_pdfium_path_resolution_and_ocr_roundtrip
 ```
 
 Senza questa variabile il test viene saltato (nessun fallimento) — non è richiesto in CI
-(che comunque non esiste ancora, vedi CLAUDE.md) né bloccante per gli altri test.
+(che comunque non esiste ancora) né bloccante per gli altri test.
 
 ---
 

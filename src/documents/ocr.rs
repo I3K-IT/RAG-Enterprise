@@ -171,7 +171,7 @@ mod smoke_test {
     /// NON di sistema (accanto all'eseguibile di test, layout "bundlato"), e che la
     /// pipeline pdfium->PNG->leptess estragga davvero il testo atteso.
     ///
-    /// Richiede (solo in locale, non in CI — vedi CLAUDE.md):
+    /// Richiede (solo in locale, non in CI):
     ///   - PDFIUM_LIB_FOR_TEST=/path/a/libpdfium.so   (una copia scaricata da
     ///     github.com/bblanchon/pdfium-binaries; NON deve essere in un path di sistema)
     ///   - tessdata ita+eng installate (vedi BUILD.md §2a)

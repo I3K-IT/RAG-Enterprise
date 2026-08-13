@@ -13,7 +13,7 @@ Open-source Rust port of the [RAG Enterprise](https://github.com/i3k-it/RAG-Ente
 
 ## Status
 
-Phase 1 in progress — see [PIANO_i3kragengine.md](PIANO_i3kragengine.md) for the roadmap.
+Phase 1 in progress.
 
 ## Prerequisites
 

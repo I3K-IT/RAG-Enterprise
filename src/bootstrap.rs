@@ -239,7 +239,7 @@ mod archive_extraction_tests {
     /// conferma che il file estratto combacia byte-per-byte con lo sha256
     /// pinnato in manifest.toml per il target linux-x86_64.
     ///
-    /// Richiede (solo locale — vedi CLAUDE.md, niente CI):
+    /// Richiede (solo in locale, non in CI):
     ///   PDFIUM_ARCHIVE_FOR_TEST=/path/a/pdfium-linux-x64.tgz
     ///   (scaricato da github.com/bblanchon/pdfium-binaries, tag chromium/7920)
     /// Skip gracioso se non impostata.
@@ -882,7 +882,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 
 // ── eullm: controllo versione remota + override locale ─────────────────────────
 //
-// eullm si auto-aggiorna spesso (fix indipendenti, vedi CLAUDE.md — è per questo
+// eullm si auto-aggiorna spesso (fix indipendenti — è per questo
 // che resta un processo separato e non viene compilato nel binario). Il pin in
 // manifest.toml (version + sha256) resta la base di partenza affidabile e
 // git-tracked, ma su richiesta esplicita dell'utente ad ogni riavvio si

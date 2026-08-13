@@ -1,6 +1,6 @@
 //! eullm HTTP client — POST /api/generate raw mode + no-think prefill.
 //!
-//! CRITICAL (MAPPA §0.1 / §8 / CLAUDE.md):
+//! CRITICAL (riferimento funzionale al sistema Python):
 //! - Endpoint: POST /api/generate  (NEVER /api/chat)
 //! - raw: true (top-level, not in options)
 //! - keep_alive: -1 (top-level, not in options)

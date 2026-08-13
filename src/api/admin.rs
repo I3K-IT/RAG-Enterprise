@@ -143,7 +143,7 @@ pub async fn qdrant_delete_document(
     Path(document_id): Path<String>,
 ) -> Response {
     if let Some(r) = require_admin(&claims) { return r; }
-    // INVARIANTE (CLAUDE.md): usa il punto di ingresso UNICO condiviso col
+    // INVARIANTE: usa il punto di ingresso UNICO condiviso col
     // delete utente — Qdrant E SQLite insieme, Qdrant prima. Prima questo
     // handler cancellava SOLO da Qdrant via REST, lasciando la riga SQLite
     // "attiva" senza vettori: un orfano, esattamente il secondo punto di
