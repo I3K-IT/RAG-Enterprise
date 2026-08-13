@@ -75,16 +75,17 @@ pub async fn rename_conversation(
     Ok(affected > 0)
 }
 
-/// Elimina la conversazione e tutti i suoi messaggi (cascade manuale).
+/// Deletes the conversation and all of its messages (manual cascade).
 ///
-/// SICUREZZA (IDOR): verifica l'ownership PRIMA di toccare i messaggi. La
-/// versione precedente cancellava `chat_messages` per conv_id senza filtro
-/// utente, poi filtrava per user_id solo sulla conversazione — così un utente
-/// poteva cancellare i messaggi delle conversazioni altrui passando un conv_id
-/// non suo. Ora: transazione atomica, la conversazione (filtrata per user_id)
-/// va rimossa per prima; se non appartiene all'utente `rows_affected == 0`,
-/// rollback, nessun messaggio toccato. I messaggi sono anch'essi filtrati per
-/// user_id come difesa in profondità.
+/// SECURITY (IDOR): ownership is verified BEFORE touching any message. An
+/// earlier version deleted `chat_messages` by conv_id with no user filter and
+/// only filtered by user_id on the conversation itself, so a user could delete
+/// someone else's messages by passing a conv_id that was not theirs.
+///
+/// Now: an atomic transaction where the conversation, filtered by user_id, is
+/// removed first. If it does not belong to the user then `rows_affected == 0`,
+/// the transaction rolls back and no message is touched. The messages are
+/// filtered by user_id as well, as defence in depth.
 pub async fn delete_conversation(
     pool: &SqlitePool,
     conv_id: &str,
@@ -102,7 +103,7 @@ pub async fn delete_conversation(
     .rows_affected();
 
     if affected == 0 {
-        // Non è dell'utente (o non esiste): non toccare nessun messaggio.
+        // Not the user's, or does not exist: touch no messages.
         tx.rollback().await?;
         return Ok(false);
     }
@@ -117,7 +118,7 @@ pub async fn delete_conversation(
     Ok(true)
 }
 
-/// Aggiorna updated_at della conversazione (chiamato dopo insert messaggio).
+/// Updates the conversation's updated_at (called after inserting a message).
 pub async fn touch_conversation(pool: &SqlitePool, conv_id: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
@@ -171,7 +172,7 @@ pub async fn insert(
     Ok(id)
 }
 
-/// Messaggi di una conversazione specifica, ordinati ASC (cronologici).
+/// Messages of a specific conversation, ordered ASC (chronologically).
 pub async fn list_by_conversation(
     pool: &SqlitePool,
     conv_id: &str,
@@ -190,8 +191,8 @@ pub async fn list_by_conversation(
     Ok(rows)
 }
 
-/// Ultimi N messaggi dell'utente (usato per history injection nel prompt).
-/// Se conv_id è Some, filtra per quella conversazione.
+/// The user's last N messages, used for history injection into the prompt.
+/// When conv_id is Some, restricted to that conversation.
 pub async fn list_by_user(
     pool: &SqlitePool,
     user_id: i64,
@@ -211,7 +212,7 @@ pub async fn list_by_user(
     Ok(rows)
 }
 
-/// Ultimi N messaggi di una specifica conversazione (per history injection).
+/// The last N messages of a specific conversation, for history injection.
 pub async fn list_by_conv_for_history(
     pool: &SqlitePool,
     conv_id: &str,

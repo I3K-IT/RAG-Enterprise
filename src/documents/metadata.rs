@@ -2,7 +2,7 @@
 //! Tracks: document_id, filename, upload_date, page_count, doc_type, status.
 //!
 //! INVARIANTE: delete / reindex devono toccare Qdrant PRIMA, poi SQLite.
-//! Un solo punto di ingresso — mai bypassare.
+//! A single entry point — never bypass it.
 
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};

@@ -78,11 +78,12 @@ pub async fn find_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserRo
 
 /// Crea o aggiorna l'admin di default.
 ///
-/// Comportamento:
-/// - Se `AUTH__ADMIN_DEFAULT_PASSWORD` è impostata → usa quella password,
-///   sia alla creazione che all'aggiornamento (riavvio con nuova password = funziona).
-/// - Se non è impostata e l'admin NON esiste → genera password casuale e la logga.
-/// - Se non è impostata e l'admin esiste già → non tocca nulla.
+/// Behaviour:
+/// - If `AUTH__ADMIN_DEFAULT_PASSWORD` is set, that password is used, both on
+///   creation and on update, so restarting with a new password works.
+/// - If it is unset and the admin does NOT exist, a random password is
+///   generated and logged.
+/// - If it is unset and the admin already exists, nothing is touched.
 pub async fn seed_admin(pool: &SqlitePool, configured_password: Option<&str>) -> Result<()> {
     use crate::auth::password;
 
@@ -99,7 +100,7 @@ pub async fn seed_admin(pool: &SqlitePool, configured_password: Option<&str>) ->
                 .bind("admin")
                 .execute(pool)
                 .await?;
-            tracing::info!("password admin aggiornata da AUTH__ADMIN_DEFAULT_PASSWORD");
+            tracing::info!("admin password updated from AUTH__ADMIN_DEFAULT_PASSWORD");
         } else {
             create(pool, "admin", "admin@rag-engine.local", &hash, Role::Admin).await?;
             tracing::info!("admin creato con AUTH__ADMIN_DEFAULT_PASSWORD");
@@ -111,7 +112,7 @@ pub async fn seed_admin(pool: &SqlitePool, configured_password: Option<&str>) ->
         return Ok(());
     }
 
-    // Nessuna password configurata e admin non esiste → genera casuale
+    // No password configured and no admin yet → generate a random one.
     let generated: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(22)
@@ -121,7 +122,7 @@ pub async fn seed_admin(pool: &SqlitePool, configured_password: Option<&str>) ->
     tracing::warn!("ACCOUNT ADMIN CREATO CON PASSWORD CASUALE");
     tracing::warn!("  Username: admin");
     tracing::warn!("  Password: {generated}");
-    tracing::warn!("SALVA QUESTA PASSWORD — non verrà mostrata di nuovo!");
+    tracing::warn!("SAVE THIS PASSWORD — it will not be shown again!");
     tracing::warn!("Per impostarne una fissa: AUTH__ADMIN_DEFAULT_PASSWORD=...");
     tracing::warn!("========================================");
     let hash = password::hash(&generated)?;

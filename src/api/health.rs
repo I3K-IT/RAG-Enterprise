@@ -6,11 +6,11 @@ use serde_json::json;
 
 use crate::state::AppState;
 
-/// ingestion_in_progress: true se almeno un upload è nella fase pesante
-/// (extract/chunk/embed) in questo momento — la UI la usa per mostrare un
-/// avviso "ingestione in corso" a tutti gli utenti connessi (polling
-/// esistente, vedi frontend checkBackendHealth), non solo a chi ha lanciato
-/// l'upload. Vedi state::IngestionGuard.
+/// ingestion_in_progress is true when at least one upload is currently in the
+/// heavy phase (extract/chunk/embed). The UI uses it to show an "ingestion in
+/// progress" notice to every connected user through the existing polling (see
+/// checkBackendHealth in the frontend), not only to whoever started the
+/// upload. See state::IngestionGuard.
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let active = state.active_ingestions.load(std::sync::atomic::Ordering::SeqCst);
     Json(json!({
@@ -19,11 +19,11 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
-/// Espone lo stato reale scelto all'avvio (non solo la config desiderata) —
-/// in particolare embedding_device, cosi' un fallback CPU silenzioso (5a) resta
-/// visibile anche dopo che il log di boot e' scomparso dalla history del terminale.
-/// Con swap_during_ingestion=true riflette lo stato ATTUALE (CPU a riposo,
-/// GPU durante un'ingestione in corso) — non un valore fisso di boot.
+/// Exposes the state actually chosen at startup, not merely the desired
+/// configuration — embedding_device in particular, so a silent CPU fallback
+/// stays visible long after the boot log has scrolled out of the terminal.
+/// With swap_during_ingestion=true it reflects the CURRENT state (CPU at rest,
+/// GPU during an ingestion), not a fixed boot-time value.
 pub async fn info(State(state): State<AppState>) -> impl IntoResponse {
     let (device_label, device_ok) = match state.embeddings.read() {
         Ok(guard) => (

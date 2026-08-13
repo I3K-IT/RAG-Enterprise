@@ -8,16 +8,17 @@
 //! 4. XLSX/XLS       → calamine
 //! 5. HTML           → scraper
 //!
-//! OCR trigger: text_ratio < 30% pagine con testo (come Python).
-//! Il chunking avviene in rag::chunker, NON qui.
+//! OCR trigger: text_ratio below 30% of pages containing text, as in the
+//! Python implementation. Chunking happens in rag::chunker, NOT here.
 
 use std::path::Path;
 use anyhow::{Context, Result};
 
-/// Estrae il testo e il numero di pagine (None se non applicabile al formato).
+/// Extracts the text and the page count (None when the format has no pages).
 ///
-/// `data_dir` è la radice dati (`Settings.data.data_path()`) — serve solo al ramo
-/// OCR per trovare `{data_dir}/tessdata/` (dove il manifest la scarica).
+/// `data_dir` is the data root (`Settings.data.data_path()`), needed only by
+/// the OCR branch to find `{data_dir}/tessdata/`, where the manifest
+/// downloads it.
 pub fn extract_text(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
     let ext = path
         .extension()
@@ -35,7 +36,7 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>
         "docx" | "doc" => extract_docx(path).map(|t| (t, None)),
         "xlsx" | "xls" => extract_xlsx(path).map(|t| (t, None)),
         "html" | "htm" => extract_html(path).map(|t| (t, None)),
-        _ => Err(anyhow::anyhow!("formato non supportato: .{ext}")),
+        _ => Err(anyhow::anyhow!("unsupported format: .{ext}")),
     }
 }
 

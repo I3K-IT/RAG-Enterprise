@@ -1873,8 +1873,8 @@ async fn fetch_chunk_once(
             status = %resp.status(),
             range = format!("bytes={start}-{end}"),
             url = %url,
-            "server non ha risposto 206 Partial Content a una richiesta Range — \
-             probabile download ridondante dell'intero file invece del solo pezzo"
+            "the server did not answer 206 Partial Content to a Range request — \
+             likely a redundant download of the whole file instead of just the piece"
         );
     }
 

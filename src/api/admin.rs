@@ -107,7 +107,7 @@ pub async fn qdrant_documents(State(state): State<AppState>, claims: Claims) -> 
         Err(e) => return err(StatusCode::BAD_GATEWAY, e),
     };
 
-    // Raggruppa per document_id dai payload
+    // Group by document_id from the payloads.
     let mut docs: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
     if let Some(points) = raw.get("result").and_then(|r| r.get("points")).and_then(|p| p.as_array()) {
         for point in points {
@@ -143,11 +143,11 @@ pub async fn qdrant_delete_document(
     Path(document_id): Path<String>,
 ) -> Response {
     if let Some(r) = require_admin(&claims) { return r; }
-    // INVARIANTE: usa il punto di ingresso UNICO condiviso col
-    // delete utente — Qdrant E SQLite insieme, Qdrant prima. Prima questo
-    // handler cancellava SOLO da Qdrant via REST, lasciando la riga SQLite
-    // "attiva" senza vettori: un orfano, esattamente il secondo punto di
-    // ingresso che l'invariante vieta.
+    // INVARIANT: use the SINGLE entry point shared with the user-facing
+    // delete — Qdrant AND SQLite together, Qdrant first. This handler used to
+    // delete from Qdrant ONLY, over REST, leaving the SQLite row "active" with
+    // no vectors: an orphan, and exactly the second entry point the invariant
+    // exists to forbid.
     match crate::api::documents::purge_document(&state, &document_id).await {
         Ok(true) => Json(json!({ "deleted": true })).into_response(),
         Ok(false) => err(StatusCode::NOT_FOUND, "document not found"),

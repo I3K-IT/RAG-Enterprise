@@ -15,35 +15,32 @@ use crate::rag::vector_store::VectorStore;
 pub struct AppState {
     pub settings: Arc<Settings>,
     pub db: SqlitePool,
-    /// RwLock (non solo Arc): con EmbeddingsSettings::swap_during_ingestion
-    /// l'istanza viene sostituita a runtime (CPU↔GPU, vedi
-    /// swap_embeddings_to_gpu/_to_cpu) — un semplice Arc non lo permette.
-    /// Letture (embed_text/embed_texts) e scritture (swap) avvengono sempre
-    /// da contesti sincroni (spawn_blocking), mai attraverso un .await con
-    /// il lock preso: std::sync::RwLock è la scelta più semplice, non serve
-    /// la variante async di tokio.
+    /// An RwLock, not merely an Arc: with
+    /// EmbeddingsSettings::swap_during_ingestion the instance is replaced at
+    /// runtime (CPU↔GPU, see swap_embeddings_to_gpu/_to_cpu), which a plain
+    /// Arc does not allow. Reads (embed_text/embed_texts) and writes (the
+    /// swap) always happen from synchronous contexts inside spawn_blocking,
+    /// never across an .await while holding the lock, so std::sync::RwLock is
+    /// the simplest choice and tokio's async variant is unnecessary.
     pub embeddings: Arc<RwLock<EmbeddingService>>,
     pub qdrant: Arc<dyn VectorStore>,
     pub eullm: Arc<EullmClient>,
     pub storage: Arc<FileStorage>,
-    /// Numero di ingestioni (upload) attualmente nella fase pesante
-    /// (parsing+chunking+embedding). Esposto via GET /health così la UI può
-    /// mostrare "ingestione in corso" a TUTTI gli utenti connessi, non solo
-    /// a chi ha lanciato l'upload — utile già oggi come indicazione, e
-    /// diventerà rilevante per davvero quando l'embedding potrà scaricare
-    /// temporaneamente eullm dalla VRAM durante l'ingestione (richiede
-    /// l'endpoint /api/unload di eullm, non ancora rilasciato).
+    /// How many ingestions (uploads) are currently in the heavy phase of
+    /// parsing, chunking and embedding. Exposed through GET /health so the UI
+    /// can show "ingestion in progress" to ALL connected users, not only to
+    /// whoever started the upload.
     pub active_ingestions: Arc<AtomicUsize>,
-    /// Some(...) solo se avviato con --bench-live: ogni ingestione/query
-    /// reale viene cronometrata e registrata qui invece che scartata — vedi
-    /// bench::LiveRecorder. None (default) costa un controllo Option a
-    /// richiesta, nessun overhead di misurazione.
+    /// Some(...) only when started with --bench-live: every real ingestion and
+    /// query is timed and recorded here instead of discarded (see
+    /// bench::LiveRecorder). None, the default, costs one Option check per
+    /// request and no measurement overhead.
     pub live_bench: Option<Arc<LiveRecorder>>,
 }
 
-/// Guardia RAII: incrementa active_ingestions alla creazione, decrementa
-/// SEMPRE al Drop — anche sui percorsi di errore/return anticipato in
-/// upload(), senza doverlo ricordare ad ogni punto di uscita.
+/// RAII guard: increments active_ingestions on creation and ALWAYS decrements
+/// on Drop, including on the error and early-return paths in upload(), so no
+/// exit point has to remember to do it.
 pub struct IngestionGuard(Arc<AtomicUsize>);
 
 impl IngestionGuard {
@@ -81,34 +78,35 @@ impl AppState {
         }
     }
 
-    /// true se una query eullm andrebbe rifiutata ora: `unload_during_ingestion`
-    /// attivo E almeno un'ingestione in corso (eullm scaricato o in procinto —
-    /// vedi documents::upload). Senza questo guard una query concorrente
-    /// rifarebbe caricare eullm da sola (stesso meccanismo di swap-on-request
-    /// usato per il reload), contendendo la VRAM con l'embedding a metà ingestione.
+    /// True when an eullm query should be rejected right now: both
+    /// `unload_during_ingestion` is enabled AND at least one ingestion is in
+    /// flight, so eullm is evicted or about to be (see documents::upload).
+    /// Without this guard a concurrent query would load eullm again by itself,
+    /// through the same swap-on-request mechanism used for the reload, and
+    /// contend for VRAM with the embedding model mid-ingestion.
     pub fn ingestion_blocks_queries(&self) -> bool {
         ingestion_blocks(self.settings.eullm.unload_during_ingestion, &self.active_ingestions)
     }
 
-    /// Sposta bge-m3 su GPU per la finestra di ingestione — vedi
-    /// EmbeddingsSettings::swap_during_ingestion. Bloccante (mmap + copia
-    /// pesi): il chiamante deve eseguirlo dentro spawn_blocking, mai
-    /// direttamente su un task async.
+    /// Moves bge-m3 onto the GPU for the ingestion window — see
+    /// EmbeddingsSettings::swap_during_ingestion. Blocking (mmap plus weight
+    /// copy): the caller must run it inside spawn_blocking, never directly on
+    /// an async task.
     pub fn swap_embeddings_to_gpu(&self) -> anyhow::Result<()> {
         self.swap_embeddings(EmbeddingService::load_gpu_for_ingestion)
     }
 
-    /// Riporta bge-m3 su CPU a fine ingestione. Stesso vincolo di
-    /// blocking di swap_embeddings_to_gpu.
+    /// Moves bge-m3 back onto the CPU once ingestion ends. Same blocking
+    /// constraint as swap_embeddings_to_gpu.
     pub fn swap_embeddings_to_cpu(&self) -> anyhow::Result<()> {
         self.swap_embeddings(EmbeddingService::load_cpu_parked)
     }
 
-    /// Il reload (mmap + copia pesi, potenzialmente qualche secondo) NON
-    /// tiene il lock: legge solo model_id sotto un read-lock breve, poi lo
-    /// rilascia prima di ricostruire il servizio — le query concorrenti
-    /// continuano a usare l'istanza corrente (corretta al momento) invece
-    /// di bloccarsi per tutta la durata dello swap.
+    /// The reload (mmap plus weight copy, potentially a few seconds) does NOT
+    /// hold the lock: it reads only model_id under a brief read lock, then
+    /// releases it before rebuilding the service. Concurrent queries keep
+    /// using the current instance — correct at that moment — instead of
+    /// blocking for the whole duration of the swap.
     fn swap_embeddings(
         &self,
         loader: fn(&str) -> anyhow::Result<EmbeddingService>,

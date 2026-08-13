@@ -68,12 +68,12 @@ pub async fn login(
     let user = match users::find_by_username(&state.db, &body.username).await {
         Ok(Some(u)) => u,
         Ok(None) => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "credenziali non valide"})))
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid credentials"})))
                 .into_response();
         }
         Err(e) => {
             tracing::error!("db error in login: {e:#}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "errore interno"})))
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal error"})))
                 .into_response();
         }
     };
@@ -81,7 +81,7 @@ pub async fn login(
     match password::verify(&body.password, &user.password_hash) {
         Ok(true) => {}
         _ => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "credenziali non valide"})))
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid credentials"})))
                 .into_response();
         }
     }
@@ -100,7 +100,7 @@ pub async fn login(
         Ok(t) => t,
         Err(e) => {
             tracing::error!("JWT create failed: {e:#}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "errore interno"})))
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal error"})))
                 .into_response();
         }
     };
@@ -136,11 +136,11 @@ pub async fn me(
         })
         .into_response(),
         Ok(None) => {
-            (StatusCode::UNAUTHORIZED, Json(json!({"error": "utente non trovato"}))).into_response()
+            (StatusCode::UNAUTHORIZED, Json(json!({"error": "user not found"}))).into_response()
         }
         Err(e) => {
             tracing::error!("db error in me: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "errore interno"})))
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal error"})))
                 .into_response()
         }
     }
@@ -154,7 +154,7 @@ pub async fn change_password(
     let user = match users::find_by_id(&state.db, claims.user_id).await {
         Ok(Some(u)) => u,
         _ => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "utente non trovato"})))
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "user not found"})))
                 .into_response();
         }
     };
@@ -164,7 +164,7 @@ pub async fn change_password(
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "password attuale non corretta"})),
+                Json(json!({"error": "current password is incorrect"})),
             )
                 .into_response();
         }
@@ -174,18 +174,18 @@ pub async fn change_password(
         Ok(h) => h,
         Err(e) => {
             tracing::error!("password hash error: {e:#}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "errore interno"})))
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal error"})))
                 .into_response();
         }
     };
 
     if let Err(e) = users::update_password(&state.db, claims.user_id, &new_hash).await {
         tracing::error!("update_password error: {e:#}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "errore interno"})))
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "internal error"})))
             .into_response();
     }
 
-    Json(json!({"message": "password cambiata"})).into_response()
+    Json(json!({"message": "password changed"})).into_response()
 }
 
 // ── Admin-only stubs ──────────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ pub async fn create_user(
     _claims: Claims,
     Json(_body): Json<UserCreateRequest>,
 ) -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({"error": "non implementato"})))
+    (StatusCode::NOT_IMPLEMENTED, Json(json!({"error": "not implemented"})))
 }
 
 pub async fn update_user(
@@ -210,7 +210,7 @@ pub async fn update_user(
     _claims: Claims,
     Path(_user_id): Path<i64>,
 ) -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({"error": "non implementato"})))
+    (StatusCode::NOT_IMPLEMENTED, Json(json!({"error": "not implemented"})))
 }
 
 pub async fn delete_user(
@@ -221,9 +221,9 @@ pub async fn delete_user(
     if user_id == claims.user_id {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "non puoi eliminare il tuo account"})),
+            Json(json!({"error": "you cannot delete your own account"})),
         )
             .into_response();
     }
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({"error": "non implementato"}))).into_response()
+    (StatusCode::NOT_IMPLEMENTED, Json(json!({"error": "not implemented"}))).into_response()
 }

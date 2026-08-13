@@ -15,8 +15,8 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::AppState;
 
-/// Cartella che contiene il binario (portable app dir, vedi
-/// config::default_data_dir) + "frontend/dist" — non la CWD del processo.
+/// The directory holding the binary (the portable app dir, see
+/// config::default_data_dir) plus "frontend/dist" — not the process CWD.
 fn frontend_dist_dir() -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
@@ -41,10 +41,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/users/:id", put(auth::update_user))
         .route("/api/auth/users/:id", delete(auth::delete_user));
 
-    // Upload isolato in un sub-router: DefaultBodyLimit (2MB) vale per l'intero
-    // Router a cui è applicato con .layer(), quindi va scoped alla sola route di
-    // upload — le altre (list/delete/download, tutte JSON o senza body) restano
-    // al default. Limite parità Python (MAX_UPLOAD_SIZE_MB, default 100MB).
+    // Upload is isolated in a sub-router: DefaultBodyLimit (2MB) applies to
+    // the entire Router it is attached to with .layer(), so it has to be scoped
+    // to the upload route alone. The others (list/delete/download, all JSON or
+    // bodyless) keep the default. The limit mirrors the Python
+    // MAX_UPLOAD_SIZE_MB, default 100MB.
     let max_upload_bytes = (state.settings.storage.max_upload_mb * 1024 * 1024) as usize;
     let upload_route = Router::new()
         .route("/api/documents/upload", post(documents::upload))
@@ -77,10 +78,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/conversations/:id", delete(conversations::delete))
         .route("/api/conversations/:id/messages", get(conversations::messages));
 
-    // SPA fallback: serve frontend/dist for all non-API routes. Path è
-    // exe-relative (stessa convenzione "portable app dir" di
-    // config::default_data_dir), non CWD-relative — altrimenti il binario
-    // funziona solo se lanciato da dentro la cartella giusta.
+    // SPA fallback: serve frontend/dist for all non-API routes. The path is
+    // exe-relative, following the same "portable app dir" convention as
+    // config::default_data_dir, rather than CWD-relative — otherwise the binary
+    // only works when launched from inside the right directory.
     let dist = frontend_dist_dir();
     let spa = ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));
 
@@ -98,13 +99,14 @@ pub fn router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    /// axum 0.7 (qui in uso — vedi Cargo.toml) usa la sintassi `:nome` per i path
-    /// param. La sintassi `{nome}` è di axum 0.8+: su 0.7 viene trattata come
-    /// segmento LETTERALE, quindi non combacia mai con un valore reale. L'unico
-    /// servizio che intercetta quelle richieste è il fallback SPA (ServeDir), che
+    /// axum 0.7, the version in use here (see Cargo.toml), uses `:name` syntax
+    /// for path params. The `{name}` syntax belongs to axum 0.8+: on 0.7 it is
+    /// treated as a LITERAL segment and so never matches a real value. The only
+    /// service that then catches those requests is the SPA fallback (ServeDir),
+    /// which
     /// risponde 405 su DELETE/PUT e servirebbe silenziosamente index.html su GET.
     /// Bug reale riscontrato in produzione (delete documenti/qdrant/conversazioni
-    /// tutti a 405) — questo test impedisce che si ripresenti.
+    /// answered them all with 405 — this test stops that recurring.
     #[test]
     fn no_axum_08_style_path_params() {
         let src = include_str!("mod.rs");
@@ -113,7 +115,7 @@ mod tests {
             if trimmed.starts_with(".route(") {
                 assert!(
                     !trimmed.contains('{'),
-                    "mod.rs:{}: sintassi path param non valida per axum 0.7 (usa :nome, non {{nome}}): {}",
+                    "mod.rs:{}: invalid path-param syntax for axum 0.7 (use :name, not {{name}}): {}",
                     i + 1,
                     trimmed
                 );

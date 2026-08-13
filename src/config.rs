@@ -339,15 +339,15 @@ fn validate_swap_during_ingestion(
     }
     if !unload_during_ingestion {
         anyhow::bail!(
-            "EMBEDDINGS__SWAP_DURING_INGESTION=true richiede EULLM__UNLOAD_DURING_INGESTION=true \
-             — bge-m3 si sposta in GPU solo nella VRAM che eullm libera con /api/unload, \
-             senza quello non c'è spazio in cui spostarlo."
+            "EMBEDDINGS__SWAP_DURING_INGESTION=true requires EULLM__UNLOAD_DURING_INGESTION=true \
+             — bge-m3 can only move into the VRAM that eullm releases through /api/unload, \
+             and without that there is nowhere to move it."
         );
     }
     if !cuda_feature {
         anyhow::bail!(
-            "EMBEDDINGS__SWAP_DURING_INGESTION=true richiede un binario compilato con \
-             --features cuda (lo swap verso GPU non è possibile senza supporto CUDA)."
+            "EMBEDDINGS__SWAP_DURING_INGESTION=true requires a binary built with \
+             --features cuda (swapping to GPU is impossible without CUDA support)."
         );
     }
     Ok(())

@@ -192,7 +192,7 @@ pub async fn query(
     // use_history=true.
     if answer.trim().is_empty() {
         tracing::warn!(query = %req.query, "eullm: empty answer");
-        return err(StatusCode::BAD_GATEWAY, "il modello non ha prodotto una risposta, riprova");
+        return err(StatusCode::BAD_GATEWAY, "the model produced no answer, please try again");
     }
 
     // Persist conversation

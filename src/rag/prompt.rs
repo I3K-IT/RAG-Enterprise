@@ -1,9 +1,10 @@
 //! RAG prompt templates.
 //!
-//! Enterprise prompt verbatim da MAPPA §5 (da usare nel Community base — stessa struttura,
-//! senza structured_data_section che nel Community è vuota).
+//! The Enterprise prompt verbatim, used in the Community build with the same
+//! structure minus the structured_data_section, which is empty here.
 //!
-//! Golden-test: stesso prompt → stesso testo generato con lo stesso LLM.
+//! Golden test: the same prompt must produce the same generated text from the
+//! same LLM.
 
 pub const QA_PROMPT: &str = r#"/no_think
 You are an expert research analyst. Answer based on the data below.
@@ -45,14 +46,14 @@ pub fn format_history(history: &[(String, String)]) -> String {
     lines.join("\n")
 }
 
-/// Tronca a `max_chars` CARATTERI Unicode (parità con Python `s[:800]`, che
-/// conta code point, non byte).
+/// Truncates to `max_chars` Unicode CHARACTERS, matching Python's `s[:800]`,
+/// which counts code points rather than bytes.
 ///
-/// SICUREZZA: la versione precedente faceva slicing a byte `&s[..max]`, che va
-/// in panic se `max` cade a metà di un carattere multibyte — banale da
-/// innescare con le accentate italiane in un messaggio storico > 800 byte,
-/// e raggiungibile nel percorso query principale. `chars().take()` non può
-/// mai spezzare un carattere.
+/// SECURITY: an earlier version sliced by byte with `&s[..max]`, which panics
+/// when `max` lands in the middle of a multibyte character — trivial to
+/// trigger with accented characters in a stored message longer than 800 bytes,
+/// and reachable from the main query path. `chars().take()` can never split a
+/// character.
 fn truncate(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
@@ -83,7 +84,7 @@ mod tests {
 
     #[test]
     fn truncate_counts_chars_not_bytes() {
-        // Parità Python s[:800]: conta code point, non byte.
+        // Parity with Python's s[:800]: counts code points, not bytes.
         let s: String = "é".repeat(500); // 500 char, 1000 byte
         assert_eq!(truncate(&s, 800), s); // sotto soglia in CHAR → invariato
     }
@@ -95,7 +96,7 @@ mod tests {
 
     #[test]
     fn format_history_survives_long_accented_message() {
-        // Percorso reale: messaggio storico lungo e accentato non deve panicare.
+        // The real path: a long, accented stored message must not panic.
         let long = "à".repeat(2000);
         let hist = vec![(long.clone(), long)];
         let out = format_history(&hist);

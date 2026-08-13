@@ -1,10 +1,10 @@
 //! File storage: save uploaded files to disk, serve downloads.
 //!
-//! SICUREZZA (path traversal): `path_for` è l'UNICO costruttore di path usato da
-//! upload (scrittura), download (lettura) e delete (rimozione). Sanifica ogni
-//! componente a solo basename, così un filename ostile dal multipart
-//! (`../../etc/passwd`, path assoluti, separatori Windows) non può mai far
-//! uscire il path dalla cartella base. Un solo punto → una sola difesa.
+//! SECURITY (path traversal): `path_for` is the ONLY path constructor used by
+//! upload (write), download (read) and delete (remove). It reduces every
+//! component to a bare basename, so a hostile filename arriving in a multipart
+//! body — `../../etc/passwd`, absolute paths, Windows separators — can never
+//! take the path outside the base directory. One entry point, one defence.
 
 use std::path::{Path, PathBuf};
 
@@ -24,13 +24,13 @@ impl FileStorage {
     }
 }
 
-/// Riduce una stringa a un singolo, innocuo componente di path.
+/// Reduces a string to a single, harmless path component.
 ///
-/// Prende solo l'ultimo segmento dopo qualsiasi separatore (`/` o `\`, per
-/// neutralizzare anche i path in stile Windows), quindi rifiuta i componenti
-/// che risalirebbero l'albero (`.`, `..`) o vuoti. Per costruzione il risultato
-/// non contiene separatori né sequenze `..`, quindi `base.join(...)` resta
-/// sempre dentro `base`.
+/// It keeps only the last segment after any separator (`/` or `\`, so
+/// Windows-style paths are neutralised too), then rejects components that
+/// would climb the tree (`.`, `..`) or are empty. By construction the result
+/// contains no separators and no `..` sequences, so `base.join(...)` always
+/// stays inside `base`.
 fn sanitize_component(s: &str) -> String {
     let last = s.rsplit(['/', '\\']).next().unwrap_or("");
     if last.is_empty() || last == "." || last == ".." {

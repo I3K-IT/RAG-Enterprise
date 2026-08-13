@@ -41,15 +41,16 @@ pub async fn upload(
     claims: Claims,
     multipart: Multipart,
 ) -> Response {
-    // RBAC (parità Python: require_upload_permission → admin|super_user).
+    // RBAC (parity with the Python require_upload_permission → admin|super_user).
     if !claims.role.can_upload() {
-        return err(StatusCode::FORBIDDEN, "permessi insufficienti per caricare documenti");
+        return err(StatusCode::FORBIDDEN, "insufficient permissions to upload documents");
     }
-    // La guardia resta viva (quindi active_ingestions > 0, vedi
-    // AppState::ingestion_blocks_queries) per l'INTERA finestra
-    // unload → estrazione/chunk/embed → reload, non solo la fase pesante:
-    // se calasse prima del reload, una query concorrente rifarebbe caricare
-    // eullm da sola mentre l'embedding sta ancora usando la VRAM liberata.
+    // The guard stays alive — keeping active_ingestions > 0, see
+    // AppState::ingestion_blocks_queries — for the WHOLE window of
+    // unload → extract/chunk/embed → reload, not just the heavy part. If it
+    // were dropped before the reload, a concurrent query would load eullm
+    // again on its own while the embedding model is still using the freed
+    // VRAM.
     let _ingestion_guard = crate::state::IngestionGuard::start(&state.active_ingestions);
     let unload_enabled = state.settings.eullm.unload_during_ingestion;
     let swap_enabled = state.settings.embeddings.swap_during_ingestion;
@@ -78,7 +79,7 @@ pub async fn upload(
     }
     if unload_enabled {
         if let Err(e) = state.eullm.reload().await {
-            tracing::error!(error = %e, "eullm: reload post-ingestione fallito — il modello potrebbe non essere in VRAM, verifica manualmente");
+            tracing::error!(error = %e, "eullm: reload after ingestion failed — the model may not be resident in VRAM, check manually");
         }
     }
 
@@ -140,8 +141,8 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     }
 
     // 3. Extract text (sync, possibly heavy — run off the async executor).
-    // Timer coperto anche se --bench-live è spento: un Instant::now() costa
-    // nulla di rilevante, non vale la pena condizionarlo.
+    // Timed even when --bench-live is off: an Instant::now() costs nothing
+    // worth conditionalising.
     let extract_start = std::time::Instant::now();
     let (text, page_count) = match tokio::task::spawn_blocking({
         let tmp = tmp_path.clone();
@@ -215,7 +216,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     }
     let upsert_time = upsert_start.elapsed();
 
-    // --bench-live: registra questa ingestione reale (vedi bench::LiveRecorder).
+    // --bench-live: record this real ingestion (see bench::LiveRecorder).
     if let Some(rec) = &state.live_bench {
         rec.record_ingestion(
             filename.clone(),
@@ -310,7 +311,7 @@ pub async fn delete(
 ) -> Response {
     // RBAC (parità Python: require_delete_permission → admin|super_user).
     if !claims.role.can_delete() {
-        return err(StatusCode::FORBIDDEN, "permessi insufficienti per eliminare documenti");
+        return err(StatusCode::FORBIDDEN, "insufficient permissions to delete documents");
     }
     match purge_document(&state, &document_id).await {
         Ok(true) => Json(json!({ "deleted": true })).into_response(),
@@ -319,31 +320,36 @@ pub async fn delete(
     }
 }
 
-/// Punto di ingresso UNICO per la cancellazione di un documento (vedi
-/// invariante sync SQLite↔Qdrant — "un solo punto di ingresso per delete").
-/// Ordine obbligatorio: **Qdrant PRIMA, poi SQLite**, poi il file originale.
-/// La cancellazione Qdrant è idempotente (safe anche su 0 vettori), così
-/// l'endpoint admin può usarla anche per ripulire eventuali orfani.
-/// Ritorna `Ok(false)` se il documento non esiste o era già soft-deleted.
+/// The SINGLE entry point for deleting a document, which is what keeps the
+/// SQLite↔Qdrant sync invariant enforceable in one place.
+///
+/// Mandatory order: **Qdrant FIRST, then SQLite**, then the original file.
+/// The Qdrant deletion is idempotent and safe even on zero vectors, so the
+/// admin endpoint can also use it to clean up orphans.
+///
+/// Returns `Ok(false)` when the document does not exist or was already
+/// soft-deleted.
 pub(crate) async fn purge_document(state: &AppState, document_id: &str) -> anyhow::Result<bool> {
-    // Recupera il filename (per il cleanup del file) prima di toccare gli store.
+    // Fetch the filename, needed for the file cleanup, before touching the stores.
     let doc = db::documents::find_by_id(&state.db, document_id).await?;
 
-    // INVARIANTE: Qdrant PRIMA. Se fallisce, ci fermiamo: SQLite resta coerente
-    // (documento ancora "attivo") anziché diventare un orfano senza vettori.
+    // INVARIANT: Qdrant FIRST. If it fails we stop, leaving SQLite consistent
+    // — the document is still "active" — rather than an orphan with no
+    // vectors.
     state.qdrant.delete_document(document_id).await?;
 
-    // SQLite dopo. soft_delete tocca solo righe con is_deleted = 0: ritorna
-    // false se il documento non esisteva o era già cancellato.
+    // SQLite second. soft_delete only touches rows with is_deleted = 0, so it
+    // returns false when the document did not exist or was already deleted.
     let removed = db::documents::soft_delete(&state.db, document_id).await?;
 
-    // Best-effort: rimuove il file originale e la sua cartella {base}/{id}.
+    // Best-effort: remove the original file and its {base}/{id} directory.
     if removed {
         if let Some(d) = &doc {
             let file_path = state.storage.path_for(document_id, &d.filename);
             let _ = std::fs::remove_file(&file_path);
-            // parent() = {base}/{document_id}; remove_dir fallisce (ignorato) se
-            // non è vuota, quindi non tocca mai nulla che non sia nostro.
+            // parent() is {base}/{document_id}; remove_dir fails, and is
+            // ignored, when it is not empty, so it never touches anything that
+            // is not ours.
             if let Some(parent) = file_path.parent() {
                 let _ = std::fs::remove_dir(parent);
             }

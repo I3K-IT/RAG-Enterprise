@@ -183,13 +183,13 @@ impl EmbeddingService {
             tracing::info!(model_id, "carico embedding da directory locale");
             resolve_model_dir(local)?
         } else if let Some(cache_dir) = find_in_hf_local_cache(model_id) {
-            tracing::info!(model_id, cache = %cache_dir.display(), "trovato nella cache HF locale");
+            tracing::info!(model_id, cache = %cache_dir.display(), "found in the local HF cache");
             resolve_model_dir(&cache_dir)?
         } else {
             bail!(
-                "modello '{}' non trovato in cache locale ({}).\n\
-                 Il download avviene all'avvio: se questo errore persiste,\n\
-                 scaricalo manualmente con: huggingface-cli download {}",
+                "model '{}' not found in the local cache ({}).\n\
+                 It is downloaded at startup: if this error persists,\n\
+                 fetch it manually with: huggingface-cli download {}",
                 model_id,
                 hf_cache_base().display(),
                 model_id
@@ -438,7 +438,7 @@ fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
         names.dedup();
         return Ok(names.into_iter().map(|n| dir.join(n)).collect());
     }
-    anyhow::bail!("nessun file safetensors trovato in {}", dir.display())
+    anyhow::bail!("no safetensors file found in {}", dir.display())
 }
 
 /// Directory dove bootstrap salva i file del modello embedding.
@@ -491,7 +491,7 @@ mod tests {
     fn cpu_by_config_is_not_reported_as_fallback_message() {
         let result = EmbeddingService::load("modello/che-non-esiste-di-sicuro", false);
         let Err(err) = result else {
-            panic!("model_id inventato, deve comunque fallire il load pesi");
+            panic!("made-up model_id, the weight load must fail regardless");
         };
         let msg = format!("{err:#}");
         assert!(

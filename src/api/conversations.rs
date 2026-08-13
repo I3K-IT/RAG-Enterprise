@@ -1,9 +1,9 @@
-//! Endpoints per la gestione delle conversazioni:
+//! Endpoints for managing conversations:
 //! GET    /api/conversations            → lista conversazioni utente
 //! POST   /api/conversations            → crea nuova conversazione
 //! PUT    /api/conversations/{id}       → rinomina
 //! DELETE /api/conversations/{id}       → elimina + messaggi
-//! GET    /api/conversations/{id}/messages → messaggi di una conversazione
+//! GET    /api/conversations/{id}/messages → messages of one conversation
 
 use axum::{
     extract::{Path, State},

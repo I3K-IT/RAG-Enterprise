@@ -1,18 +1,18 @@
-//! VectorStore trait — astrazione sul database vettoriale.
+//! VectorStore trait — an abstraction over the vector database.
 //!
-//! Attualmente implementata da QdrantStore.
-//! Progettata per permettere future implementazioni sqlite-vec/hnsw
-//! (trial multi-OS senza dipendenza da Qdrant).
+//! Currently implemented by QdrantStore, and designed to leave room for
+//! sqlite-vec or hnsw implementations later (a multi-OS trial with no Qdrant
+//! dependency).
 //!
-//! INVARIANTE: delete_document / reindex devono toccare SQLite E Qdrant.
-//! Un solo punto di ingresso — mai bypassarlo.
+//! INVARIANT: delete_document and reindex must touch BOTH SQLite and Qdrant.
+//! There is a single entry point for that — never bypass it.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-/// Chunk salvato nel vector store.
-/// Parità con Python (qdrant_connector.py): stessi campi nel payload.
+/// A chunk stored in the vector store.
+/// Parity with the Python qdrant_connector.py: the same payload fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkPayload {
     pub document_id: String,
@@ -22,12 +22,12 @@ pub struct ChunkPayload {
     pub text: String,
     pub chunk_size: usize,
     pub document_type: String,
-    /// Campi strutturati estratti (metadata pipeline — Fase 2 Pro).
+    /// Extracted structured fields (metadata pipeline — Pro).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_fields: Option<serde_json::Value>,
 }
 
-/// Risultato di una ricerca per similarità vettoriale.
+/// The result of a vector similarity search.
 #[derive(Debug)]
 pub struct SearchHit {
     pub similarity: f32,
@@ -37,10 +37,10 @@ pub struct SearchHit {
 /// Interfaccia verso il vector store.
 #[async_trait]
 pub trait VectorStore: Send + Sync {
-    /// Upsert embeddings con i relativi payload in batch da 1000.
+    /// Upserts embeddings with their payloads, in batches of 1000.
     async fn upsert(&self, embeddings: &[Vec<f32>], payloads: &[ChunkPayload]) -> Result<()>;
 
-    /// Ricerca per similarità vettoriale (top-k).
+    /// Vector similarity search (top-k).
     async fn search(
         &self,
         query_vec: Vec<f32>,

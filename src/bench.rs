@@ -254,21 +254,21 @@ async fn run_ingestion(
     let chunks = chunker::split_text(&text);
     let chunk_time = t.elapsed();
     if chunks.is_empty() {
-        anyhow::bail!("nessun testo estratto da {} — impossibile fare benchmark", doc_path.display());
+        anyhow::bail!("no text extracted from {} — cannot benchmark it", doc_path.display());
     }
     // Radio silence between here and the end of embedding can last minutes on
     // large documents (hundreds of chunks in a single embed_texts call), so
     // this log keeps it from looking stuck when it is merely working.
     tracing::info!(
         chunks = chunks.len(), ms = chunk_time.as_millis(),
-        "chunking completato, avvio embedding (può richiedere qualche minuto sui documenti grandi)"
+        "chunking done, starting embedding (this can take minutes on large documents)"
     );
 
     let t = Instant::now();
     let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
     let embedding_vecs = embeddings.embed_texts(&chunk_refs).context("embedding chunk")?;
     let embed_time = t.elapsed();
-    tracing::info!(ms = embed_time.as_millis(), "embedding completato, avvio upsert su Qdrant");
+    tracing::info!(ms = embed_time.as_millis(), "embedding done, starting the Qdrant upsert");
 
     let document_id = uuid::Uuid::new_v4().to_string();
     let filename = doc_path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
@@ -342,7 +342,7 @@ async fn run_inference(
     let full_prompt = prompt::build_prompt(&context, query, &[]);
     let prompt_build = t.elapsed();
 
-    tracing::info!("avvio generazione eullm");
+    tracing::info!("starting eullm generation");
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
     let eullm_task = eullm.clone();
     let prompt_for_task = full_prompt.clone();
@@ -354,7 +354,7 @@ async fn run_inference(
     while let Some(_token) = rx.recv().await {
         if ttft.is_none() {
             ttft = Some(gen_start.elapsed());
-            tracing::info!(ttft_ms = gen_start.elapsed().as_millis(), "primo token ricevuto");
+            tracing::info!(ttft_ms = gen_start.elapsed().as_millis(), "first token received");
         }
         tokens_generated += 1;
     }
@@ -423,7 +423,7 @@ fn print_summary(hw: &HardwareInfo, ingestion: &IngestionResult, inferences: &[I
             "  chunk recuperati: {} (di cui {} dal documento benchmark)",
             inf.chunks_retrieved, inf.chunks_from_bench_doc
         );
-        println!("  TTFT: {:.0} ms | generazione totale: {:.0} ms | token: {}",
+        println!("  TTFT: {:.0} ms | total generation: {:.0} ms | tokens: {}",
             inf.ttft.as_secs_f64() * 1000.0,
             inf.total_generation.as_secs_f64() * 1000.0,
             inf.tokens_generated
@@ -519,8 +519,8 @@ fn write_markdown_report(
         ));
         md.push_str(&format!("- Token generati: {}\n", inf.tokens_generated));
         match inf.decode_tokens_per_sec() {
-            Some(tps) => md.push_str(&format!("- Velocità decode (esclude prefill): {tps:.1} token/sec\n")),
-            None => md.push_str("- Velocità decode: N/A (troppo pochi token generati)\n"),
+            Some(tps) => md.push_str(&format!("- Decode speed (excluding prefill): {tps:.1} tokens/sec\n")),
+            None => md.push_str("- Decode speed: N/A (too few tokens generated)\n"),
         }
 
         let decode_ms = inf.total_generation.saturating_sub(inf.ttft).as_secs_f64() * 1000.0;
@@ -657,11 +657,11 @@ fn write_live_report(
 
     let mut md = String::new();
     md.push_str(&format!(
-        "# Benchmark live i3k-rag-engine — sessione avviata {started_at}, report generato {now}\n\n"
+        "# i3k-rag-engine live benchmark — session started {started_at}, report generated {now}\n\n"
     ));
     md.push_str(&format!(
-        "Registrate {} ingestioni e {} query reali durante la sessione (uso da frontend, carico non \
-         controllato — per confrontare hardware diversi a parità di carico usa `--bench <file>`, non questa modalità).\n\n",
+        "Recorded {} real ingestions and {} real queries during the session (frontend use, so the \
+         load is uncontrolled — to compare different hardware at equal load use `--bench <file>`, not this mode).\n\n",
         ingestions.len(),
         inferences.len()
     ));
@@ -673,7 +673,7 @@ fn write_live_report(
     match (&hw.gpu_name, hw.gpu_vram_total_mb, hw.gpu_vram_free_mb) {
         (Some(name), Some(total), Some(free)) => {
             md.push_str(&format!("| GPU | {name} |\n"));
-            md.push_str(&format!("| VRAM | {free} MB liberi / {total} MB totali (all'avvio) |\n"));
+            md.push_str(&format!("| VRAM | {free} MB free / {total} MB total (at startup) |\n"));
         }
         _ => md.push_str("| GPU | not detected (nvidia-smi unavailable, or no GPU) |\n"),
     }
@@ -844,7 +844,7 @@ pub async fn run(
         .await
         .context("init Qdrant benchmark")?;
 
-    tracing::info!(doc = %args.doc_path.display(), "avvio benchmark ingestione");
+    tracing::info!(doc = %args.doc_path.display(), "starting the ingestion benchmark");
     // Same order as api/documents.rs::upload() on a real ingestion: free the
     // VRAM (eullm) BEFORE occupying it (bge-m3), with the mirror image at the
     // end. Without unload_during_ingestion, eullm keeps the allocation decided
@@ -876,7 +876,7 @@ pub async fn run(
     let queries = if args.queries.is_empty() { default_queries() } else { args.queries.clone() };
     let mut inferences = Vec::with_capacity(queries.len());
     for q in &queries {
-        tracing::info!(query = %q, "avvio benchmark inferenza");
+        tracing::info!(query = %q, "starting the inference benchmark");
         inferences.push(run_inference(q, &ingestion.document_id, embeddings, &qdrant, &eullm).await?);
     }
 

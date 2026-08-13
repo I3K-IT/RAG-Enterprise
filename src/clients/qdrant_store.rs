@@ -1,12 +1,12 @@
 //! Qdrant connector — implementa VectorStore.
 //!
-//! Parità con Python (MAPPA §7 — qdrant_connector.py):
+//! Parity with the Python qdrant_connector.py:
 //! - Collection: "rag_documents", size 1024, distance COSINE
 //! - upsert: batch 1000, wait=true, id=UUID4 str
 //! - Payload: document_id, chunk_index, filename, upload_date, text, chunk_size,
 //!            document_type, structured_fields (opzionale)
 //! - search: score_threshold opzionale; restituisce {id, similarity, payload}
-//! - delete_document: filtra per document_id
+//! - delete_document: filters by document_id
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;

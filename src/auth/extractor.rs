@@ -26,14 +26,14 @@ impl FromRequestParts<AppState> for Claims {
         let token = auth.strip_prefix("Bearer ").ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Authorization header mancante o non Bearer"})),
+                Json(json!({"error": "missing or non-Bearer Authorization header"})),
             )
         })?;
 
         decode_token(token, &state.settings.auth.jwt_secret).map_err(|_| {
             (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "token non valido o scaduto"})),
+                Json(json!({"error": "invalid or expired token"})),
             )
         })
     }
