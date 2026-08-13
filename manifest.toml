@@ -62,8 +62,8 @@ size   = 9001753984
 dest   = "{data}/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
 exec   = false
 
-# OCR (leptess/Tesseract, lang="ita+eng" — MAPPA/CLAUDE.md). Fonte:
-# tessdata_best (LSTM, massima accuratezza — github.com/tesseract-ocr/tessdata_best).
+# OCR (leptess/Tesseract, lang="ita+eng"). Source: tessdata_best
+# (LSTM, highest accuracy — github.com/tesseract-ocr/tessdata_best).
 [[component]]
 name   = "tessdata-ita"
 kind   = "model"

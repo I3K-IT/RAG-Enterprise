@@ -56,7 +56,7 @@ EOF
 ./i3k-rag-engine
 ```
 
-On first run it downloads roughly **17 GB** of components and verifies each one
+On first run it downloads roughly **12 GB** of components and verifies each one
 against a pinned sha256 — mostly the language and embedding models. Allow time
 for it. Every later start is immediate.
 
