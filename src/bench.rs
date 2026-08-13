@@ -1,11 +1,11 @@
-//! --bench/--benchmark: misura ingestione+inferenza su un documento reale,
-//! con l'hardware effettivamente in uso, e scrive un report Markdown (con
-//! grafici a torta Mermaid) pensato per individuare colli di bottiglia.
+//! --bench/--benchmark: measures ingestion and inference on a real document,
+//! on the hardware actually in use, and writes a Markdown report (with Mermaid
+//! pie charts) meant for spotting bottlenecks.
 //!
-//! Riusa lo stesso bootstrap (qdrant/eullm/embedding) dell'avvio normale —
-//! niente scorciatoie: i tempi devono riflettere condizioni reali. Scrive in
-//! una collection Qdrant dedicata ("{collection}_benchmark", azzerata ad ogni
-//! run) per non toccare mai i dati reali dell'utente.
+//! It reuses the same bootstrap (qdrant, eullm, embeddings) as a normal start,
+//! with no shortcuts: the timings must reflect real conditions. It writes into
+//! a dedicated Qdrant collection ("{collection}_benchmark", wiped on every
+//! run) so the user's real data is never touched.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -28,8 +28,9 @@ pub struct BenchArgs {
     pub queries: Vec<String>,
 }
 
-/// `--bench <path>` o `--benchmark <path>`, con zero o più `--bench-query "…"`
-/// ripetuti. Se nessuna query è passata, run() usa un piccolo set generico.
+/// `--bench <path>` or `--benchmark <path>`, with zero or more repeated
+/// `--bench-query "…"`. When no query is given, run() uses a small generic
+/// set.
 pub fn parse_args(args: &[String]) -> Option<BenchArgs> {
     let bench_idx = args.iter().position(|a| a == "--bench" || a == "--benchmark")?;
     let doc_path = PathBuf::from(args.get(bench_idx + 1)?);
@@ -47,21 +48,23 @@ pub fn parse_args(args: &[String]) -> Option<BenchArgs> {
     Some(BenchArgs { doc_path, queries })
 }
 
-/// `--bench-live`: modalità alternativa a `--bench <file>` — il server e il
-/// frontend partono normalmente, e OGNI ingestione/query reale fatta durante
-/// la sessione viene cronometrata e registrata (vedi LiveRecorder). Il
-/// report viene scritto alla chiusura (SIGINT/SIGTERM, vedi main.rs). A
-/// differenza di `--bench <file>` il carico non è fisso: utile per capire il
-/// comportamento sotto uso reale, non per confrontare hardware diversi a
-/// parità di carico (per quello serve `--bench <file>`, riproducibile).
+/// `--bench-live`: an alternative to `--bench <file>`. The server and
+/// frontend start normally and EVERY real ingestion and query made during the
+/// session is timed and recorded (see LiveRecorder), with the report written
+/// on shutdown (SIGINT/SIGTERM, see main.rs).
+///
+/// Unlike `--bench <file>` the workload is not fixed: this is useful for
+/// understanding behaviour under real use, not for comparing different
+/// hardware at equal load — for that you want `--bench <file>`, which is
+/// reproducible.
 pub fn live_mode_requested(args: &[String]) -> bool {
     args.iter().any(|a| a == "--bench-live")
 }
 
 fn default_queries() -> Vec<String> {
     vec![
-        "Riassumi in breve il contenuto di questo documento.".to_owned(),
-        "Quali sono i punti principali trattati nel documento?".to_owned(),
+        "Briefly summarise the contents of this document.".to_owned(),
+        "What are the main points covered in the document?".to_owned(),
     ]
 }
 
@@ -88,7 +91,7 @@ fn cpu_model() -> String {
                 .and_then(|l| l.split(':').nth(1))
                 .map(|s| s.trim().to_owned())
         })
-        .unwrap_or_else(|| "sconosciuta".to_owned())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn ram_total_mb() -> u64 {
@@ -123,9 +126,10 @@ fn os_info() -> String {
     }
 }
 
-/// nvidia-smi, non le API CUDA dirette: funziona indipendentemente da come è
-/// stato compilato questo binario (--features cuda o no), e riflette lo stato
-/// REALE della GPU al momento del benchmark (VRAM libera cambia in continuazione).
+/// Uses nvidia-smi rather than the CUDA APIs directly: it works regardless of
+/// how this binary was compiled (with or without --features cuda) and reflects
+/// the REAL state of the GPU at benchmark time, since free VRAM changes
+/// continuously.
 fn gpu_info() -> (Option<String>, Option<u64>, Option<u64>) {
     let output = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits"])
@@ -205,9 +209,10 @@ pub struct InferenceResult {
 }
 
 impl InferenceResult {
-    /// token/sec nella sola fase di decode (esclude il prefill/TTFT) — è la
-    /// velocità "di regime", quella che conta per risposte lunghe. Con un
-    /// solo token generato non è definita (nessun intervallo decode misurabile).
+    /// Tokens per second during the decode phase alone, excluding prefill and
+    /// TTFT. This is the steady-state speed, the one that matters for long
+    /// answers. With a single generated token it is undefined, since there is
+    /// no measurable decode interval.
     pub fn decode_tokens_per_sec(&self) -> Option<f64> {
         if self.tokens_generated < 2 {
             return None;
@@ -251,9 +256,9 @@ async fn run_ingestion(
     if chunks.is_empty() {
         anyhow::bail!("nessun testo estratto da {} — impossibile fare benchmark", doc_path.display());
     }
-    // Silenzio radio tra qui e la fine dell'embedding può durare minuti sui
-    // documenti grandi (centinaia di chunk, un'unica chiamata embed_texts) —
-    // questo log evita che sembri bloccato quando sta solo lavorando.
+    // Radio silence between here and the end of embedding can last minutes on
+    // large documents (hundreds of chunks in a single embed_texts call), so
+    // this log keeps it from looking stuck when it is merely working.
     tracing::info!(
         chunks = chunks.len(), ms = chunk_time.as_millis(),
         "chunking completato, avvio embedding (può richiedere qualche minuto sui documenti grandi)"
@@ -292,10 +297,10 @@ async fn run_ingestion(
     Ok(IngestionResult {
         document_id,
         stages: vec![
-            StageTiming { name: "Estrazione testo", duration: extract_time },
+            StageTiming { name: "Text extraction", duration: extract_time },
             StageTiming { name: "Chunking", duration: chunk_time },
             StageTiming { name: "Embedding", duration: embed_time },
-            StageTiming { name: "Upsert Qdrant", duration: upsert_time },
+            StageTiming { name: "Qdrant upsert", duration: upsert_time },
         ],
         page_count,
         word_count,
@@ -375,12 +380,12 @@ async fn run_inference(
 
 // ── Collection Qdrant dedicata ──────────────────────────────────────────────
 
-/// Azzera la collection di benchmark prima di ogni run, così i risultati non
-/// si mescolano mai con quelli di run precedenti — mai la collection reale
-/// dell'utente (QdrantStore::new la ricrea da zero se non esiste, vedi
-/// ensure_collection in qdrant_store.rs).
+/// Wipes the benchmark collection before each run so results never mix with
+/// those of earlier runs. Never the user's real collection. QdrantStore::new
+/// recreates it from scratch when missing (see ensure_collection in
+/// qdrant_store.rs).
 async fn reset_benchmark_collection(grpc_url: &str, collection: &str) -> Result<()> {
-    let client = Qdrant::from_url(grpc_url).build().context("connessione Qdrant")?;
+    let client = Qdrant::from_url(grpc_url).build().context("connecting to Qdrant")?;
     if client.collection_exists(collection).await.context("collection_exists")? {
         client.delete_collection(collection).await.context("delete_collection")?;
     }
@@ -395,14 +400,14 @@ fn print_summary(hw: &HardwareInfo, ingestion: &IngestionResult, inferences: &[I
     println!("CPU: {} ({} core) | RAM: {} MB", hw.cpu_model, hw.cpu_cores, hw.ram_total_mb);
     match (&hw.gpu_name, hw.gpu_vram_free_mb, hw.gpu_vram_total_mb) {
         (Some(name), Some(free), Some(total)) => {
-            println!("GPU: {name} | VRAM libera: {free}/{total} MB")
+            println!("GPU: {name} | free VRAM: {free}/{total} MB")
         }
-        _ => println!("GPU: non rilevata (nvidia-smi non disponibile o nessuna GPU)"),
+        _ => println!("GPU: not detected (nvidia-smi unavailable, or no GPU)"),
     }
     println!("Embedding device: {}", hw.embedding_device);
     println!();
     println!(
-        "Ingestione — {} pagine, {} parole, {} chunk — totale {:.0} ms",
+        "Ingestion — {} pages, {} words, {} chunks — {:.0} ms total",
         hw_opt(ingestion.page_count),
         ingestion.word_count,
         ingestion.chunk_count,
@@ -413,7 +418,7 @@ fn print_summary(hw: &HardwareInfo, ingestion: &IngestionResult, inferences: &[I
     }
     println!();
     for (i, inf) in inferences.iter().enumerate() {
-        println!("Inferenza #{} — \"{}\"", i + 1, truncate(&inf.query, 60));
+        println!("Inference #{} — \"{}\"", i + 1, truncate(&inf.query, 60));
         println!(
             "  chunk recuperati: {} (di cui {} dal documento benchmark)",
             inf.chunks_retrieved, inf.chunks_from_bench_doc
@@ -424,7 +429,7 @@ fn print_summary(hw: &HardwareInfo, ingestion: &IngestionResult, inferences: &[I
             inf.tokens_generated
         );
         if let Some(tps) = inf.decode_tokens_per_sec() {
-            println!("  velocità decode: {tps:.1} token/sec");
+            println!("  decode speed: {tps:.1} tokens/sec");
         }
     }
     println!();
@@ -456,35 +461,35 @@ fn write_markdown_report(
 
     md.push_str("## Hardware\n\n");
     md.push_str("| Componente | Dettaglio |\n|---|---|\n");
-    md.push_str(&format!("| CPU | {} ({} core) |\n", hw.cpu_model, hw.cpu_cores));
+    md.push_str(&format!("| CPU | {} ({} cores) |\n", hw.cpu_model, hw.cpu_cores));
     md.push_str(&format!("| RAM | {} MB |\n", hw.ram_total_mb));
     match (&hw.gpu_name, hw.gpu_vram_total_mb, hw.gpu_vram_free_mb) {
         (Some(name), Some(total), Some(free)) => {
             md.push_str(&format!("| GPU | {name} |\n"));
             md.push_str(&format!("| VRAM | {free} MB liberi / {total} MB totali |\n"));
         }
-        _ => md.push_str("| GPU | non rilevata (nvidia-smi non disponibile o nessuna GPU) |\n"),
+        _ => md.push_str("| GPU | not detected (nvidia-smi unavailable, or no GPU) |\n"),
     }
     md.push_str(&format!("| OS | {} |\n", hw.os));
     md.push_str(&format!("| Device embedding | {} |\n", hw.embedding_device));
-    md.push_str(&format!("| Modello eullm | {} |\n", hw.eullm_model));
+    md.push_str(&format!("| eullm model | {} |\n", hw.eullm_model));
 
-    md.push_str("\n## Documento\n\n");
+    md.push_str("\n## Document\n\n");
     md.push_str(&format!("- File: `{}`\n", doc_path.display()));
-    md.push_str(&format!("- Pagine: {}\n", hw_opt(ingestion.page_count)));
-    md.push_str(&format!("- Parole: {}\n", ingestion.word_count));
+    md.push_str(&format!("- Pages: {}\n", hw_opt(ingestion.page_count)));
+    md.push_str(&format!("- Words: {}\n", ingestion.word_count));
     md.push_str(&format!("- Caratteri: {}\n", ingestion.char_count));
-    md.push_str(&format!("- Chunk generati: {}\n", ingestion.chunk_count));
+    md.push_str(&format!("- Chunks produced: {}\n", ingestion.chunk_count));
 
-    md.push_str("\n## Ingestione — tempi per fase\n\n");
-    md.push_str("| Fase | Tempo (ms) | % del totale |\n|---|---|---|\n");
+    md.push_str("\n## Ingestion — time per stage\n\n");
+    md.push_str("| Stage | Time (ms) | % of total |\n|---|---|---|\n");
     let ingestion_total_ms = (ingestion.total().as_secs_f64() * 1000.0).max(0.001);
     for s in &ingestion.stages {
         md.push_str(&format!("| {} | {:.0} | {:.1}% |\n", s.name, s.ms(), s.ms() / ingestion_total_ms * 100.0));
     }
-    md.push_str(&format!("| **Totale** | **{:.0}** | **100%** |\n", ingestion_total_ms));
+    md.push_str(&format!("| **Total** | **{:.0}** | **100%** |\n", ingestion_total_ms));
 
-    md.push_str("\n```mermaid\npie title Tempo di ingestione per fase\n");
+    md.push_str("\n```mermaid\npie title Ingestion time per stage\n");
     for s in &ingestion.stages {
         md.push_str(&format!("    \"{}\" : {:.1}\n", s.name, s.ms().max(0.1)));
     }
@@ -492,24 +497,24 @@ fn write_markdown_report(
 
     if let Some(worst) = ingestion.stages.iter().max_by(|a, b| a.duration.cmp(&b.duration)) {
         md.push_str(&format!(
-            "\n**Collo di bottiglia ingestione**: {} ({:.1}% del tempo totale)\n",
+            "\n**Ingestion bottleneck**: {} ({:.1}% of total time)\n",
             worst.name,
             worst.ms() / ingestion_total_ms * 100.0
         ));
     }
 
-    md.push_str("\n## Inferenza\n\n");
+    md.push_str("\n## Inference\n\n");
     for (i, inf) in inferences.iter().enumerate() {
         md.push_str(&format!("### Query {}: \"{}\"\n\n", i + 1, inf.query));
-        md.push_str("| Fase | Tempo (ms) |\n|---|---|\n");
+        md.push_str("| Stage | Time (ms) |\n|---|---|\n");
         md.push_str(&format!("| Embedding query | {:.0} |\n", inf.embed_query.as_secs_f64() * 1000.0));
-        md.push_str(&format!("| Ricerca Qdrant | {:.0} |\n", inf.search.as_secs_f64() * 1000.0));
+        md.push_str(&format!("| Qdrant search | {:.0} |\n", inf.search.as_secs_f64() * 1000.0));
         md.push_str(&format!("| Costruzione prompt | {:.0} |\n", inf.prompt_build.as_secs_f64() * 1000.0));
-        md.push_str(&format!("| Tempo alla prima parola (TTFT / prefill) | {:.0} |\n", inf.ttft.as_secs_f64() * 1000.0));
-        md.push_str(&format!("| Generazione totale | {:.0} |\n", inf.total_generation.as_secs_f64() * 1000.0));
+        md.push_str(&format!("| Time to first token (TTFT / prefill) | {:.0} |\n", inf.ttft.as_secs_f64() * 1000.0));
+        md.push_str(&format!("| Total generation | {:.0} |\n", inf.total_generation.as_secs_f64() * 1000.0));
 
         md.push_str(&format!(
-            "\n- Chunk recuperati: {} (top_k={}, soglia similarità ≥ {}), di cui {} dal documento appena ingerito\n",
+            "\n- Chunks retrieved: {} (top_k={}, similarity threshold ≥ {}), of which {} from the document just ingested\n",
             inf.chunks_retrieved, retrieval::TOP_K, retrieval::RELEVANCE_THRESHOLD, inf.chunks_from_bench_doc
         ));
         md.push_str(&format!("- Token generati: {}\n", inf.tokens_generated));
@@ -519,7 +524,7 @@ fn write_markdown_report(
         }
 
         let decode_ms = inf.total_generation.saturating_sub(inf.ttft).as_secs_f64() * 1000.0;
-        md.push_str("\n```mermaid\npie title Tempo di inferenza per fase\n");
+        md.push_str("\n```mermaid\npie title Inference time per stage\n");
         md.push_str(&format!("    \"Embedding query\" : {:.1}\n", (inf.embed_query.as_secs_f64() * 1000.0).max(0.1)));
         md.push_str(&format!("    \"Ricerca Qdrant\" : {:.1}\n", (inf.search.as_secs_f64() * 1000.0).max(0.1)));
         md.push_str(&format!("    \"Prefill (TTFT)\" : {:.1}\n", (inf.ttft.as_secs_f64() * 1000.0).max(0.1)));
@@ -527,15 +532,15 @@ fn write_markdown_report(
         md.push_str("```\n\n");
     }
 
-    md.push_str("## Riepilogo colli di bottiglia\n\n");
+    md.push_str("## Bottleneck summary\n\n");
     let mut all_stages: Vec<(String, f64)> = ingestion
         .stages
         .iter()
-        .map(|s| (format!("Ingestione: {}", s.name), s.ms()))
+        .map(|s| (format!("Ingestion: {}", s.name), s.ms()))
         .collect();
     for (i, inf) in inferences.iter().enumerate() {
         all_stages.push((format!("Query {}: embedding", i + 1), inf.embed_query.as_secs_f64() * 1000.0));
-        all_stages.push((format!("Query {}: ricerca Qdrant", i + 1), inf.search.as_secs_f64() * 1000.0));
+        all_stages.push((format!("Query {}: Qdrant search", i + 1), inf.search.as_secs_f64() * 1000.0));
         all_stages.push((format!("Query {}: prefill/TTFT", i + 1), inf.ttft.as_secs_f64() * 1000.0));
         all_stages.push((
             format!("Query {}: decode", i + 1),
@@ -544,12 +549,12 @@ fn write_markdown_report(
     }
     all_stages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     md.push_str("Fasi ordinate per tempo assoluto (dalla più lenta):\n\n");
-    md.push_str("| Fase | Tempo (ms) |\n|---|---|\n");
+    md.push_str("| Stage | Time (ms) |\n|---|---|\n");
     for (name, ms) in all_stages.iter().take(10) {
         md.push_str(&format!("| {name} | {ms:.0} |\n"));
     }
     if let Some((name, ms)) = all_stages.first() {
-        md.push_str(&format!("\n**Fase più lenta in assoluto**: {name} ({ms:.0} ms) — è il primo posto da guardare per ottimizzare.\n"));
+        md.push_str(&format!("\n**Slowest stage overall**: {name} ({ms:.0} ms) — the first place to look when optimising.\n"));
     }
 
     std::fs::write(&path, md).with_context(|| format!("scrittura report {}", path.display()))?;
@@ -558,12 +563,13 @@ fn write_markdown_report(
 
 // ── Modalità live (--bench-live) ────────────────────────────────────────────
 
-/// Registra tempi/hardware di ogni ingestione e query REALI fatte da
-/// frontend durante la sessione — a differenza di `--bench <file>`, che
-/// misura un unico documento sintetico. Costruito una volta all'avvio se
-/// `--bench-live` è passato (vedi main.rs) e condiviso via
-/// `AppState::live_bench`. Il report è scritto alla chiusura del server
-/// (SIGINT/SIGTERM, vedi main.rs) — niente endpoint dedicato nell'MVP.
+/// Records timings and hardware for every REAL ingestion and query made from
+/// the frontend during the session — unlike `--bench <file>`, which measures a
+/// single synthetic document.
+/// Built once at startup when `--bench-live` is passed (see main.rs) and
+/// shared through `AppState::live_bench`. The report is written when the
+/// server shuts down (SIGINT/SIGTERM, see main.rs) — there is no dedicated
+/// endpoint in the MVP.
 pub struct LiveRecorder {
     hardware: HardwareInfo,
     started_at: String,
@@ -592,35 +598,35 @@ impl LiveRecorder {
         }
     }
 
-    /// Mai fallire la richiesta reale per colpa della registrazione: un
-    /// lock avvelenato scarta l'evento con un warning invece di propagare
-    /// un errore al chiamante (upload/query reali dell'utente).
+    /// Never fail a real request because of the recording: a poisoned lock
+    /// drops the event with a warning instead of propagating an error to the
+    /// caller, which would be the user's real upload or query.
     pub fn record_ingestion(&self, filename: String, result: IngestionResult) {
         match self.ingestions.lock() {
             Ok(mut v) => v.push(LiveIngestion { at: now_string(), filename, result }),
-            Err(_) => tracing::warn!("bench-live: lock ingestioni avvelenato, evento perso"),
+            Err(_) => tracing::warn!("bench-live: ingestion lock poisoned, event lost"),
         }
     }
 
     pub fn record_inference(&self, result: InferenceResult) {
         match self.inferences.lock() {
             Ok(mut v) => v.push(LiveInference { at: now_string(), result }),
-            Err(_) => tracing::warn!("bench-live: lock inferenze avvelenato, evento perso"),
+            Err(_) => tracing::warn!("bench-live: inference lock poisoned, event lost"),
         }
     }
 
-    /// Scrive il report aggregato. `Ok(None)` se non è stata registrata
-    /// nessuna ingestione/query (server avviato e chiuso senza uso reale nel
-    /// frattempo) — niente report vuoto a confondere un run reale.
+    /// Writes the aggregated report. `Ok(None)` when no ingestion or query was
+    /// recorded — the server was started and stopped without real use in
+    /// between — so an empty report never gets mistaken for a real run.
     pub fn write_report(&self) -> Result<Option<PathBuf>> {
         let ingestions = self
             .ingestions
             .lock()
-            .map_err(|_| anyhow::anyhow!("bench-live: lock ingestioni avvelenato"))?;
+            .map_err(|_| anyhow::anyhow!("bench-live: ingestion lock poisoned"))?;
         let inferences = self
             .inferences
             .lock()
-            .map_err(|_| anyhow::anyhow!("bench-live: lock inferenze avvelenato"))?;
+            .map_err(|_| anyhow::anyhow!("bench-live: inference lock poisoned"))?;
         if ingestions.is_empty() && inferences.is_empty() {
             return Ok(None);
         }
@@ -662,25 +668,25 @@ fn write_live_report(
 
     md.push_str("## Hardware\n\n");
     md.push_str("| Componente | Dettaglio |\n|---|---|\n");
-    md.push_str(&format!("| CPU | {} ({} core) |\n", hw.cpu_model, hw.cpu_cores));
+    md.push_str(&format!("| CPU | {} ({} cores) |\n", hw.cpu_model, hw.cpu_cores));
     md.push_str(&format!("| RAM | {} MB |\n", hw.ram_total_mb));
     match (&hw.gpu_name, hw.gpu_vram_total_mb, hw.gpu_vram_free_mb) {
         (Some(name), Some(total), Some(free)) => {
             md.push_str(&format!("| GPU | {name} |\n"));
             md.push_str(&format!("| VRAM | {free} MB liberi / {total} MB totali (all'avvio) |\n"));
         }
-        _ => md.push_str("| GPU | non rilevata (nvidia-smi non disponibile o nessuna GPU) |\n"),
+        _ => md.push_str("| GPU | not detected (nvidia-smi unavailable, or no GPU) |\n"),
     }
     md.push_str(&format!("| OS | {} |\n", hw.os));
     md.push_str(&format!("| Device embedding | {} |\n", hw.embedding_device));
-    md.push_str(&format!("| Modello eullm | {} |\n", hw.eullm_model));
+    md.push_str(&format!("| eullm model | {} |\n", hw.eullm_model));
 
     let mut bottleneck_stages: Vec<(&str, f64)> = Vec::new();
 
     if !ingestions.is_empty() {
         md.push_str("\n## Ingestioni\n\n");
         md.push_str(
-            "| Ora | File | Pagine | Parole | Chunk | Estrazione (ms) | Chunking (ms) | Embedding (ms) | Upsert (ms) | Totale (ms) |\n|---|---|---|---|---|---|---|---|---|---|\n",
+            "| Time | File | Pages | Words | Chunks | Extraction (ms) | Chunking (ms) | Embedding (ms) | Upsert (ms) | Total (ms) |\n|---|---|---|---|---|---|---|---|---|---|\n",
         );
         for ing in ingestions {
             let stage_ms = |name: &str| {
@@ -693,10 +699,10 @@ fn write_live_report(
                 hw_opt(ing.result.page_count),
                 ing.result.word_count,
                 ing.result.chunk_count,
-                stage_ms("Estrazione testo"),
+                stage_ms("Text extraction"),
                 stage_ms("Chunking"),
                 stage_ms("Embedding"),
-                stage_ms("Upsert Qdrant"),
+                stage_ms("Qdrant upsert"),
                 ing.result.total().as_secs_f64() * 1000.0,
             ));
         }
@@ -709,10 +715,10 @@ fn write_live_report(
                     .map(|s| &s.duration),
             )
         };
-        let extract_avg = by_stage("Estrazione testo");
+        let extract_avg = by_stage("Text extraction");
         let chunk_avg = by_stage("Chunking");
         let embed_avg = by_stage("Embedding");
-        let upsert_avg = by_stage("Upsert Qdrant");
+        let upsert_avg = by_stage("Qdrant upsert");
 
         md.push_str(&format!(
             "\n**Medie su {} ingestioni**: estrazione {extract_avg:.0} ms, chunking {chunk_avg:.0} ms, embedding {embed_avg:.0} ms, upsert {upsert_avg:.0} ms — totale medio {:.0} ms.\n",
@@ -720,23 +726,23 @@ fn write_live_report(
             extract_avg + chunk_avg + embed_avg + upsert_avg
         ));
 
-        md.push_str("\n```mermaid\npie title Tempo medio di ingestione per fase\n");
+        md.push_str("\n```mermaid\npie title Average ingestion time per stage\n");
         md.push_str(&format!("    \"Estrazione testo\" : {:.1}\n", extract_avg.max(0.1)));
         md.push_str(&format!("    \"Chunking\" : {:.1}\n", chunk_avg.max(0.1)));
         md.push_str(&format!("    \"Embedding\" : {:.1}\n", embed_avg.max(0.1)));
         md.push_str(&format!("    \"Upsert Qdrant\" : {:.1}\n", upsert_avg.max(0.1)));
         md.push_str("```\n");
 
-        bottleneck_stages.push(("Ingestione: estrazione testo", extract_avg));
-        bottleneck_stages.push(("Ingestione: chunking", chunk_avg));
-        bottleneck_stages.push(("Ingestione: embedding", embed_avg));
-        bottleneck_stages.push(("Ingestione: upsert Qdrant", upsert_avg));
+        bottleneck_stages.push(("Ingestion: text extraction", extract_avg));
+        bottleneck_stages.push(("Ingestion: chunking", chunk_avg));
+        bottleneck_stages.push(("Ingestion: embedding", embed_avg));
+        bottleneck_stages.push(("Ingestion: Qdrant upsert", upsert_avg));
     }
 
     if !inferences.is_empty() {
         md.push_str("\n## Query\n\n");
         md.push_str(
-            "| Ora | Domanda | Chunk trovati | Embed query (ms) | Ricerca (ms) | Prompt (ms) | TTFT (ms) | Generazione tot (ms) | Token | Decode tok/s |\n|---|---|---|---|---|---|---|---|---|---|\n",
+            "| Time | Question | Chunks found | Query embed (ms) | Search (ms) | Prompt (ms) | TTFT (ms) | Total generation (ms) | Tokens | Decode tok/s |\n|---|---|---|---|---|---|---|---|---|---|\n",
         );
         for inf in inferences {
             let tps = inf
@@ -781,11 +787,11 @@ fn write_live_report(
             inferences.len()
         ));
         match tps_avg {
-            Some(v) => md.push_str(&format!(", velocità decode media {v:.1} token/sec.\n")),
-            None => md.push_str(" (velocità decode: N/A, troppo pochi token per query).\n"),
+            Some(v) => md.push_str(&format!(", average decode speed {v:.1} tokens/sec.\n")),
+            None => md.push_str(" (decode speed: N/A, too few tokens per query).\n"),
         }
 
-        md.push_str("\n```mermaid\npie title Tempo medio di inferenza per fase\n");
+        md.push_str("\n```mermaid\npie title Average inference time per stage\n");
         md.push_str(&format!("    \"Embedding query\" : {:.1}\n", embed_avg.max(0.1)));
         md.push_str(&format!("    \"Ricerca Qdrant\" : {:.1}\n", search_avg.max(0.1)));
         md.push_str(&format!("    \"Costruzione prompt\" : {:.1}\n", prompt_avg.max(0.1)));
@@ -794,23 +800,23 @@ fn write_live_report(
         md.push_str("```\n");
 
         bottleneck_stages.push(("Query: embedding", embed_avg));
-        bottleneck_stages.push(("Query: ricerca Qdrant", search_avg));
-        bottleneck_stages.push(("Query: costruzione prompt", prompt_avg));
+        bottleneck_stages.push(("Query: Qdrant search", search_avg));
+        bottleneck_stages.push(("Query: prompt build", prompt_avg));
         bottleneck_stages.push(("Query: prefill/TTFT", ttft_avg));
         bottleneck_stages.push(("Query: decode", decode_avg));
     }
 
     if !bottleneck_stages.is_empty() {
-        md.push_str("\n## Riepilogo colli di bottiglia\n\n");
+        md.push_str("\n## Bottleneck summary\n\n");
         bottleneck_stages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         md.push_str("Fasi ordinate per tempo MEDIO assoluto (dalla più lenta):\n\n");
-        md.push_str("| Fase | Tempo medio (ms) |\n|---|---|\n");
+        md.push_str("| Stage | Average time (ms) |\n|---|---|\n");
         for (name, ms) in &bottleneck_stages {
             md.push_str(&format!("| {name} | {ms:.0} |\n"));
         }
         if let Some((name, ms)) = bottleneck_stages.first() {
             md.push_str(&format!(
-                "\n**Fase più lenta in media**: {name} ({ms:.0} ms) — è il primo posto da guardare per ottimizzare.\n"
+                "\n**Slowest stage on average**: {name} ({ms:.0} ms) — the first place to look when optimising.\n"
             ));
         }
     }
@@ -828,7 +834,7 @@ pub async fn run(
     eullm: std::sync::Arc<EullmClient>,
 ) -> Result<()> {
     if !args.doc_path.is_file() {
-        anyhow::bail!("file non trovato: {}", args.doc_path.display());
+        anyhow::bail!("file not found: {}", args.doc_path.display());
     }
 
     let bench_collection = format!("{}_benchmark", settings.qdrant.collection);
@@ -839,19 +845,18 @@ pub async fn run(
         .context("init Qdrant benchmark")?;
 
     tracing::info!(doc = %args.doc_path.display(), "avvio benchmark ingestione");
-    // Stesso ordine di api/documents.rs::upload() sull'ingestione reale:
-    // libera VRAM (eullm) PRIMA di occuparla (bge-m3), rientro speculare a
-    // fine ingestione. Senza unload_during_ingestion, eullm resta piazzato con
-    // l'allocazione decisa al proprio avvio (il sizing avviene una volta, al
-    // load, non si ridimensiona a caldo per far spazio) e lo
-    // swap dell'embedding su GPU può non trovare VRAM sufficiente e
-    // fallire silenziosamente (log "swap embedding fallito") — misurando di
-    // nuovo il percorso sbagliato: CPU invece di GPU.
+    // Same order as api/documents.rs::upload() on a real ingestion: free the
+    // VRAM (eullm) BEFORE occupying it (bge-m3), with the mirror image at the
+    // end. Without unload_during_ingestion, eullm keeps the allocation decided
+    // at its own startup — sizing happens once, at load, and is not resized
+    // on the fly to make room — so swapping the embedding model onto the GPU
+    // may not find enough VRAM and fail silently, which would once again
+    // measure the wrong path: CPU instead of GPU.
     let unload_enabled = settings.eullm.unload_during_ingestion;
     let swap_enabled = settings.embeddings.swap_during_ingestion;
     if unload_enabled {
         if let Err(e) = eullm.unload().await {
-            tracing::error!(error = %e, "eullm: unload pre-ingestione fallito, procedo comunque (nessuna VRAM liberata)");
+            tracing::error!(error = %e, "eullm: unload before ingestion failed, carrying on anyway (no VRAM freed)");
         }
     }
     if swap_enabled {
@@ -863,7 +868,7 @@ pub async fn run(
     }
     if unload_enabled {
         if let Err(e) = eullm.reload().await {
-            tracing::error!(error = %e, "eullm: reload post-ingestione fallito — il modello potrebbe non essere in VRAM, verifica manualmente");
+            tracing::error!(error = %e, "eullm: reload after ingestion failed — the model may not be resident in VRAM, check manually");
         }
     }
     let ingestion = ingestion_result?;
@@ -883,20 +888,20 @@ pub async fn run(
     Ok(())
 }
 
-/// Stessa logica di AppState::swap_embeddings_to_gpu/_to_cpu, ma qui non
-/// esiste un AppState (--bench <file> non ne costruisce uno: niente DB,
-/// niente server). Un fallimento non è fatale — come in
-/// api/documents.rs::upload(), si logga e si prosegue con il device
-/// corrente piuttosto che abortire un benchmark già in corso.
+/// Same logic as AppState::swap_embeddings_to_gpu/_to_cpu, except there is no
+/// AppState here: `--bench <file>` never builds one, since it runs without a
+/// database or a server. A failure is not fatal — as in
+/// api/documents.rs::upload(), it is logged and the current device is kept
+/// rather than aborting a benchmark already under way.
 fn swap_embedding_device(embeddings: &mut EmbeddingService, to_gpu: bool) {
     let model_id = embeddings.model_id().to_owned();
     let loaded = if to_gpu {
         tracing::info!(
-            "swap_during_ingestion attivo: sposto l'embedding su GPU per l'ingestione del benchmark"
+            "swap_during_ingestion enabled: moving the embedding model to GPU for the benchmark ingestion"
         );
         EmbeddingService::load_gpu_for_ingestion(&model_id)
     } else {
-        tracing::info!("rimetto l'embedding su CPU dopo l'ingestione del benchmark");
+        tracing::info!("moving the embedding model back to CPU after the benchmark ingestion");
         EmbeddingService::load_cpu_parked(&model_id)
     };
     match loaded {
