@@ -1,4 +1,4 @@
-//! Document management endpoints (MAPPA §3):
+//! Document management endpoints:
 //! GET    /api/documents
 //! POST   /api/documents/upload   — multipart/form-data, field "file"
 //! DELETE /api/documents/{id}
@@ -309,7 +309,7 @@ pub async fn delete(
     claims: Claims,
     Path(document_id): Path<String>,
 ) -> Response {
-    // RBAC (parità Python: require_delete_permission → admin|super_user).
+    // RBAC: delete requires admin|super_user.
     if !claims.role.can_delete() {
         return err(StatusCode::FORBIDDEN, "insufficient permissions to delete documents");
     }

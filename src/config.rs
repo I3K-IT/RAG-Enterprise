@@ -186,7 +186,7 @@ pub struct BackupSettings {
 pub struct StorageSettings {
     #[serde(default = "default_documents_dir")]
     pub documents_dir: String,
-    /// Limite upload documento (MB). Parità Python: MAX_UPLOAD_SIZE_MB, default 100.
+    /// Document upload limit (MB). MAX_UPLOAD_SIZE_MB, default 100.
     #[serde(default = "default_max_upload_mb")]
     pub max_upload_mb: u64,
 }

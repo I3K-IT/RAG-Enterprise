@@ -1,5 +1,5 @@
 //! Document metadata in SQLite (`documents` table).
-//! INVARIANTE: delete tocca Qdrant PRIMA, poi SQLite.
+//! INVARIANT: delete touches Qdrant FIRST, then SQLite.
 
 use anyhow::Result;
 use chrono::Utc;

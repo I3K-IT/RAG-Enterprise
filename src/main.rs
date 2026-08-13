@@ -8,7 +8,6 @@ mod config;
 mod db;
 mod documents;
 mod error;
-mod license;
 mod observability;
 mod rag;
 mod state;
@@ -253,8 +252,8 @@ async fn build_eullm_client(
     )
 }
 
-/// Forces the model into VRAM before serving real traffic (parity with the
-/// Python llm_client.py::warmup(), "avoid timeout on first query").
+/// Forces the model into VRAM before serving real traffic, so the first
+/// query does not time out on a cold start.
 /// /api/tags, already awaited during bootstrap, only confirms that the eullm
 /// process is listening, NOT that the model is loaded in memory. If eullm
 /// loads lazily, without this step the first real query pays the cold start

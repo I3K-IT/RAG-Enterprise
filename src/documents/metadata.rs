@@ -1,7 +1,7 @@
 //! Document metadata (stored in SQLite alongside Qdrant vectors).
 //! Tracks: document_id, filename, upload_date, page_count, doc_type, status.
 //!
-//! INVARIANTE: delete / reindex devono toccare Qdrant PRIMA, poi SQLite.
+//! INVARIANT: delete and reindex must touch Qdrant FIRST, then SQLite.
 //! A single entry point — never bypass it.
 
 use serde::{Deserialize, Serialize};

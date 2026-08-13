@@ -1,5 +1,5 @@
 //! JWT HS256: create / decode / verify.
-//! Claims mirror MAPPA §3: { user_id, username, role, exp }.
+//! Claims: { user_id, username, role, exp }.
 //! Expiry: 480 min (configurable via Settings).
 
 use anyhow::Result;
