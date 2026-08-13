@@ -64,9 +64,13 @@ pub struct EullmSettings {
     /// must be either a direct GGUF path or a name imported through
     /// `eullm import-ollama`. A bare name such as "qwen3:14b" with neither of
     /// those fails with a 500 "model not found". When the bootstrap starts
-    /// eullm itself this value is ignored, and the same GGUF path passed to
-    /// `eullm run` is used instead (see bootstrap::ProcessGuard::eullm_model_path
-    /// and main.rs).
+    /// eullm itself — the default — this value is ignored, and the same GGUF
+    /// path passed to `eullm run` is used instead (see
+    /// bootstrap::ProcessGuard::eullm_model_path and main.rs).
+    ///
+    /// It therefore has a default: requiring a setting that is ignored in the
+    /// default configuration only stopped first runs for no reason.
+    #[serde(default = "default_eullm_model")]
     pub model: String,
     /// Context PER CONNECTION (slot). The --ctx-size flag passed to eullm at
     /// startup is the TOTAL: num_ctx * batch_size (see bootstrap::spawn_eullm).
@@ -264,6 +268,7 @@ fn default_qdrant_url() -> String { "http://localhost:6333".into() }
 fn default_qdrant_grpc_url() -> String { "http://localhost:6334".into() }
 fn default_collection() -> String { "rag_documents".into() }
 fn default_eullm_url() -> String { "http://localhost:11434".into() }
+fn default_eullm_model() -> String { "qwen3-14b".into() }
 fn default_num_ctx() -> u32 { 16384 }
 fn default_eullm_batch_size() -> u32 { 1 }
 fn default_num_predict() -> u32 { 4096 }
