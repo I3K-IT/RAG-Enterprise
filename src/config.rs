@@ -46,10 +46,10 @@ pub struct AuthSettings {
 
 #[derive(Debug, Deserialize)]
 pub struct QdrantSettings {
-    /// REST endpoint (HTTP/1.1) — usato per healthcheck in bootstrap.
+    /// REST endpoint (HTTP/1.1) — used for the bootstrap healthcheck.
     #[serde(default = "default_qdrant_url")]
     pub url: String,
-    /// gRPC endpoint (HTTP/2, tonic) — usato da QdrantStore (qdrant-client).
+    /// gRPC endpoint (HTTP/2, tonic) — used by QdrantStore (qdrant-client).
     #[serde(default = "default_qdrant_grpc_url")]
     pub grpc_url: String,
     #[serde(default = "default_collection")]
@@ -60,16 +60,16 @@ pub struct QdrantSettings {
 pub struct EullmSettings {
     #[serde(default = "default_eullm_url")]
     pub url: String,
-    /// Usato solo se manage_subprocesses=false (eullm gestito esternamente):
-    /// deve essere un path GGUF diretto o un nome importato via
-    /// `eullm import-ollama` — un nome "sciolto" (es. "qwen3:14b") senza
-    /// nessuna delle due cose fallisce con 500 "model not found". Quando
-    /// bootstrap avvia eullm da sé, questo valore viene ignorato: si usa
-    /// automaticamente lo stesso path GGUF passato a `eullm run` (vedi
-    /// bootstrap::ProcessGuard::eullm_model_path e main.rs).
+    /// Only used when manage_subprocesses=false (eullm managed externally):
+    /// must be either a direct GGUF path or a name imported through
+    /// `eullm import-ollama`. A bare name such as "qwen3:14b" with neither of
+    /// those fails with a 500 "model not found". When the bootstrap starts
+    /// eullm itself this value is ignored, and the same GGUF path passed to
+    /// `eullm run` is used instead (see bootstrap::ProcessGuard::eullm_model_path
+    /// and main.rs).
     pub model: String,
-    /// Contesto PER CONNESSIONE (slot). Il flag di avvio --ctx-size passato a
-    /// eullm è il TOTALE: num_ctx * batch_size (vedi bootstrap::spawn_eullm).
+    /// Context PER CONNECTION (slot). The --ctx-size flag passed to eullm at
+    /// startup is the TOTAL: num_ctx * batch_size (see bootstrap::spawn_eullm).
     #[serde(default = "default_num_ctx")]
     pub num_ctx: u32,
     #[serde(default = "default_num_predict")]
@@ -78,63 +78,62 @@ pub struct EullmSettings {
     pub repeat_penalty: f32,
     #[serde(default = "default_keep_alive")]
     pub keep_alive: i32,
-    /// Connessioni concorrenti gestite da eullm. VRAM per la KV cache scala
-    /// linearmente con num_ctx * batch_size — verifica il budget VRAM prima
-    /// di alzarlo (vedi BUILD.md).
+    /// Concurrent connections handled by eullm. KV cache VRAM scales linearly
+    /// with num_ctx * batch_size — check the VRAM budget before raising it
+    /// (see BUILD.md).
     #[serde(default = "default_eullm_batch_size")]
     pub batch_size: u32,
-    /// Quantizzazione KV cache (llama.cpp: f16, q8_0, q4_0…). None = default
-    /// di eullm (F16, nessun flag passato). Da testare per piattaforma/GPU —
-    /// non dare per scontato che sia supportata (verificare nei log di eullm).
+    /// KV cache quantisation (llama.cpp: f16, q8_0, q4_0…). None = eullm's own
+    /// default (F16, no flag passed). Test it per platform and GPU: do not
+    /// assume it is honoured — check eullm's logs.
     #[serde(default)]
     pub cache_type_k: Option<String>,
     #[serde(default)]
     pub cache_type_v: Option<String>,
-    // NOTA: il campo `fit` è stato rimosso con la pin 0.6.80. Da quella
-    // versione eullm dimensiona l'offload GPU da sé, SEMPRE, a prescindere dal
-    // flag: `--fit` passato esplicitamente serve solo a far chiedere conferma
-    // su uno split parziale, e solo quando stdin E stdout sono entrambi TTY
-    // (fit.rs:851 nel sorgente eullm) — noi lanciamo con stdin su null, quindi
-    // per noi era un no-op. L'ordine di avvio che il flag governava è ora
-    // incondizionato in main.rs. Config esistenti con `fit = ...` continuano a
-    // caricare: la struct non usa deny_unknown_fields, il campo viene ignorato.
-    /// Scarica eullm dalla VRAM durante l'ingestione documenti (POST
-    /// /api/unload — estensione EULLM verificata nel sorgente eullm:
-    /// api_routes() registra `.route("/unload", post(unload_model))`, ed è
-    /// montata sotto /api). Con questo attivo, la chat non
-    /// funziona per la durata dell'ingestione (eullm non è in VRAM) — la UI
-    /// mostra "ingestione in corso" ma non blocca l'invio, quindi una
-    /// domanda fatta in quella finestra fallirebbe o resterebbe in attesa
-    /// fino al reload.
+    // NOTE: the `fit` field was removed together with the 0.6.80 pin. From that
+    // version on, eullm sizes the GPU offload by itself, ALWAYS, regardless of
+    // the flag: passing `--fit` explicitly only asks for confirmation on a
+    // partial split, and only when stdin AND stdout are both TTYs
+    // (fit.rs:851 in eullm's source) — we spawn with stdin on null, so for us
+    // it was a no-op. The startup order the flag used to govern is now
+    // unconditional in main.rs. Existing configs carrying `fit = ...` still
+    // load: the struct does not use deny_unknown_fields, so it is ignored.
+    /// Evict eullm from VRAM for the duration of document ingestion
+    /// (POST /api/unload — an EULLM extension verified in eullm's source:
+    /// api_routes() registers `.route("/unload", post(unload_model))`, mounted
+    /// under /api). While this is active chat does not work, because eullm is
+    /// not resident: the UI shows "ingestion in progress" but does not block
+    /// sending, so a question asked in that window either fails or waits until
+    /// the reload.
     #[serde(default)]
     pub unload_during_ingestion: bool,
-    /// Override del modello da avviare, SOLO quando manage_subprocesses=true
-    /// (altrimenti usa già `model` così com'è — vedi sopra). Se Some, bypassa
-    /// la ricerca del componente "qwen3-14b" pinnato nel manifest e passa
-    /// questo valore direttamente a `eullm run` — path GGUF locale o
-    /// riferimento `hf.co/utente/repo:quant` che eullm risolve/scarica da sé,
-    /// fuori dal nostro manifest sha256-pinnato: la verifica di integrità in
-    /// quel caso è responsabilità di eullm/dell'hub HF, non nostra.
+    /// Overrides which model to start, ONLY when manage_subprocesses=true
+    /// (otherwise `model` above is used as-is). When Some, it bypasses the
+    /// lookup of the "qwen3-14b" component pinned in the manifest and passes
+    /// this value straight to `eullm run` — either a local GGUF path or an
+    /// `hf.co/user/repo:quant` reference that eullm resolves and downloads on
+    /// its own, outside our sha256-pinned manifest. Integrity verification is
+    /// then eullm's and the HF hub's responsibility, not ours.
     #[serde(default)]
     pub model_override: Option<String>,
-    /// Numero di layer di esperti MoE tenuti su CPU RAM (`--n-cpu-moe N`).
-    /// None = non passato, ed è il default giusto: dalla 0.6.80 eullm calcola
-    /// da sé quanti esperti spostare, leggendo i byte reali per tensore dalla
-    /// sezione tensor-info del GGUF (non una stima su tipo e shape), e il
-    /// modello si carica sempre — al peggio più lento, mai un OOM da
-    /// dimensione.
+    /// Number of MoE expert layers kept in CPU RAM (`--n-cpu-moe N`).
+    /// None = not passed, and that is the right default: from 0.6.80 eullm
+    /// works out how many experts to move by itself, reading the real
+    /// per-tensor byte sizes from the GGUF's tensor-info section rather than
+    /// estimating from type and shape. The model always loads — at worst more
+    /// slowly, never with a size-related OOM.
     ///
-    /// ATTENZIONE, è il motivo per cui questo campo NON va usato come tuning:
-    /// l'auto-sizing di eullm si applica solo "when the user hasn't already
-    /// chosen --cpu-moe/--n-cpu-moe themselves". Impostarlo qui DISATTIVA il
-    /// calcolo automatico e inchioda il valore, quasi sempre peggio di quello
-    /// che eullm ricaverebbe da solo.
+    /// CAREFUL — this is exactly why this field must NOT be used as a tuning
+    /// knob: eullm's auto-sizing only applies "when the user hasn't already
+    /// chosen --cpu-moe/--n-cpu-moe themselves". Setting it here DISABLES the
+    /// automatic computation and nails the value down, almost always worse
+    /// than what eullm would derive on its own.
     ///
-    /// Resta utile per un caso solo: RISERVARE VRAM per qualcos'altro che al
-    /// momento dell'avvio di eullm non è ancora allocato, e che quindi il suo
-    /// probe (free_vram * 0.97 - 640 MiB) non può vedere. Per l'embedding
-    /// residente non serve — lo copre l'ordine di avvio in main.rs, che carica
-    /// bge-m3 prima di eullm proprio perché il probe lo veda.
+    /// It stays useful for one case only: RESERVING VRAM for something that is
+    /// not yet allocated when eullm starts, and which its probe
+    /// (free_vram * 0.97 - 640 MiB) therefore cannot see. It is not needed for
+    /// the resident embedding model — the startup order in main.rs covers that
+    /// by loading bge-m3 before eullm, precisely so the probe sees it.
     #[serde(default)]
     pub n_cpu_moe: Option<u32>,
 }
@@ -143,32 +142,32 @@ pub struct EullmSettings {
 pub struct EmbeddingsSettings {
     #[serde(default = "default_embedding_model")]
     pub model_id: String,
-    /// Se true: CUDA obbligatoria per l'embedding. Se l'init CUDA fallisce dopo i
-    /// retry (vedi EmbeddingService::load), l'avvio FALLISCE invece di degradare
-    /// in silenzio su CPU — un'ingestione a 17 minuti anziché secondi non deve
-    /// mai passare inosservata. Default false: fallback CPU consentito ma
-    /// loggato a livello error (non warn) ed esposto via GET /info.
-    /// Env: EMBEDDINGS__REQUIRE_GPU (il campo Settings si chiama "embeddings").
+    /// When true, CUDA is mandatory for embeddings. If CUDA init fails after
+    /// the retries (see EmbeddingService::load) startup FAILS rather than
+    /// silently degrading to CPU — an ingestion taking 17 minutes instead of
+    /// seconds must never go unnoticed. Default false: the CPU fallback is
+    /// allowed, but logged at error level (not warn) and exposed via GET /info.
+    /// Env: EMBEDDINGS__REQUIRE_GPU (the Settings field is named "embeddings").
     ///
-    /// Con swap_during_ingestion=true smette di riguardare il caricamento
-    /// iniziale (che parte sempre su CPU in quel caso) e governa invece lo
-    /// swap verso GPU ad ogni ingestione: true = fa fallire quell'ingestione
-    /// se lo swap non riesce, false = procede su CPU (più lento ma corretto).
+    /// With swap_during_ingestion=true it stops governing the initial load,
+    /// which always starts on CPU in that mode, and governs the swap to GPU on
+    /// each ingestion instead: true = fail that ingestion if the swap does not
+    /// succeed, false = carry on using CPU (slower but correct).
     #[serde(default)]
     pub require_gpu: bool,
-    /// Sposta bge-m3 dalla CPU (riposo) alla GPU SOLO durante la finestra di
-    /// ingestione, poi torna in CPU — vedi AppState::swap_embeddings_to_gpu/
-    /// _to_cpu e documents::upload(). Pensato per hardware dove bge-m3 e
-    /// qwen non entrano insieme in VRAM (es. una scheda 12GB): fuori
-    /// dall'ingestione la VRAM resta tutta a eullm, bge-m3 gira su CPU per
-    /// l'unico embedding di ogni query (un testo corto, costo accettabile).
-    /// Con VRAM abbondante (16GB+) non serve: lascialo a false, bge-m3
-    /// resta sempre in GPU come oggi.
+    /// Move bge-m3 from CPU (at rest) to GPU ONLY for the ingestion window,
+    /// then back — see AppState::swap_embeddings_to_gpu/_to_cpu and
+    /// documents::upload(). Meant for hardware where bge-m3 and qwen do not
+    /// fit in VRAM together, e.g. a 12GB card: outside ingestion all the VRAM
+    /// stays with eullm, and bge-m3 runs on CPU for the single embedding each
+    /// query needs — a short text, so the cost is acceptable.
+    /// With plenty of VRAM (16GB+) this is unnecessary: leave it false and
+    /// bge-m3 stays resident on the GPU.
     ///
-    /// Richiede EULLM__UNLOAD_DURING_INGESTION=true (senza l'unload di
-    /// eullm non c'è VRAM libera in cui spostare bge-m3) e un binario
-    /// compilato con --features cuda — Settings::load() fallisce all'avvio
-    /// se una delle due condizioni manca, invece di degradare in silenzio.
+    /// Requires EULLM__UNLOAD_DURING_INGESTION=true — without evicting eullm
+    /// there is no free VRAM to move bge-m3 into — and a binary built with
+    /// --features cuda. Settings::load() fails at startup if either condition
+    /// is missing, rather than degrading silently.
     #[serde(default)]
     pub swap_during_ingestion: bool,
 }
@@ -193,11 +192,11 @@ pub struct StorageSettings {
 #[derive(Debug, Deserialize)]
 pub struct DataSettings {
     /// Percorso radice (default: cartella dell'eseguibile — portable app dir).
-    /// Override dev: DATA__DIR=/percorso/cartella/lavoro (il binario sta in target/debug/).
+    /// Dev override: DATA__DIR=/path/to/working/dir (the binary lives in target/debug/).
     #[serde(default = "default_data_dir")]
     pub dir: String,
-    /// Se true: bootstrap avvia e supervisiona qdrant ed eullm come processi figlio.
-    /// Se false: si aspetta che i processi siano già in ascolto (dev/compose).
+    /// When true, the bootstrap starts and supervises qdrant and eullm as child
+    /// processes. When false, it expects them to be listening already (dev/compose).
     #[serde(default = "default_manage_subprocesses")]
     pub manage_subprocesses: bool,
 }
@@ -275,9 +274,9 @@ fn default_backup_dir() -> String { "./backups".into() }
 fn default_documents_dir() -> String { "./documents".into() }
 fn default_max_upload_mb() -> u64 { 100 }
 fn default_data_dir() -> String {
-    // Exe-relative: la cartella che contiene il binario è la portable app dir.
-    // In produzione: /install/dir/i3k-rag-engine → data = /install/dir/
-    // In dev (cargo run): target/debug/ → override con DATA__DIR=./data
+    // Exe-relative: the directory holding the binary is the portable app dir.
+    // In production: /install/dir/i3k-rag-engine → data = /install/dir/
+    // In dev (cargo run): target/debug/ → override with DATA__DIR=./data
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
@@ -289,8 +288,8 @@ fn default_manage_subprocesses() -> bool { true }
 
 impl Settings {
     pub fn load() -> Result<Self> {
-        // Cerca .env prima nella CWD (dev: cargo run dalla root),
-        // poi nella cartella dell'eseguibile (produzione: binary dir).
+        // Look for .env in the CWD first (dev: cargo run from the repo root),
+        // then next to the executable (production: binary dir).
         if dotenvy::dotenv().is_err() {
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
@@ -303,8 +302,8 @@ impl Settings {
             .build()?;
         let mut s: Self = cfg.try_deserialize()?;
 
-        // Deriva i path da data_dir se sono ancora ai valori di default.
-        // Permette di impostare solo DATA__DIR per spostare tutto.
+        // Derive paths from data_dir when they are still at their defaults, so
+        // that setting DATA__DIR alone relocates everything.
         let data = s.data.data_path();
         if s.database.url == default_db_url() {
             s.database.url = format!("sqlite://{}", data.join("db").join("rag_users.db").display());
@@ -326,10 +325,10 @@ impl Settings {
     }
 }
 
-/// Estratta da Settings::load per essere testabile senza toccare env var
-/// reali (stesso motivo per cui ingestion_blocks in state.rs è una funzione
-/// libera). Fallisce forte invece di ignorare in silenzio la combinazione
-/// inconsistente — vedi EmbeddingsSettings::swap_during_ingestion.
+/// Extracted from Settings::load so it can be tested without touching real
+/// environment variables — the same reason ingestion_blocks in state.rs is a
+/// free function. Fails loudly instead of silently ignoring the inconsistent
+/// combination; see EmbeddingsSettings::swap_during_ingestion.
 fn validate_swap_during_ingestion(
     swap_during_ingestion: bool,
     unload_during_ingestion: bool,
