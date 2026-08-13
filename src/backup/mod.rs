@@ -1,7 +1,8 @@
 //! Backup service: tar+zstd of SQLite DB + Qdrant snapshot + optional rclone upload.
 //!
-//! Mirrors Python backup_service (PIANO §4 Community feature list).
-//! TODO Fase 1: implement backup_service, scheduler, rclone trigger, qdrant_snapshot.
+//!
+//! The SQLite dump and the Qdrant snapshot are taken together so that a
+//! restore brings back a consistent pair.
 
 pub mod scheduler;
 pub mod service;

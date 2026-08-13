@@ -1,6 +1,6 @@
 //! eullm HTTP client — POST /api/generate raw mode + no-think prefill.
 //!
-//! CRITICAL (riferimento funzionale al sistema Python):
+//! CRITICAL — the request shape below is load-bearing:
 //! - Endpoint: POST /api/generate  (NEVER /api/chat)
 //! - raw: true (top-level, not in options)
 //! - keep_alive: -1 (top-level, not in options)
@@ -36,7 +36,7 @@ fn think_re() -> &'static Regex {
 const NO_THINK: &str = "<think>\n</think>\n";
 const HTTP_TIMEOUT_SECS: u64 = 180;
 
-// Repetition-detection parameters (mirror Python llm_client.py).
+// Repetition-detection parameters.
 const REP_CHECK_AFTER: usize = 80;   // start checking after this many tokens
 const REP_CHECK_EVERY: usize = 20;   // re-check every N tokens
 const REP_TAIL: usize = 800;         // chars of accumulated text to examine

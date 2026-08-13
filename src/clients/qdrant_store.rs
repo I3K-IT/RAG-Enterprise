@@ -56,7 +56,7 @@ impl QdrantStore {
 
 #[async_trait]
 impl VectorStore for QdrantStore {
-    /// Upsert in batch da 1000 (parità Python: BATCH_SIZE=1000, wait=true, id=UUID4).
+    /// Upsert in batches of 1000 (BATCH_SIZE=1000, wait=true, id=UUID4).
     async fn upsert(&self, embeddings: &[Vec<f32>], payloads: &[ChunkPayload]) -> Result<()> {
         if embeddings.len() != payloads.len() {
             anyhow::bail!(

@@ -1,6 +1,5 @@
 //! Source formatting for API responses.
-//! Mirrors Python _format_sources / _format_chunks (MAPPA §5, step 13).
-//! Community: display_score = similarity (no reranker yet).
+//! display_score = similarity.
 
 use serde::{Deserialize, Serialize};
 

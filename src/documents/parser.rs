@@ -1,6 +1,6 @@
 //! Document text extraction.
 //!
-//! Catena fedele al Python (ocr_service.py):
+//! Extraction chain, following ocr_service.py:
 //! 1. .txt/.md/.csv  → lettura diretta UTF-8
 //! 2. PDF            → pdf_oxide (text_ratio > 0.5 AND len > 500)
 //!                     → OCR opzionale se feature "ocr" attiva

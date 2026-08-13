@@ -100,7 +100,7 @@ collection, so a restore brings back a consistent pair.
 | **Embeddings** | BAAI/bge-m3 through [Candle](https://github.com/huggingface/candle), in-process, GPU or CPU |
 | **Vector database** | [Qdrant](https://qdrant.tech), 1024-dim, cosine distance |
 | **Language model** | [eullm](https://github.com/eullm/eullm) as a separate process |
-| **Metadata** | SQLite through sqlx |
+| **Application database** | SQLite through sqlx — users, documents, conversations |
 | **OCR** | pdfium for rasterising, Tesseract through leptess |
 
 The embedding model is loaded before the language model on purpose: eullm sizes

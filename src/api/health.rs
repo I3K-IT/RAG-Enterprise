@@ -1,5 +1,5 @@
 //! GET /health  GET /info  GET /
-//! Public endpoints — no auth required (MAPPA §3).
+//! Public endpoints — no auth required.
 
 use axum::{extract::State, Json, response::IntoResponse};
 use serde_json::json;

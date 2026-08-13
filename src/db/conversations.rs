@@ -1,6 +1,6 @@
 //! Chat message persistence (`chat_messages` table) e metadata conversazioni (`conversations` table).
 //!
-//! MAX_MESSAGES_PER_USER = 100 (parità Python).
+//! MAX_MESSAGES_PER_USER = 100.
 
 use anyhow::Result;
 use chrono::Utc;

@@ -49,6 +49,6 @@ pub trait VectorStore: Send + Sync {
     ) -> Result<Vec<SearchHit>>;
 
     /// Cancella tutti i vettori di un documento.
-    /// INVARIANTE: chiamare PRIMA di aggiornare SQLite.
+    /// INVARIANT: call this BEFORE updating SQLite.
     async fn delete_document(&self, document_id: &str) -> Result<()>;
 }

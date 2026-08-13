@@ -65,9 +65,6 @@ csv = "1"
 regex = "1"
 unicode-segmentation = "1"
 
-# --- Licensing (Pro: volume cap + ED25519 signature) ---
-ed25519-dalek = "2"
-
 # --- Time / IDs ---
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }

@@ -1,5 +1,5 @@
 //! Role enum with capability helpers.
-//! Mirrors Python roles: admin | super_user | user (MAPPA §3).
+//! Roles: admin | super_user | user.
 
 use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
