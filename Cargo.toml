@@ -2,8 +2,8 @@
 name = "i3k-rag-engine"
 version = "0.1.25"
 edition = "2021"
-description = "i3k RAG Engine — Community core (Rust port of RAG-Enterprise)"
-license = "MIT OR Apache-2.0"
+description = "i3k RAG Engine — self-hosted document intelligence, fully local"
+license = "Apache-2.0"
 
 [dependencies]
 # --- Web / API ---
@@ -12,12 +12,12 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "request-id", "fs"] }
 
-# --- Serializzazione / validazione ---
+# --- Serialisation / validation ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 validator = { version = "0.18", features = ["derive"] }
 
-# --- Database: sqlx async, compile-checked, SQLite default / Postgres pronto ---
+# --- Database: sqlx async, compile-checked, SQLite by default / Postgres ready ---
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres", "chrono", "uuid", "migrate"] }
 
 # --- Auth ---
@@ -31,28 +31,28 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 url = "2"
 
 # --- Vector DB ---
-qdrant-client = "1"          # testato con Qdrant 1.18.2
-async-trait = "0.1"          # VectorStore trait object-safe
+qdrant-client = "1"          # tested against Qdrant 1.18.2
+async-trait = "0.1"          # keeps the VectorStore trait object-safe
 
-# --- Embedding: bge-m3 via Candle (in-process, GPU/CPU, NO cuDNN) ---
+# --- Embeddings: bge-m3 through Candle (in-process, GPU/CPU, NO cuDNN) ---
 candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
 tokenizers = "0.20"
 
-# --- Ingestione documenti ---
-# PDF testo: pdf_oxide (Rust puro, validato vs PyMuPDF)
+# --- Document ingestion ---
+# Text PDFs: pdf_oxide (pure Rust, validated against PyMuPDF)
 pdf_oxide = "0.3"
-# OCR (abilita con --features ocr):
-#   pdfium-render: libpdfium bundlabile, caricata a runtime da un path esplicito
-#     (vedi ocr.rs) — non richiede installazione di sistema in una build distribuita.
-#   leptess: si linka a compile-time contro libtesseract+libleptonica di sistema
-#     (nessun equivalente di bind_to_library) — richiede ancora le dev libs sulla
-#     macchina di build. Bundling cross-platform: vedi BUILD.md.
+# OCR (enable with --features ocr):
+#   pdfium-render: libpdfium can be bundled and is loaded at runtime from an
+#     explicit path (see ocr.rs) — a distributed build needs no system install.
+#   leptess: links at compile time against the system libtesseract+libleptonica
+#     (it has no equivalent of bind_to_library), so the dev libraries are still
+#     required on the build machine. Cross-platform bundling: see BUILD.md.
 pdfium-render = { version = "0.8", features = ["sync"], optional = true }
 leptess = { version = "0.14", optional = true }
-image = { version = "0.25", optional = true }  # usata da ocr.rs per encode PNG
-# Altri formati (no Tika nel Community core):
+image = { version = "0.25", optional = true }  # used by ocr.rs to encode PNG
+# Other formats (no Tika in the Community core):
 calamine = "0.26"
 docx-rs = "0.4"
 quick-xml = "0.37"
@@ -65,10 +65,10 @@ csv = "1"
 regex = "1"
 unicode-segmentation = "1"
 
-# --- Licensing (Pro: volume-cap + firma ED25519) ---
+# --- Licensing (Pro: volume cap + ED25519 signature) ---
 ed25519-dalek = "2"
 
-# --- Tempo / ID ---
+# --- Time / IDs ---
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
@@ -88,32 +88,23 @@ tokio-cron-scheduler = "0.13"
 config = "0.14"
 dotenvy = "0.15"
 
-# --- Sistema (disk space, sha256) ---
+# --- System (disk space, sha256) ---
 libc = "0.2"
 sha2 = "0.10"
 toml = "0.8"
 
-# --- Logging / errori ---
+# --- Logging / errors ---
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 thiserror = "2"
 anyhow = "1"
 
 [features]
-# "ocr"  — richiede leptonica + pdfium installati sul sistema.
+# "ocr"  — requires leptonica + pdfium installed on the system.
 #           cargo build --features ocr
 ocr = ["leptess", "pdfium-render", "image"]
 
-# "cuda" — abilita GPU per Candle (bge-m3 in VRAM). NO cuDNN: usa cudarc+cuBLAS.
-#           Richiede CUDA Toolkit (nvcc + libcublas-dev). NON richiede cuDNN.
+# "cuda" — GPU for Candle (bge-m3 in VRAM). NO cuDNN: uses cudarc+cuBLAS.
+#           Requires the CUDA Toolkit (nvcc + libcublas-dev), NOT cuDNN.
 #           cargo build --features ocr,cuda
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
-
-# ---- Fase 2 — Pro (decommentare quando si avvia Fase 2) ----
-# notify = "6"             # folder-watcher (watchdog equivalente)
-# llm_json = "1"           # JSON repair per extraction worker
-
-# ---- Fase 6 — Hardening (NON nell'MVP) ----
-# utoipa = "5"
-# metrics = "0.24"
-# sentry = "0.34"
