@@ -121,9 +121,9 @@ mod eullm_args_tests {
         }
     }
 
-    /// Un flag sbagliato qui impedisce a eullm di avviarsi in produzione —
-    /// niente --fit (non esiste nella release pinnata v0.6.6, verificato dal
-    /// binario), --ctx-size deve essere il TOTALE (num_ctx * batch_size).
+    /// A wrong flag here stops eullm from starting in production: no --fit
+    /// (see the note on EullmSettings), and --ctx-size must be the TOTAL,
+    /// i.e. num_ctx * batch_size.
     #[test]
     fn default_single_slot_no_cache_override() {
         let args = eullm_args(&base_cfg());
@@ -159,22 +159,22 @@ mod eullm_args_tests {
             has_cix_p1_isa, HWCAP2_BF16, HWCAP2_I8MM, HWCAP2_SVE2, HWCAP_ASIMDDP, HWCAP_SVE,
         };
         let all = (HWCAP_ASIMDDP | HWCAP_SVE, HWCAP2_SVE2 | HWCAP2_I8MM | HWCAP2_BF16);
-        assert!(has_cix_p1_isa(all.0, all.1), "ISA completa deve abilitare il target cix");
+        assert!(has_cix_p1_isa(all.0, all.1), "the full ISA must enable the cix target");
 
-        // Togliendone UNA sola per volta il target non deve più comparire: il
-        // binario cix-p1 va in SIGILL se manca anche una sola estensione.
-        for (h, h2, mancante) in [
+        // Removing ONE at a time must make the target disappear: the cix-p1
+        // binary SIGILLs if even a single extension is absent.
+        for (h, h2, missing) in [
             (all.0 & !HWCAP_ASIMDDP, all.1, "dotprod"),
             (all.0 & !HWCAP_SVE, all.1, "sve"),
             (all.0, all.1 & !HWCAP2_SVE2, "sve2"),
             (all.0, all.1 & !HWCAP2_I8MM, "i8mm"),
             (all.0, all.1 & !HWCAP2_BF16, "bf16"),
         ] {
-            assert!(!has_cix_p1_isa(h, h2), "senza {mancante} il target cix non deve comparire");
+            assert!(!has_cix_p1_isa(h, h2), "without {missing} the cix target must not appear");
         }
 
-        // ARM64 generico (nessuna feature) e hwcap a zero — es. getauxval che
-        // non conosce la chiave — devono entrambi risultare negativi.
+        // A generic ARM64 (no features) and hwcaps of zero — e.g. getauxval
+        // not recognising the key — must both come back negative.
         assert!(!has_cix_p1_isa(0, 0));
     }
 
@@ -386,14 +386,14 @@ fn cix_p1_isa_available() -> bool {
     cix_isa::has_cix_p1_isa(hwcap, hwcap2)
 }
 
-/// Target supportati, ordinati dal più specifico al più generico.
-/// L'ordine è importante: `select_components` prende il PRIMO match per dest.
+/// Supported targets, ordered from most specific to most generic.
+/// Order matters: `select_components` takes the FIRST match per dest.
 ///
-/// Schema target:
-///   linux-x86_64-cuda   — Linux x86_64 con GPU NVIDIA (driver caricato)
+/// Target scheme:
+///   linux-x86_64-cuda   — Linux x86_64 with an NVIDIA GPU (driver loaded)
 ///   linux-x86_64        — Linux x86_64 CPU-only / fallback
-///   linux-aarch64-cuda  — Linux ARM64 con GPU NVIDIA (es. Orion + dGPU PCIe)
-///   linux-aarch64-cix   — Linux ARM64 con l'ISA Armv9.2 completa (CIX P1)
+///   linux-aarch64-cuda  — Linux ARM64 with an NVIDIA GPU (e.g. Orion + PCIe dGPU)
+///   linux-aarch64-cix   — Linux ARM64 with the full Armv9.2 ISA (CIX P1)
 ///   linux-aarch64       — Linux ARM64 CPU-only / fallback
 ///   darwin-arm64, darwin-x86_64, windows-x86_64, windows-arm64
 fn current_targets() -> Vec<&'static str> {
@@ -401,7 +401,7 @@ fn current_targets() -> Vec<&'static str> {
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        // CUDA: /dev/nvidia0 esiste se il driver NVIDIA è caricato
+        // CUDA: /dev/nvidia0 exists when the NVIDIA driver is loaded.
         if std::path::Path::new("/dev/nvidia0").exists() {
             t.push("linux-x86_64-cuda");
         }
@@ -409,17 +409,19 @@ fn current_targets() -> Vec<&'static str> {
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
-        // Stessa euristica di x86_64 — vale anche su ARM64+dGPU NVIDIA via
-        // PCIe (es. Radxa Orion O6 con GPU esterna), non solo Jetson/SoC.
+        // Same heuristic as x86_64 — it also holds for ARM64 with a discrete
+        // NVIDIA GPU over PCIe (e.g. a Radxa Orion O6 with an external card),
+        // not just for Jetson-style SoCs.
         if std::path::Path::new("/dev/nvidia0").exists() {
             t.push("linux-aarch64-cuda");
         }
-        // Fra -cuda e il generico: se c'è una GPU NVIDIA vince comunque quella,
-        // perché la build cix-p1 è CPU-only. Ha senso solo senza GPU — che è
-        // poi lo scenario in cui il guadagno misurato conta (vedi manifest).
+        // Between -cuda and the generic one: if an NVIDIA GPU is present that
+        // still wins, because the cix-p1 build is CPU-only. It only makes sense
+        // without a GPU — which is exactly the scenario where the measured gain
+        // matters (see the manifest).
         if cix_p1_isa_available() {
             tracing::info!(
-                "ISA Armv9.2 completa rilevata (sve2+bf16+i8mm+dotprod): abilito il target linux-aarch64-cix"
+                "full Armv9.2 ISA detected (sve2+bf16+i8mm+dotprod): enabling the linux-aarch64-cix target"
             );
             t.push("linux-aarch64-cix");
         }
@@ -437,17 +439,17 @@ fn current_targets() -> Vec<&'static str> {
     t
 }
 
-/// Seleziona i componenti da scaricare/verificare.
+/// Selects the components to download and verify.
 ///
-/// Regola: per ogni `dest`, vince il componente col target PIÙ SPECIFICO
-/// (primo in `targets`). I modelli (nessun target) vengono sempre inclusi.
-/// Questo garantisce che su una macchina CUDA si scarichi la variante CUDA
-/// e non anche quella CPU-only, anche se entrambe sono nel manifest.
+/// Rule: for each `dest`, the component with the MOST SPECIFIC target wins
+/// (the one earliest in `targets`). Models, which carry no target, are always
+/// included. This guarantees that a CUDA machine downloads the CUDA variant
+/// and not the CPU-only one as well, even though both are in the manifest.
 fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Component> {
     let mut selected: Vec<&'a Component> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // 1. Binari: in ordine di priorità (più specifico prima)
+    // 1. Binaries, in priority order (most specific first).
     for &tgt in targets {
         for comp in &manifest.component {
             if comp.target.as_deref() == Some(tgt) && seen.insert(comp.dest.clone()) {
@@ -455,7 +457,7 @@ fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Co
             }
         }
     }
-    // 2. Modelli (nessun target — universali)
+    // 2. Models (no target — universal).
     for comp in &manifest.component {
         if comp.target.is_none() && seen.insert(comp.dest.clone()) {
             selected.push(comp);
@@ -464,49 +466,49 @@ fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Co
     selected
 }
 
-// ── Risoluzione path ──────────────────────────────────────────────────────────
+// ── Path resolution ───────────────────────────────────────────────────────────
 
 fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
     PathBuf::from(dest.replace("{data}", &data_dir.display().to_string()))
 }
 
-// ── Guardia processi supervisionati ───────────────────────────────────────────
+// ── Supervised-process guard ──────────────────────────────────────────────────
 
-/// Tiene in vita i processi figli. Al drop: SIGKILL (kill_on_drop=true).
+/// Keeps the child processes alive. Dropping it SIGKILLs them (kill_on_drop).
 pub struct ProcessGuard {
     _children: Vec<tokio::process::Child>,
-    /// Se bootstrap ha avviato eullm, il path GGUF esatto usato per farlo.
-    /// eullm accetta un path GGUF diretto nel campo "model" di /api/generate
-    /// (vedi errore "Accepted formats: GGUF file path / ... / Registered
-    /// name") — usando lo STESSO path con cui è stato avviato non serve
-    /// nessuna registrazione (`eullm import-ollama`) né alcuno stato esterno
-    /// che possa andare perso. None se manage_subprocesses=false (eullm
-    /// esterno): in quel caso si usa Settings.eullm.model così com'è.
+    /// When the bootstrap started eullm, the exact GGUF path it used.
+    /// eullm accepts a direct GGUF path in the "model" field of /api/generate
+    /// (see its "Accepted formats: GGUF file path / ... / Registered name"
+    /// error) — reusing the SAME path it was started with means no
+    /// registration (`eullm import-ollama`) and no external state that could
+    /// get lost. None when manage_subprocesses=false (external eullm), in
+    /// which case Settings.eullm.model is used as-is.
     pub eullm_model_path: Option<std::path::PathBuf>,
 }
 
-// ── Costanti ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const DOWNLOAD_CONNECTIONS: usize = 8;
 
-/// Dimensione di ciascun pezzo scaricato via Range request — indipendente
-/// dal numero di connessioni concorrenti (vedi parallel_download). Pezzi
-/// piccoli e numerosi invece di uno enorme per connessione: su un link a
-/// banda irregolare (osservato con Starlink, dove il throughput per
-/// connessione varia molto nel tempo) un pezzo sfortunato che rallenta
-/// bloccava PRIMA l'intera connessione fino alla fine — con pezzi piccoli
-/// un worker libero prende subito il pezzo successivo in coda invece di
-/// restare fermo ad aspettare. Stesso principio di aria2c con -s più alto
-/// di -x. Confermato con aria2c contro lo stesso file (qwen3-14b, stesso
-/// URL del bootstrap): CN:8 reale, 16MiB/s — contro i ~3MB/s del nostro
-/// codice con 8 pezzi fissi da total/8 l'uno. Non era un limite di
-/// Starlink né del server: la granularità dei pezzi era il problema.
+/// Size of each piece fetched with a Range request — independent of the
+/// number of concurrent connections (see parallel_download). Many small
+/// pieces rather than one huge piece per connection: on a link with uneven
+/// bandwidth (observed on Starlink, where per-connection throughput varies a
+/// lot over time) one unlucky slow piece used to stall its entire connection
+/// until the end. With small pieces a free worker immediately picks the next
+/// piece off the queue instead of sitting idle. Same principle as aria2c with
+/// -s set higher than -x. Confirmed with aria2c against the same file
+/// (qwen3-14b, the same URL the bootstrap uses): a real CN:8 at 16MiB/s,
+/// against roughly 3MB/s from our own code using 8 fixed pieces of total/8
+/// each. It was neither a Starlink nor a server limit: piece granularity was
+/// the problem.
 const PIECE_SIZE_BYTES: u64 = 16 * 1024 * 1024; // 16 MB
 
-/// Numero di connessioni concorrenti per il download di ogni componente
-/// (worker che processano la coda di pezzi da PIECE_SIZE_BYTES, vedi
-/// sopra). Default 8. I3K_DOWNLOAD_CONNECTIONS permette di cambiarlo senza
-/// ricompilare, per reti con caratteristiche molto diverse dal solito.
+/// Number of concurrent connections used to download each component: workers
+/// draining the queue of PIECE_SIZE_BYTES pieces described above. Defaults to
+/// 8. I3K_DOWNLOAD_CONNECTIONS changes it without recompiling, for networks
+/// whose characteristics differ markedly from the usual.
 fn download_connections() -> usize {
     std::env::var("I3K_DOWNLOAD_CONNECTIONS")
         .ok()
@@ -522,21 +524,21 @@ const PROBE_TIMEOUT_SECS: u64 = 3;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Stato che attraversa le due fasi di boot — opaco a main.rs, serve solo a
-/// non ripetere manifest/target detection tra provision_and_start_qdrant e
-/// start_eullm.
+/// State carried across the two boot phases — opaque to main.rs, it exists
+/// only to avoid redoing manifest loading and target detection between
+/// provision_and_start_qdrant and start_eullm.
 pub struct Phase1 {
     manifest: Manifest,
     data_dir: std::path::PathBuf,
 }
 
-/// Fase 1: scarica/verifica tutti i componenti selezionati (eullm incluso —
-/// solo il file, non lo avvia), poi avvia qdrant e attende /healthz. NON
-/// avvia eullm: vedi start_eullm, chiamata separatamente così main.rs può
-/// caricare l'embedding PRIMA quando settings.eullm.fit=true — --fit di
-/// eullm legge la VRAM libera con cudaMemGetInfo al proprio avvio, quindi
-/// deve vedere la VRAM già ridotta dall'embedding per offloadare i layer di
-/// conseguenza (vedi audit Fase 1, punto 5a, e l'ordine di avvio in main.rs).
+/// Phase 1: download and verify every selected component (eullm included —
+/// the file only, it is not started), then start qdrant and wait for
+/// /healthz. It deliberately does NOT start eullm: see start_eullm, called
+/// separately so main.rs can load the embedding model FIRST. eullm reads free
+/// VRAM with cudaMemGetInfo when it starts, so it must see the VRAM already
+/// reduced by the embedding model in order to size its layer offload
+/// accordingly (see the startup order in main.rs).
 pub async fn provision_and_start_qdrant(
     settings: &Settings,
 ) -> Result<(Phase1, Vec<tokio::process::Child>)> {
@@ -545,21 +547,21 @@ pub async fn provision_and_start_qdrant(
     let targets = current_targets();
     let selected = select_components(&manifest, &targets);
 
-    // Struttura directory
+    // Directory layout
     for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {
         tokio::fs::create_dir_all(data_dir.join(subdir))
             .await
             .with_context(|| format!("mkdir {}/{subdir}", data_dir.display()))?;
     }
 
-    // Pre-check spazio disco
+    // Disk-space pre-check
     check_disk_space(&selected, &data_dir)?;
 
-    // Scarica/verifica ogni componente selezionato. eullm ha un percorso
-    // dedicato — solo quando lo gestiamo noi (manage_subprocesses=true, senza
-    // sarebbe un binario che non arriviamo mai a spawnare): controlla anche un
-    // eventuale override locale (versione più recente approvata a runtime, vedi
-    // maybe_update_eullm) prima di ricadere sul pin del manifest.
+    // Download and verify each selected component. eullm takes a dedicated
+    // path, but only when we manage it (manage_subprocesses=true; otherwise it
+    // would be a binary we never get to spawn): it also checks for a local
+    // override — a newer version approved at runtime, see maybe_update_eullm —
+    // before falling back to the manifest pin.
     for comp in &selected {
         let dest = resolve_dest(&comp.dest, &data_dir);
         if comp.name == "eullm" && settings.data.manage_subprocesses {
@@ -574,19 +576,19 @@ pub async fn provision_and_start_qdrant(
     if settings.data.manage_subprocesses {
         let qdrant_url = &settings.qdrant.url;
         if probe_url(&format!("{qdrant_url}/healthz")).await {
-            tracing::info!("qdrant già in ascolto su {qdrant_url}");
+            tracing::info!("qdrant already listening on {qdrant_url}");
         } else {
             match find_component(&manifest, "qdrant", &data_dir, &targets) {
                 Some(bin) => {
                     let storage = data_dir.join("storage/qdrant");
                     children.push(spawn_qdrant(&bin, &storage)?);
-                    tracing::info!("qdrant avviato: {}", bin.display());
+                    tracing::info!("qdrant started: {}", bin.display());
                 }
-                None => tracing::warn!("qdrant non selezionato per questa piattaforma"),
+                None => tracing::warn!("qdrant not selected for this platform"),
             }
         }
     } else {
-        tracing::info!("manage_subprocesses=false — processi esterni attesi (qdrant)");
+        tracing::info!("manage_subprocesses=false — expecting an external qdrant");
     }
 
     wait_for_url(
@@ -599,9 +601,10 @@ pub async fn provision_and_start_qdrant(
     Ok((Phase1 { manifest, data_dir }, children))
 }
 
-/// Fase 2: avvia eullm (se manage_subprocesses=true) e attende /api/tags.
-/// `children` sono i processi già avviati in fase 1 (qdrant) — combinati con
-/// quello di eullm nel ProcessGuard finale, che tiene in vita ENTRAMBI.
+/// Phase 2: start eullm (when manage_subprocesses=true) and wait for
+/// /api/tags. `children` holds the processes already started in phase 1
+/// (qdrant); they are combined with eullm's in the final ProcessGuard, which
+/// keeps BOTH alive.
 pub async fn start_eullm(
     settings: &Settings,
     phase1: Phase1,
@@ -611,14 +614,15 @@ pub async fn start_eullm(
     let mut eullm_model_path: Option<std::path::PathBuf> = None;
 
     if settings.data.manage_subprocesses {
-        // eullm — decisione di avvio basata su presenza su disco, non sul target.
-        // Il target filtra i DOWNLOAD (non scaricare CUDA binary su CPU);
-        // ma se il file c'è, lo avviamo — il RAG dipende da eullm.
+        // eullm — the decision to start is based on presence on disk, not on
+        // the target. The target filters DOWNLOADS (do not fetch a CUDA binary
+        // on a CPU-only box); but if the file is there we start it, because
+        // the RAG depends on eullm.
         //
-        // EULLM__MODEL_OVERRIDE, se impostato, bypassa la ricerca del
-        // componente "qwen3-14b" pinnato nel manifest (vedi EullmSettings::
-        // model_override) — usato per puntare a un modello non pinnato,
-        // es. un riferimento hf.co che eullm risolve/scarica da sé.
+        // EULLM__MODEL_OVERRIDE, when set, bypasses the lookup of the
+        // "qwen3-14b" component pinned in the manifest (see
+        // EullmSettings::model_override) — used to point at an unpinned model,
+        // for instance an hf.co reference that eullm resolves and fetches.
         let gguf = settings
             .eullm
             .model_override
@@ -629,11 +633,11 @@ pub async fn start_eullm(
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
                 children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
-                tracing::info!("eullm avviato: {} {}", bin.display(), gguf.display());
+                tracing::info!("eullm started: {} {}", bin.display(), gguf.display());
                 eullm_model_path = Some(gguf);
             }
             _ => tracing::warn!(
-                "eullm o modello (qwen3-14b / EULLM__MODEL_OVERRIDE) non trovati in {} — RAG senza LLM",
+                "eullm or model (qwen3-14b / EULLM__MODEL_OVERRIDE) not found in {} — running RAG without an LLM",
                 data_dir.display()
             ),
         }
@@ -651,24 +655,24 @@ pub async fn start_eullm(
     Ok(ProcessGuard { _children: children, eullm_model_path })
 }
 
-// NOTA: qui c'era ensure_ready(), che avviava qdrant ed eullm insieme
-// lasciando l'embedding per ultimo. Rimossa con la pin 0.6.80: era il ramo
-// usato quando eullm non si adattava alla VRAM già occupata, e ora che il
-// sizing è sempre automatico quell'ordine farebbe partire eullm prima
-// dell'embedding, lasciandolo senza VRAM. L'unico percorso è la coppia
-// provision_and_start_qdrant + start_eullm, con load_embedding in mezzo
-// (main.rs).
+// NOTE: ensure_ready() used to live here, starting qdrant and eullm together
+// and leaving the embedding model for last. Removed with the 0.6.80 pin: it
+// was the branch used back when eullm did not adapt to already-occupied VRAM,
+// and now that sizing is always automatic that order would start eullm before
+// the embedding model and leave the latter with no VRAM. The only path is the
+// provision_and_start_qdrant + start_eullm pair, with load_embedding in
+// between (main.rs).
 
-// ── Componente: verifica / download atomico ───────────────────────────────────
+// ── Component: verification / atomic download ─────────────────────────────────
 
 async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
     if dest.exists() {
         if verify_component(comp, dest).await? {
             let ver = comp.version.as_deref().map(|v| format!(" ({v})")).unwrap_or_default();
-            tracing::info!("{}{ver}: presente e verificato", comp.name);
+            tracing::info!("{}{ver}: present and verified", comp.name);
             return Ok(());
         }
-        tracing::warn!("{}: verifica sha256 fallita, ri-scarico", comp.name);
+        tracing::warn!("{}: sha256 verification failed, downloading again", comp.name);
         tokio::fs::remove_file(dest).await.ok();
         remove_stamp(dest).await;
     }
@@ -677,7 +681,7 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    // Download atomico: .partial → verifica sha256 → rename → stamp
+    // Atomic download: .partial → verify sha256 → rename → stamp
     let partial = dest.with_extension("partial");
     tokio::fs::remove_file(&partial).await.ok();
 
@@ -695,28 +699,28 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
             .with_context(|| format!("chmod +x {}", dest.display()))?;
     }
 
-    tracing::info!("{}: installato in {}", comp.name, dest.display());
+    tracing::info!("{}: installed at {}", comp.name, dest.display());
     Ok(())
 }
 
-/// Caso semplice (nessun archive_member): verifica sha256 del file scaricato
-/// così com'è e lo sposta in `dest`.
+/// The simple case (no archive_member): verify the sha256 of the downloaded
+/// file as-is and move it into `dest`.
 async fn verify_and_place(comp: &Component, partial: &Path, dest: &Path) -> Result<()> {
     let expected = comp.sha256.clone();
     let p = partial.to_owned();
     let name = comp.name.clone();
     let got = tokio::task::spawn_blocking(move || {
-        tracing::info!("{name}: verifica sha256 post-download…");
+        tracing::info!("{name}: verifying sha256 after download…");
         sha256_file(&p)
     })
     .await
     .context("spawn_blocking sha256")?
-    .context("sha256 calcolo")?;
+    .context("computing sha256")?;
 
     if got != expected {
         tokio::fs::remove_file(partial).await.ok();
         bail!(
-            "{}: sha256 errato dopo download\n  atteso:  {}\n  trovato: {}",
+            "{}: wrong sha256 after download\n  expected: {}\n  got:      {}",
             comp.name,
             expected,
             got
@@ -729,12 +733,12 @@ async fn verify_and_place(comp: &Component, partial: &Path, dest: &Path) -> Resu
     Ok(())
 }
 
-/// Caso archive_member: estrae `member` dall'archivio .tar.gz scaricato
-/// (`partial`), verifica il sha256 del file ESTRATTO (comp.sha256 si
-/// riferisce a quello, non all'archivio), lo sposta in `dest`, poi scarta
-/// l'archivio. Così lo stamp-file fast-path resta invariato: hash-a sempre
-/// `dest` e lo confronta con comp.sha256, comportamento identico per
-/// componenti semplici ed estratti da archivio.
+/// The archive_member case: extract `member` from the downloaded .tar.gz
+/// (`partial`), verify the sha256 of the EXTRACTED file (comp.sha256 refers to
+/// that, not to the archive), move it into `dest`, then discard the archive.
+/// This keeps the stamp-file fast path unchanged: it always hashes `dest` and
+/// compares against comp.sha256, behaving identically for plain components and
+/// for ones extracted from an archive.
 async fn extract_and_verify_member(
     comp: &Component,
     partial: &Path,
@@ -748,22 +752,22 @@ async fn extract_and_verify_member(
     let extracted_path = extracted.clone();
     let name = comp.name.clone();
     tokio::task::spawn_blocking(move || {
-        tracing::info!("{name}: estrazione {member_owned} dall'archivio…");
+        tracing::info!("{name}: extracting {member_owned} from the archive…");
         extract_tar_gz_member(&archive_path, &member_owned, &extracted_path)
     })
     .await
-    .context("spawn_blocking estrazione")??;
+    .context("spawn_blocking extraction")??;
 
     let expected = comp.sha256.clone();
     let ep = extracted.clone();
     let name2 = comp.name.clone();
     let got = tokio::task::spawn_blocking(move || {
-        tracing::info!("{name2}: verifica sha256 del file estratto…");
+        tracing::info!("{name2}: verifying sha256 of the extracted file…");
         sha256_file(&ep)
     })
     .await
     .context("spawn_blocking sha256")?
-    .context("sha256 calcolo")?;
+    .context("computing sha256")?;
 
     tokio::fs::remove_file(partial).await.ok(); // archivio non più necessario
 
@@ -801,16 +805,16 @@ fn extract_tar_gz_member(archive_path: &Path, member: &str, out_path: &Path) -> 
             return Ok(());
         }
     }
-    bail!("membro '{member}' non trovato nell'archivio {}", archive_path.display())
+    bail!("member '{member}' not found in archive {}", archive_path.display())
 }
 
-/// Verifica un componente già presente su disco.
+/// Verifies a component already present on disk.
 ///
-/// Fast path: se esiste lo stamp `{dest}.sha2` con il digest atteso → ok.
-/// Slow path: ricalcola sha256 (può richiedere decine di secondi su file grandi).
-///            Se ok → scrive lo stamp per i prossimi avvii.
+/// Fast path: a `{dest}.sha2` stamp holding the expected digest → done.
+/// Slow path: recompute the sha256, which can take tens of seconds on large
+///            files. On success the stamp is written for subsequent starts.
 async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
-    // Fast path: stamp file
+    // Fast path: stamp file.
     let stamp_path = stamp_path(dest);
     if stamp_path.exists() {
         if let Ok(stamped) = tokio::fs::read_to_string(&stamp_path).await {
@@ -820,12 +824,12 @@ async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
         }
     }
 
-    // Slow path: calcola sha256
+    // Slow path: compute the sha256.
     let expected = comp.sha256.clone();
     let p = dest.to_owned();
     let name = comp.name.clone();
     let got = tokio::task::spawn_blocking(move || {
-        tracing::info!("{name}: verifica sha256 (prima verifica, può richiedere tempo)…");
+        tracing::info!("{name}: verifying sha256 (first check, this can take a while)…");
         sha256_file(&p)
     })
     .await
@@ -837,7 +841,7 @@ async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
         Ok(true)
     } else {
         tracing::warn!(
-            "{}: sha256 mismatch — atteso {} trovato {}",
+            "{}: sha256 mismatch — expected {} got {}",
             comp.name,
             &expected[..8],
             &got[..8]
@@ -877,42 +881,39 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-// ── eullm: controllo versione remota + override locale ─────────────────────────
+// ── eullm: remote version check + local override ──────────────────────────────
 //
-// eullm si auto-aggiorna spesso (fix indipendenti — è per questo
-// che resta un processo separato e non viene compilato nel binario). Il pin in
-// manifest.toml (version + sha256) resta la base di partenza affidabile e
-// git-tracked, ma su richiesta esplicita dell'utente ad ogni riavvio si
-// controlla se GitHub ha una release più recente e — SOLO se lo stdin è un
-// terminale, per non bloccare mai un avvio non presidiato (systemd/Docker) —
-// si chiede interattivamente se scaricarla.
+// eullm ships fixes often and independently, which is precisely why it stays a
+// separate process rather than being compiled into this binary. The pin in
+// manifest.toml (version + sha256) remains the reliable, git-tracked starting
+// point, but on every restart we check whether GitHub has a newer release and
+// — ONLY when stdin is a terminal, so an unattended start under systemd or
+// Docker is never blocked — ask interactively whether to fetch it.
 //
-// Una versione scaricata così non ha uno sha256 pre-verificato nel manifest:
-// la fiducia è nell'approvazione esplicita dell'utente a quel momento, non in
-// un hash pinnato in anticipo — è una differenza reale rispetto a tutti gli
-// altri componenti di questo file, e va sempre loggata in chiaro.
+// A version obtained that way has no sha256 pre-verified in the manifest: the
+// trust comes from the user's explicit approval at that moment, not from a
+// hash pinned in advance. That is a real difference from every other component
+// in this file, and it must always be logged plainly.
 //
-// Persistenza: {data}/bin/eullm.override.json (locale, NON git-tracked) —
-// ricorda la versione approvata (per non riscaricarla ad ogni riavvio) e
-// l'ultima versione rifiutata (per non richiederla di nuovo finché non ne
-// esce una ancora più recente).
+// Persistence: {data}/bin/eullm.override.json (local, deliberately not tracked
+// in git) remembers the approved version, so it is not re-downloaded on every
+// restart, and the last rejected version, so it is not offered again until an
+// even newer one appears.
 
 const EULLM_RELEASES_API: &str = "https://api.github.com/repos/eullm/eullm/releases/latest";
 const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
 
-/// Sottostringa che identifica l'asset eullm per la nostra piattaforma nel nome
-/// file della release GitHub (es. "eullm-linux-x64-cuda-12.8" → hint
-/// "linux-x64-cuda"). Derivata dal `target` del Component GIÀ selezionato per
-/// questa macchina (current_targets() → select_components(), vedi
-/// provision_and_start_qdrant) — non una euristica separata da tenere
-/// sincronizzata a mano.
+/// The exact file name of the eullm asset for our platform in a GitHub
+/// release. Derived from the `target` of the Component ALREADY selected for
+/// this machine (current_targets() → select_components(), see
+/// provision_and_start_qdrant), rather than a separate heuristic that would
+/// have to be kept in sync by hand.
 ///
-/// Bug reale che questa funzione sostituisce: prima era una const hardcoded
-/// a "linux-x64-cuda" indipendentemente dalla piattaforma — su ARM64 (Radxa
-/// Orion O6) il controllo aggiornamenti trovava comunque l'asset x86_64 e lo
-/// scaricava, causando "Exec format error" all'avvio di eullm. None = target
-/// senza asset eullm noto → skip del controllo (mai un default silenzioso
-/// sbagliato).
+/// The real bug this function replaced: it used to be a const hardcoded to
+/// "linux-x64-cuda" regardless of platform, so on ARM64 (a Radxa Orion O6) the
+/// update check still found the x86_64 asset and downloaded it, producing
+/// "Exec format error" when eullm started. None means a target with no known
+/// eullm asset, and the check is skipped — never a silently wrong default.
 fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
     match target {
         Some("linux-x86_64-cuda") => Some("eullm-linux-x64-cuda-12.8"),
@@ -962,9 +963,9 @@ async fn save_eullm_override(data_dir: &Path, ov: &EullmOverride) {
     }
 }
 
-/// "0.6.6" / "v0.6.6" / "EuLLM-v0.6.6" → (0,6,6). None se il formato non torna
-/// (es. GitHub cambia schema di tag) — trattato come "skip check", mai come
-/// errore fatale.
+/// "0.6.6" / "v0.6.6" / "EuLLM-v0.6.6" → (0,6,6). None when the format does
+/// not match — for instance if GitHub changes its tag scheme — which is
+/// treated as "skip the check", never as a fatal error.
 fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
     let s = s.strip_prefix("EuLLM-v").or_else(|| s.strip_prefix('v')).unwrap_or(s);
     let mut parts = s.split('.');
@@ -989,17 +990,18 @@ async fn fetch_latest_eullm_release() -> Result<GhRelease> {
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .context("richiesta GitHub releases eullm")?;
+        .context("requesting eullm releases from GitHub")?;
     if !resp.status().is_success() {
         bail!("GitHub API {} — {}", resp.status(), EULLM_RELEASES_API);
     }
-    resp.json::<GhRelease>().await.context("parse risposta GitHub releases")
+    resp.json::<GhRelease>().await.context("parsing the GitHub releases response")
 }
 
-/// Sceglie quale Component usare per provisionare eullm: l'override locale
-/// se presente e ancora più recente del pin del manifest, altrimenti il pin.
-/// Se il pin ha nel frattempo raggiunto/superato l'override (es. abbiamo
-/// aggiornato manifest.toml), l'override è considerato superato e scartato.
+/// Picks which Component to provision eullm from: the local override when it
+/// exists and is still newer than the manifest pin, otherwise the pin itself.
+/// If the pin has caught up with or overtaken the override in the meantime —
+/// because manifest.toml was updated — the override is considered obsolete
+/// and discarded.
 async fn effective_eullm_component(pinned: &Component, data_dir: &Path) -> Component {
     let mut ov = load_eullm_override(data_dir).await;
 
@@ -1011,7 +1013,7 @@ async fn effective_eullm_component(pinned: &Component, data_dir: &Path) -> Compo
     };
     if override_is_stale {
         tracing::info!(
-            "eullm: il pin del manifest ha raggiunto/superato l'override locale, torno al pin"
+            "eullm: the manifest pin has caught up with the local override, falling back to the pin"
         );
         ov = EullmOverride::default();
         save_eullm_override(data_dir, &ov).await;
@@ -1028,9 +1030,9 @@ async fn effective_eullm_component(pinned: &Component, data_dir: &Path) -> Compo
     }
 }
 
-/// Provisiona eullm: usa l'override locale se valido, altrimenti il pin del
-/// manifest (comportamento identico a ensure_component per ogni altro
-/// componente) — poi controlla se esiste una versione ancora più recente.
+/// Provisions eullm: use the local override when valid, otherwise the
+/// manifest pin — behaving exactly like ensure_component does for every other
+/// component — then check whether an even newer version exists.
 async fn ensure_eullm_component(pinned: &Component, dest: &Path, data_dir: &Path) -> Result<()> {
     let effective = effective_eullm_component(pinned, data_dir).await;
     ensure_component(&effective, dest).await?;
@@ -1038,12 +1040,12 @@ async fn ensure_eullm_component(pinned: &Component, dest: &Path, data_dir: &Path
     Ok(())
 }
 
-/// Controlla se GitHub ha una release eullm più recente di quella attualmente
-/// effettiva (override locale se presente, altrimenti il pin) e, se sì,
-/// chiede interattivamente — SOLO se stdin è un terminale — se scaricarla.
-/// Non fatale in nessun caso: rete irraggiungibile, parsing fallito o nessun
-/// asset compatibile vengono solo loggati; l'avvio prosegue sempre con la
-/// versione già presente.
+/// Checks whether GitHub has an eullm release newer than the one currently in
+/// effect — the local override if present, otherwise the pin — and if so asks
+/// interactively whether to download it, ONLY when stdin is a terminal.
+/// Never fatal: an unreachable network, a failed parse or the absence of a
+/// compatible asset are merely logged, and startup always continues with the
+/// version already installed.
 async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     let mut ov = load_eullm_override(data_dir).await;
     let current_version =
@@ -1052,7 +1054,7 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     let release = match fetch_latest_eullm_release().await {
         Ok(r) => r,
         Err(e) => {
-            tracing::info!(error = ?e, "controllo versione eullm saltato (GitHub non raggiungibile)");
+            tracing::info!(error = ?e, "eullm version check skipped (GitHub unreachable)");
             return;
         }
     };
@@ -1060,22 +1062,22 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     let (Some(latest), Some(current)) =
         (parse_semver(&release.tag_name), parse_semver(&current_version))
     else {
-        tracing::warn!(tag = %release.tag_name, installed = %current_version, "formato versione eullm inatteso, skip controllo aggiornamenti");
+        tracing::warn!(tag = %release.tag_name, installed = %current_version, "unexpected eullm version format, skipping the update check");
         return;
     };
     if latest <= current {
-        tracing::info!(installed = %current_version, "eullm già alla versione più recente disponibile");
+        tracing::info!(installed = %current_version, "eullm is already at the latest available version");
         return;
     }
     let latest_str = format!("{}.{}.{}", latest.0, latest.1, latest.2);
 
     if ov.declined_version.as_deref() == Some(latest_str.as_str()) {
-        tracing::info!(latest = %latest_str, "nuova versione eullm già rifiutata in precedenza, non richiedo di nuovo");
+        tracing::info!(latest = %latest_str, "this eullm version was declined before, not asking again");
         return;
     }
 
     let Some(hint) = eullm_asset_hint(pinned.target.as_deref()) else {
-        tracing::warn!(target = ?pinned.target, "eullm: piattaforma senza asset di aggiornamento noto, skip controllo versione");
+        tracing::warn!(target = ?pinned.target, "eullm: no known update asset for this platform, skipping the version check");
         return;
     };
     // Uguaglianza, NON contains: i nomi asset di eullm sono l'uno prefisso
