@@ -1,30 +1,27 @@
-//! Bootstrap: scarica, verifica (SHA256) e avvia i componenti (manifest.toml).
+//! Bootstrap: downloads, verifies (SHA256) and starts the components listed in
+//! manifest.toml.
 //!
-//! Manifest (embedded):
-//!  - `[[component]]` con kind="model" (universale) o kind="binary" (per-target).
-//!  - dest contiene il placeholder "{data}" → risolto a runtime con data_dir.
-//!  - sha256 verificato su OGNI download. Per file già presenti: stamp file
-//!    ({dest}.sha2) — evita di ricalcolare sha256 di file da GB a ogni avvio.
+//! Manifest (embedded at compile time):
+//!  - `[[component]]` with kind="model" (universal) or kind="binary" (per target).
+//!  - `dest` carries a "{data}" placeholder, resolved at runtime against data_dir.
+//!  - sha256 is verified on EVERY download. For files already present a stamp
+//!    file ({dest}.sha2) avoids re-hashing multi-gigabyte files on each start.
 //!
-//! Target detection (compile-time):
-//!  - linux-x86_64:       qdrant (sempre su Linux x86_64)
-//!  - linux-x86_64-cuda:  eullm  (solo con --features cuda)
-//!
-//! Flusso:
-//!  1. Carica manifest + rileva target.
-//!  2. Crea struttura directory in data_dir.
-//!  3. Pre-check disco = somma size dei componenti mancanti.
-//!  4. Scarica/verifica ogni componente selezionato. Per eullm (solo se
-//!     manage_subprocesses=true): controlla anche un override locale
-//!     ({data}/bin/eullm.override.json, NON git-tracked — vedi sezione
-//!     "eullm: controllo versione remota") e, ad ogni riavvio, se GitHub ha
-//!     una release più recente — se sì e stdin è un terminale, chiede se
-//!     scaricarla. Mai bloccante: rete irraggiungibile o avvio non
-//!     interattivo (systemd/Docker) → skip silenzioso, si resta sulla
-//!     versione già presente.
-//!  5. Se manage_subprocesses=true: avvia qdrant + eullm (kill_on_drop).
-//!  6. Attende /healthz (qdrant) e /api/tags (eullm).
-//!  7. Ritorna ProcessGuard — al drop i figli ricevono SIGKILL.
+//! Flow:
+//!  1. Load the manifest and detect the target.
+//!  2. Create the directory layout under data_dir.
+//!  3. Disk pre-check = sum of the sizes of the missing components.
+//!  4. Download and verify each selected component. For eullm, and only when
+//!     manage_subprocesses=true, also check a local override
+//!     ({data}/bin/eullm.override.json, deliberately not tracked in git — see
+//!     the "eullm: remote version check" section) and, on every restart,
+//!     whether GitHub has a newer release. If it does and stdin is a terminal,
+//!     ask whether to fetch it. Never blocking: an unreachable network or a
+//!     non-interactive start (systemd, Docker) is skipped silently and we stay
+//!     on the version already installed.
+//!  5. When manage_subprocesses=true, start qdrant and eullm (kill_on_drop).
+//!  6. Wait for /healthz (qdrant) and /api/tags (eullm).
+//!  7. Return a ProcessGuard — dropping it SIGKILLs the children.
 
 use anyhow::{bail, Context, Result};
 use futures_util::{stream, TryStreamExt};
@@ -51,20 +48,20 @@ struct Component {
     version: Option<String>,
     #[allow(dead_code)]
     kind: String,
-    /// Solo per i binari. None = modello (scaricato sempre).
+    /// Binaries only. None means a model, which is always downloaded.
     #[serde(default)]
     target: Option<String>,
     url: String,
     sha256: String,
     size: u64,
-    /// Percorso con placeholder "{data}" (risolto a runtime).
+    /// Path carrying the "{data}" placeholder, resolved at runtime.
     dest: String,
     exec: bool,
-    /// Se presente: `url` punta a un archivio .tar.gz, questo è il path
-    /// INTERNO del file da estrarre e scrivere in `dest`. sha256/size si
-    /// riferiscono al file ESTRATTO (non all'archivio) — la verifica avviene
-    /// dopo l'estrazione, così lo stamp-file fast-path (che hash-a `dest`)
-    /// funziona invariato per entrambi i casi.
+    /// When present, `url` points at a .tar.gz archive and this is the path
+    /// INSIDE it of the file to extract into `dest`. sha256 and size refer to
+    /// the EXTRACTED file, not the archive: verification happens after
+    /// extraction, so the stamp-file fast path (which hashes `dest`) works
+    /// unchanged in both cases.
     #[serde(default)]
     archive_member: Option<String>,
 }
@@ -75,7 +72,7 @@ struct Manifest {
 }
 
 fn load_manifest() -> Result<Manifest> {
-    toml::from_str(MANIFEST_STR).context("manifest.toml non valido — bug di compilazione")
+    toml::from_str(MANIFEST_STR).context("invalid manifest.toml — this is a build-time bug")
 }
 
 #[cfg(test)]
@@ -84,20 +81,20 @@ mod manifest_tests {
 
     #[test]
     fn manifest_toml_parses_and_has_sane_fields() {
-        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        let manifest = load_manifest().expect("manifest.toml must parse");
         assert!(!manifest.component.is_empty());
         for comp in &manifest.component {
-            assert_eq!(comp.sha256.len(), 64, "{}: sha256 non è a 64 caratteri hex", comp.name);
-            assert!(comp.dest.contains("{data}"), "{}: dest senza placeholder {{data}}", comp.name);
-            assert!(comp.url.starts_with("https://"), "{}: url non https", comp.name);
+            assert_eq!(comp.sha256.len(), 64, "{}: sha256 is not 64 hex chars", comp.name);
+            assert!(comp.dest.contains("{data}"), "{}: dest lacks the {{data}} placeholder", comp.name);
+            assert!(comp.url.starts_with("https://"), "{}: url is not https", comp.name);
         }
         for name in ["tessdata-ita", "tessdata-eng"] {
             let comp = manifest
                 .component
                 .iter()
                 .find(|c| c.name == name)
-                .unwrap_or_else(|| panic!("componente {name} mancante dal manifest"));
-            assert!(comp.target.is_none(), "{name}: deve essere universale (nessun target)");
+                .unwrap_or_else(|| panic!("component {name} missing from the manifest"));
+            assert!(comp.target.is_none(), "{name}: must be universal (no target)");
             assert!(comp.dest.ends_with(".traineddata"));
         }
     }
@@ -183,17 +180,17 @@ mod eullm_args_tests {
 
     #[test]
     fn asset_hint_is_exact_not_prefix() {
-        // I nomi asset di eullm sono l'uno prefisso dell'altro: con un match
-        // per sottostringa, il target aarch64 generico poteva agganciare la
-        // build cix-p1 (SIGILL) o quella cuda. L'hint deve essere il nome
-        // COMPLETO e il confronto per uguaglianza.
-        let generico = eullm_asset_hint(Some("linux-aarch64")).unwrap();
-        for altro in ["eullm-linux-arm64-cix-p1", "eullm-linux-arm64-cuda-12.8"] {
-            assert_ne!(generico, altro);
+        // eullm's asset names are prefixes of one another: with a substring
+        // match, the generic aarch64 target could latch onto the cix-p1 build
+        // (SIGILL) or the cuda one. The hint must be the COMPLETE name and the
+        // comparison must be equality.
+        let generic = eullm_asset_hint(Some("linux-aarch64")).unwrap();
+        for other in ["eullm-linux-arm64-cix-p1", "eullm-linux-arm64-cuda-12.8"] {
+            assert_ne!(generic, other);
             assert!(
-                altro.starts_with(generico),
-                "il caso pericoloso è proprio che {altro} inizi con {generico}: \
-                 se questa assunzione cade, rivedere il match in maybe_update_eullm"
+                other.starts_with(generic),
+                "the dangerous case is precisely that {other} starts with {generic}: \
+                 if that stops holding, revisit the match in maybe_update_eullm"
             );
         }
         assert_eq!(eullm_asset_hint(Some("linux-aarch64-cix")), Some("eullm-linux-arm64-cix-p1"));
@@ -201,10 +198,10 @@ mod eullm_args_tests {
 
     #[test]
     fn fit_flag_never_passed() {
-        // Dalla pin 0.6.80 --fit non si passa mai: il sizing è automatico a
-        // prescindere e il flag servirebbe solo alla conferma interattiva, che
-        // richiede stdin E stdout TTY — spawn_eullm mette stdin su null.
-        // Nessuna combinazione di config deve farlo ricomparire.
+        // From the 0.6.80 pin onward --fit is never passed: sizing happens
+        // regardless, and the flag would only drive the interactive
+        // confirmation, which needs stdin AND stdout to be TTYs — spawn_eullm
+        // sets stdin to null. No config combination may bring it back.
         for cfg in [base_cfg(), {
             let mut c = base_cfg();
             c.cache_type_k = Some("q8_0".into());
@@ -225,7 +222,7 @@ mod eullm_args_tests {
         let mut cfg = base_cfg();
         cfg.n_cpu_moe = Some(24);
         let args = eullm_args(&cfg);
-        let pos = args.iter().position(|a| a == "--n-cpu-moe").expect("--n-cpu-moe assente");
+        let pos = args.iter().position(|a| a == "--n-cpu-moe").expect("--n-cpu-moe missing");
         assert_eq!(args[pos + 1], "24");
     }
 }
@@ -234,19 +231,19 @@ mod eullm_args_tests {
 mod archive_extraction_tests {
     use super::*;
 
-    /// Verifica end-to-end reale (non solo che compili): estrae davvero
-    /// lib/libpdfium.so da un archivio .tar.gz ufficiale pdfium-binaries e
-    /// conferma che il file estratto combacia byte-per-byte con lo sha256
-    /// pinnato in manifest.toml per il target linux-x86_64.
+    /// A real end-to-end check, not just that it compiles: actually extracts
+    /// lib/libpdfium.so from an official pdfium-binaries .tar.gz and confirms
+    /// the extracted file matches, byte for byte, the sha256 pinned in
+    /// manifest.toml for the linux-x86_64 target.
     ///
-    /// Richiede (solo in locale, non in CI):
-    ///   PDFIUM_ARCHIVE_FOR_TEST=/path/a/pdfium-linux-x64.tgz
-    ///   (scaricato da github.com/bblanchon/pdfium-binaries, tag chromium/7920)
-    /// Skip gracioso se non impostata.
+    /// Requires (locally only, not in CI):
+    ///   PDFIUM_ARCHIVE_FOR_TEST=/path/to/pdfium-linux-x64.tgz
+    ///   (downloaded from github.com/bblanchon/pdfium-binaries, tag chromium/7920)
+    /// Skipped gracefully when unset.
     #[test]
     fn extract_tar_gz_member_matches_manifest_pdfium_entry() {
         let Ok(archive) = std::env::var("PDFIUM_ARCHIVE_FOR_TEST") else {
-            eprintln!("PDFIUM_ARCHIVE_FOR_TEST non impostata — skip (vedi doc del test)");
+            eprintln!("PDFIUM_ARCHIVE_FOR_TEST unset — skipping (see the test docs)");
             return;
         };
 
@@ -254,21 +251,21 @@ mod archive_extraction_tests {
         let _ = std::fs::remove_file(&out);
 
         extract_tar_gz_member(Path::new(&archive), "lib/libpdfium.so", &out)
-            .expect("estrazione deve riuscire");
+            .expect("extraction must succeed");
 
-        let got = sha256_file(&out).expect("sha256 del file estratto");
+        let got = sha256_file(&out).expect("sha256 of the extracted file");
         let _ = std::fs::remove_file(&out);
 
-        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        let manifest = load_manifest().expect("manifest.toml must parse");
         let comp = manifest
             .component
             .iter()
             .find(|c| c.name == "pdfium" && c.target.as_deref() == Some("linux-x86_64"))
-            .expect("componente pdfium linux-x86_64 mancante dal manifest");
+            .expect("pdfium linux-x86_64 component missing from the manifest");
 
         assert_eq!(
             got, comp.sha256,
-            "il file estratto non combacia col sha256 pinnato in manifest.toml"
+            "the extracted file does not match the sha256 pinned in manifest.toml"
         );
         assert_eq!(comp.archive_member.as_deref(), Some("lib/libpdfium.so"));
     }
@@ -291,47 +288,47 @@ mod eullm_update_tests {
         assert_eq!(parse_semver(""), None);
         assert_eq!(parse_semver("nightly"), None);
         assert_eq!(parse_semver("EuLLM-v0.6"), None);
-        assert_eq!(parse_semver("EuLLM-v0.6.6-rc1"), None); // "6-rc1" non parsa come u32
+        assert_eq!(parse_semver("EuLLM-v0.6.6-rc1"), None); // "6-rc1" does not parse as u32
     }
 
-    /// La causa diretta del bug che questa feature avrebbe potuto introdurre
-    /// se il confronto fosse stato per stringa invece che numerico: "0.6.9"
-    /// vince su "0.6.10" lessicograficamente ('9' > '1'), ma non è la
-    /// versione più recente. Il confronto DEVE essere sulla tupla numerica.
+    /// Guards the bug this feature would have introduced had the comparison
+    /// been done on strings rather than numbers: "0.6.9" beats "0.6.10"
+    /// lexicographically ('9' > '1'), yet it is not the newer version. The
+    /// comparison MUST be on the numeric tuple.
     #[test]
     fn version_tuple_compares_numerically_not_lexicographically() {
         let v9 = parse_semver("0.6.9").unwrap();
         let v10 = parse_semver("0.6.10").unwrap();
-        assert!(v10 > v9, "0.6.10 deve essere considerata più recente di 0.6.9");
+        assert!(v10 > v9, "0.6.10 must be treated as newer than 0.6.9");
     }
 
     #[test]
     fn asset_hint_matches_every_pinned_eullm_target() {
-        // Verifica OGNI componente eullm nel manifest, non solo il primo
-        // trovato — debolezza del test precedente che NON ha intercettato il
-        // bug reale (hint hardcoded su x86_64 mentre il manifest aveva già un
-        // secondo target aarch64-cuda pinnato: su ARM64 scaricava l'asset
-        // x86_64 sbagliato, "Exec format error" sull'Orion). Per ogni target
-        // pinnato, eullm_asset_hint deve produrre un hint riconosciuto E
-        // quell'hint deve combaciare col nome file dell'URL pinnato PER
-        // QUEL target specifico.
-        let manifest = load_manifest().expect("manifest.toml deve fare parse");
+        // Checks EVERY eullm component in the manifest, not just the first
+        // one found — the weakness of the previous test, which did NOT catch
+        // the real bug: the hint was hardcoded to x86_64 while the manifest
+        // already had a second aarch64-cuda target pinned, so on ARM64 it
+        // downloaded the wrong x86_64 asset ("Exec format error" on the
+        // Orion). For every pinned target, eullm_asset_hint must produce a
+        // recognised hint AND that hint must match the file name of the URL
+        // pinned FOR THAT SPECIFIC target.
+        let manifest = load_manifest().expect("manifest.toml must parse");
         let eullm_components: Vec<_> =
             manifest.component.iter().filter(|c| c.name == "eullm").collect();
-        assert!(!eullm_components.is_empty(), "nessun componente eullm nel manifest");
+        assert!(!eullm_components.is_empty(), "no eullm component in the manifest");
 
         for comp in eullm_components {
             let asset_name = comp.url.rsplit('/').next().unwrap_or("");
             let hint = eullm_asset_hint(comp.target.as_deref()).unwrap_or_else(|| {
                 panic!(
-                    "eullm_asset_hint non riconosce il target {:?} (asset pinnato: {asset_name:?}) \
-                     — estendila di pari passo quando si aggiunge un nuovo target eullm al manifest",
+                    "eullm_asset_hint does not recognise target {:?} (pinned asset: {asset_name:?}) \
+                     — extend it whenever a new eullm target is added to the manifest",
                     comp.target
                 )
             });
             assert!(
                 asset_name.contains(hint),
-                "target {:?}: hint {hint:?} non combacia con l'asset pinnato {asset_name:?}",
+                "target {:?}: hint {hint:?} does not match pinned asset {asset_name:?}",
                 comp.target
             );
         }
@@ -340,36 +337,36 @@ mod eullm_update_tests {
 
 // ── Target detection (runtime) ────────────────────────────────────────────────
 
-// ── Rilevamento ISA per il target linux-aarch64-cix ───────────────────────────
+// ── ISA detection for the linux-aarch64-cix target ────────────────────────────
 
-// Compilato solo dove serve davvero (ARM64 Linux) e sotto test: altrove
-// sarebbe codice morto, e il compilatore lo segnalerebbe giustamente.
+// Compiled only where it is actually needed (ARM64 Linux) and under test:
+// anywhere else it would be dead code, and the compiler would rightly say so.
 #[cfg(any(all(target_os = "linux", target_arch = "aarch64"), test))]
 mod cix_isa {
-    // Bit hwcap aarch64 dalla ABI del kernel Linux
-    // (arch/arm64/include/uapi/asm/hwcap.h). Sono ABI stabile: nuove feature
-    // aggiungono bit, non rinumerano quelli esistenti.
+    // aarch64 hwcap bits from the Linux kernel ABI
+    // (arch/arm64/include/uapi/asm/hwcap.h). This is stable ABI: new features
+    // add bits, they do not renumber existing ones.
     pub const HWCAP_ASIMDDP: u64 = 1 << 20; // dotprod
     pub const HWCAP_SVE: u64 = 1 << 22;
     pub const HWCAP2_SVE2: u64 = 1 << 1;
     pub const HWCAP2_I8MM: u64 = 1 << 13;
     pub const HWCAP2_BF16: u64 = 1 << 14;
 
-    /// La CPU espone TUTTE le estensioni per cui è compilata la build cix-p1?
-///
-/// La build eullm `linux-arm64-cix-p1` è prodotta con
-/// `-march=armv9.2-a+sve2+bf16+i8mm+dotprod` (job build-arm-cix-p1 in
-/// release-engine.yml di eullm) e va in **SIGILL** su qualunque ARM64 privo
-/// anche di una sola di quelle estensioni — è il motivo per cui upstream la
-/// tiene come artefatto separato dalla arm64 generica.
-///
-/// Testiamo quindi le ESTENSIONI, non il nome del SoC: è la precondizione
-/// reale perché il binario giri, vale anche su board Armv9.2 diverse
-/// dall'Orion, e non dipende da una stringa hardware da mantenere a mano.
-/// Richiede tutte e cinque: una sola mancante = niente target cix.
-///
-    /// Funzione pura sui due valori hwcap, così è testabile su qualsiasi
-    /// architettura (la lettura vera è in `cix_p1_isa_available`).
+    /// Does the CPU expose ALL the extensions the cix-p1 build is compiled for?
+    ///
+    /// The eullm `linux-arm64-cix-p1` build is produced with
+    /// `-march=armv9.2-a+sve2+bf16+i8mm+dotprod` (job build-arm-cix-p1 in
+    /// eullm's release-engine.yml) and **SIGILLs** on any ARM64 missing even
+    /// one of them — which is why upstream keeps it as an artifact separate
+    /// from the generic arm64 one.
+    ///
+    /// So we test the EXTENSIONS, not the SoC name: that is the real
+    /// precondition for the binary to run, it holds on Armv9.2 boards other
+    /// than the Orion, and it does not depend on a hardware string kept up to
+    /// date by hand. All five are required: one missing means no cix target.
+    ///
+    /// A pure function over the two hwcap values, so it is testable on any
+    /// architecture (the actual read lives in `cix_p1_isa_available`).
     pub fn has_cix_p1_isa(hwcap: u64, hwcap2: u64) -> bool {
         hwcap & HWCAP_ASIMDDP != 0
             && hwcap & HWCAP_SVE != 0
@@ -379,11 +376,11 @@ mod cix_isa {
     }
 }
 
-/// Legge gli hwcap dal kernel via `getauxval` e li passa a `has_cix_p1_isa`.
+/// Reads the hwcaps from the kernel via `getauxval` and feeds `has_cix_p1_isa`.
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 fn cix_p1_isa_available() -> bool {
-    // SAFETY: getauxval è una funzione glibc senza out-param; su chiave
-    // sconosciuta ritorna 0, che qui si traduce in "feature assenti".
+    // SAFETY: getauxval is a glibc function with no out-params; on an unknown
+    // key it returns 0, which here reads as "features absent".
     let (hwcap, hwcap2) =
         unsafe { (libc::getauxval(libc::AT_HWCAP), libc::getauxval(libc::AT_HWCAP2)) };
     cix_isa::has_cix_p1_isa(hwcap, hwcap2)

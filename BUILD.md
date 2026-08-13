@@ -2,7 +2,7 @@
 
 How to build `i3k-rag-engine` from source.
 
-Most users do not need this: the [releases](https://github.com/primoco/i3k-rag-engine/releases)
+Most users do not need this: the [releases](../../releases)
 ship self-contained tarballs for Linux x86_64 and arm64, with and without CUDA,
 each bundling the compiled frontend and everything the binary needs at runtime.
 Build from source if you want to modify the engine or target a platform we do
