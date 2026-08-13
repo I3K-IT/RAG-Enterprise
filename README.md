@@ -45,18 +45,17 @@ The `-cuda` builds require the NVIDIA driver to be installed: they will not
 start without it. If you have no GPU, take the CPU build.
 
 ```sh
-tar -xzf i3k-rag-engine-v0.1.25-linux-x86_64-cuda.tar.gz
-cd i3k-rag-engine-v0.1.25-linux-x86_64-cuda
+tar -xzf i3k-rag-engine-v0.1.26-linux-x86_64-cuda.tar.gz
+cd i3k-rag-engine-v0.1.26-linux-x86_64-cuda
 
 cat > .env <<'EOF'
 AUTH__JWT_SECRET=change-this-to-a-long-random-string
-EULLM__MODEL=qwen3-14b
 EOF
 
 ./i3k-rag-engine
 ```
 
-On first run it downloads roughly **17 GB** of components and verifies each one
+On first run it downloads roughly **12 GB** of components and verifies each one
 against a pinned sha256 — mostly the language and embedding models. Allow time
 for it. Every later start is immediate.
 
@@ -100,7 +99,7 @@ collection, so a restore brings back a consistent pair.
 | **Embeddings** | BAAI/bge-m3 through [Candle](https://github.com/huggingface/candle), in-process, GPU or CPU |
 | **Vector database** | [Qdrant](https://qdrant.tech), 1024-dim, cosine distance |
 | **Language model** | [eullm](https://github.com/eullm/eullm) as a separate process |
-| **Metadata** | SQLite through sqlx |
+| **Application database** | SQLite through sqlx — users, documents, conversations |
 | **OCR** | pdfium for rasterising, Tesseract through leptess |
 
 The embedding model is loaded before the language model on purpose: eullm sizes
@@ -110,11 +109,10 @@ the memory the embedding model has already taken.
 ## Configuration
 
 Settings come from the environment or a `.env` file, using `__` to separate
-levels. Only two have no default:
+levels. Exactly one has no default:
 
 ```sh
 AUTH__JWT_SECRET=…            # required — signs the session tokens
-EULLM__MODEL=qwen3-14b        # required
 ```
 
 Everything else is optional:
@@ -122,6 +120,9 @@ Everything else is optional:
 ```sh
 SERVER__PORT=8000
 AUTH__ADMIN_DEFAULT_PASSWORD=…   # otherwise a random one is generated and logged
+EULLM__MODEL=qwen3-14b           # only read when you run eullm yourself; when
+                                 # the engine starts it, the GGUF path from
+                                 # manifest.toml is used instead
 QDRANT__COLLECTION=rag_documents
 EMBEDDINGS__REQUIRE_GPU=false    # true = refuse to start without CUDA rather
                                  # than silently falling back to a much slower CPU

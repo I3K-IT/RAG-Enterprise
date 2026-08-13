@@ -62,17 +62,8 @@ size   = 9001753984
 dest   = "{data}/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
 exec   = false
 
-[[component]]
-name   = "qwen3-8b"
-kind   = "model"
-url    = "https://www.i3k.dev/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
-sha256 = "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4"
-size   = 5027784512
-dest   = "{data}/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf"
-exec   = false
-
-# OCR (leptess/Tesseract, lang="ita+eng" — MAPPA/CLAUDE.md). Fonte:
-# tessdata_best (LSTM, massima accuratezza — github.com/tesseract-ocr/tessdata_best).
+# OCR (leptess/Tesseract, lang="ita+eng"). Source: tessdata_best
+# (LSTM, highest accuracy — github.com/tesseract-ocr/tessdata_best).
 [[component]]
 name   = "tessdata-ita"
 kind   = "model"

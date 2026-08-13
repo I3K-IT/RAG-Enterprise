@@ -1,7 +1,7 @@
 //! User persistence (rag_users.db → `users` table).
 //!
-//! Schema mirrors MAPPA §4 exactly:
-//! id, username, email, password_hash, role, created_at, last_login, is_active
+//! Schema: id, username, email, password_hash, role, created_at,
+//! last_login, is_active
 
 use anyhow::Result;
 use chrono::Utc;

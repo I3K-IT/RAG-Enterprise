@@ -1,4 +1,4 @@
-//! Query endpoints (MAPPA §5):
+//! Query endpoints:
 //! POST /api/query         → { answer, sources }
 //! POST /api/query/stream  → SSE  { token } … { done, sources }
 //! GET  /api/chat/history  → { messages }
@@ -49,7 +49,7 @@ fn err(status: StatusCode, msg: impl std::fmt::Display) -> Response {
 fn ingestion_busy_response() -> Response {
     err(
         StatusCode::SERVICE_UNAVAILABLE,
-        "ingestione documento in corso: il modello è temporaneamente scaricato dalla VRAM, riprova tra qualche secondo",
+        "a document is being ingested: the model is temporarily unloaded from VRAM, try again in a few seconds",
     )
 }
 
@@ -142,7 +142,7 @@ async fn build_history_pairs(
     conversation_id: Option<&str>,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let msgs = if let Some(cid) = conversation_id {
-        // Prendi gli ultimi 6 messaggi di questa conversazione
+        // Take the last 6 messages of this conversation
         db::conversations::list_by_conv_for_history(&state.db, cid, user_id, 6).await?
     } else {
         db::conversations::list_by_user(&state.db, user_id, 6).await?

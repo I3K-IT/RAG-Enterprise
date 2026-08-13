@@ -30,7 +30,7 @@ QUESTION: {question}
 ANSWER:"#;
 
 /// Format the history section (last 3 exchanges, 800-char truncation per message).
-/// Mirrors Python `_format_history` from rag_pipeline_enterprise.py.
+/// Mirrors the history formatting of the Python implementation.
 pub fn format_history(history: &[(String, String)]) -> String {
     let last3: Vec<_> = history.iter().rev().take(3).collect();
     if last3.is_empty() {
@@ -74,8 +74,8 @@ mod tests {
 
     #[test]
     fn truncate_does_not_panic_on_multibyte_boundary() {
-        // 800 caratteri accentati = 1600 byte: il vecchio slicing a byte
-        // `&s[..800]` cadeva a metà di 'à' → panic. Deve troncare pulito.
+        // 800 accented characters = 1600 bytes: the old byte slicing
+        // `&s[..800]` used to land mid-way through 'à' → panic. It must cut cleanly.
         let s: String = "à".repeat(1000);
         let out = truncate(&s, 800);
         assert_eq!(out.chars().count(), 800);
