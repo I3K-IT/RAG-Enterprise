@@ -1,18 +1,21 @@
 //! Embedding service: BAAI/bge-m3 via Candle (in-process, GPU/CPU).
 //!
-//! Parità con Python (embeddings_service.py):
+//! Parity with the Python implementation (embeddings_service.py):
 //! - SentenceTransformer("BAAI/bge-m3", normalize_embeddings=True)
-//! - Architettura: XLM-RoBERTa → weight keys prefissati con "roberta"
-//! - Pooling: CLS (indice 0 della sequenza)
-//! - L2-normalizzazione su query E documenti
-//! - GPU batch=4 (conservativo: 14b + bge-m3 ~11 GB su 16 GB), CPU batch=2
-//! - OOM CUDA → fallback CPU automatico sul batch
+//! - Architecture: XLM-RoBERTa → weight keys prefixed with "roberta"
+//! - Pooling: CLS (index 0 of the sequence)
+//! - L2 normalisation on queries AND documents
+//! - GPU batch=4 (conservative: a 14b model plus bge-m3 is ~11 GB of 16 GB),
+//!   CPU batch=2
+//! - CUDA OOM → automatic per-batch CPU fallback
 //!
-//! Device selection (vedi load()): la CPU può essere raggiunta per due strade
-//! ben distinte, e non vanno confuse — DeviceStatus le tiene separate:
-//!   - CpuByConfig: build senza feature "cuda", CPU è la scelta attesa.
-//!   - CpuFallback: CUDA richiesta ma fallita dopo i retry — degrado reale,
-//!     va sempre segnalato forte (log error! + esposto via GET /info).
+//! Device selection (see load()): the CPU can be reached by two quite distinct
+//! routes which must not be conflated, so DeviceStatus keeps them apart:
+//!   - CpuByConfig: built without the "cuda" feature, where CPU is the
+//!     expected choice.
+//!   - CpuFallback: CUDA was requested but failed after the retries. That is a
+//!     real degradation and must always be reported loudly (error! log, and
+//!     exposed through GET /info).
 
 use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
@@ -26,21 +29,21 @@ use tokenizers::Tokenizer;
 pub const EMBED_DIM: usize = 1024;
 const GPU_BATCH: usize = 4;
 const CPU_BATCH: usize = 2;
-/// Tentativi di init CUDA (device + caricamento pesi) prima di rassegnarsi alla CPU.
+/// CUDA init attempts (device plus weight loading) before settling for CPU.
 const CUDA_LOAD_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceStatus {
-    /// CUDA richiesta (feature "cuda" compilata) e riuscita.
+    /// CUDA was requested (the "cuda" feature is compiled in) and succeeded.
     Gpu,
-    /// CPU per scelta di build (feature "cuda" non compilata) — non è un fallback.
+    /// CPU by build choice (the "cuda" feature is not compiled in) — not a fallback.
     CpuByConfig,
-    /// CUDA richiesta ma fallita dopo CUDA_LOAD_ATTEMPTS tentativi — degrado reale.
+    /// CUDA requested but failed after CUDA_LOAD_ATTEMPTS attempts — a real degradation.
     CpuFallback,
-    /// CPU deliberatamente, tra una finestra di ingestione e l'altra
-    /// (EmbeddingsSettings::swap_during_ingestion=true) — non è un degrado:
-    /// la VRAM è riservata a eullm fuori dall'ingestione per design.
+    /// Deliberately on CPU between ingestion windows
+    /// (EmbeddingsSettings::swap_during_ingestion=true). Not a degradation:
+    /// outside ingestion the VRAM is reserved for eullm by design.
     CpuParked,
 }
 
@@ -53,21 +56,21 @@ pub struct EmbeddingService {
 }
 
 impl EmbeddingService {
-    /// Carica bge-m3. Se la feature "cuda" è compilata, tenta CUDA per
-    /// CUDA_LOAD_ATTEMPTS tentativi (backoff 1s poi 2s tra un tentativo e
-    /// l'altro) prima di ricadere su CPU. `require_gpu=true`
-    /// (EMBEDDINGS__REQUIRE_GPU) fa fallire l'avvio invece di degradare in
-    /// silenzio — un'ingestione a 17 minuti non deve mai passare inosservata.
+    /// Loads bge-m3. When the "cuda" feature is compiled in, it tries CUDA for
+    /// CUDA_LOAD_ATTEMPTS attempts (backing off 1s then 2s between them)
+    /// before falling back to CPU. `require_gpu=true`
+    /// (EMBEDDINGS__REQUIRE_GPU) makes startup fail rather than degrade
+    /// silently — an ingestion taking 17 minutes must never go unnoticed.
     pub fn load(model_id: &str, require_gpu: bool) -> Result<Self> {
         if !cfg!(feature = "cuda") {
             if require_gpu {
                 bail!(
-                    "EMBEDDINGS__REQUIRE_GPU=true ma il binario è compilato senza \
-                     --features cuda: nessun supporto GPU possibile per l'embedding. \
-                     Ricompila con --features cuda (o ocr,cuda)."
+                    "EMBEDDINGS__REQUIRE_GPU=true but this binary was built without \
+                     --features cuda: GPU embeddings are not possible. \
+                     Rebuild with --features cuda (or ocr,cuda)."
                 );
             }
-            tracing::info!(model_id, "embedding su CPU (build senza feature \"cuda\")");
+            tracing::info!(model_id, "embeddings on CPU (built without the \"cuda\" feature)");
             let mut svc = Self::load_on(model_id, &Device::Cpu)?;
             svc.device_status = DeviceStatus::CpuByConfig;
             return Ok(svc);
@@ -79,7 +82,7 @@ impl EmbeddingService {
             match outcome {
                 Ok(mut svc) => {
                     svc.device_status = DeviceStatus::Gpu;
-                    tracing::info!(model_id, attempt, "embedding model pronto su GPU (CUDA)");
+                    tracing::info!(model_id, attempt, "embedding model ready on GPU (CUDA)");
                     return Ok(svc);
                 }
                 Err(e) => {
@@ -87,7 +90,7 @@ impl EmbeddingService {
                         attempt,
                         max_attempts = CUDA_LOAD_ATTEMPTS,
                         error = ?e,
-                        "init CUDA per l'embedding fallito (tentativo {attempt}/{CUDA_LOAD_ATTEMPTS})"
+                        "CUDA init for embeddings failed (attempt {attempt}/{CUDA_LOAD_ATTEMPTS})"
                     );
                     last_err = Some(e);
                     if attempt < CUDA_LOAD_ATTEMPTS {
@@ -96,26 +99,26 @@ impl EmbeddingService {
                 }
             }
         }
-        let e = last_err.expect("almeno un tentativo eseguito nel loop sopra");
+        let e = last_err.expect("at least one attempt ran in the loop above");
 
         if require_gpu {
             return Err(e.context(
-                "EMBEDDINGS__REQUIRE_GPU=true: CUDA ha fallito dopo tutti i tentativi — \
-                 avvio interrotto invece di degradare su CPU",
+                "EMBEDDINGS__REQUIRE_GPU=true: CUDA failed after every attempt — \
+                 aborting startup rather than degrading to CPU",
             ));
         }
 
         tracing::error!(
             error = ?e,
             "\n================================================================\n\
-             EMBEDDING IN FALLBACK SU CPU — CUDA fallita dopo {CUDA_LOAD_ATTEMPTS} tentativi.\n\
-             L'ingestione documenti sarà MOLTO più lenta (minuti anziché secondi).\n\
-             Causa reale nel campo 'error' qui sopra (chain completa).\n\
-             Imposta EMBEDDINGS__REQUIRE_GPU=true per fallire subito invece di degradare.\n\
+             EMBEDDINGS FELL BACK TO CPU — CUDA failed after {CUDA_LOAD_ATTEMPTS} attempts.\n\
+             Document ingestion will be MUCH slower (minutes rather than seconds).\n\
+             The real cause is in the 'error' field above (full chain).\n\
+             Set EMBEDDINGS__REQUIRE_GPU=true to fail immediately instead of degrading.\n\
              ================================================================"
         );
         let mut svc = Self::load_on(model_id, &Device::Cpu)
-            .context("fallback CPU dopo fallimento CUDA")?;
+            .context("CPU fallback after CUDA failure")?;
         svc.device_status = DeviceStatus::CpuFallback;
         Ok(svc)
     }
@@ -126,7 +129,7 @@ impl EmbeddingService {
     }
     #[cfg(not(feature = "cuda"))]
     fn try_cuda_device(_ordinal: usize) -> Result<Device> {
-        unreachable!("chiamato solo quando la feature \"cuda\" è attiva")
+        unreachable!("only called when the \"cuda\" feature is enabled")
     }
 
     pub fn device_status(&self) -> DeviceStatus {
@@ -136,9 +139,9 @@ impl EmbeddingService {
     pub fn device_label(&self) -> &'static str {
         match self.device_status {
             DeviceStatus::Gpu => "gpu",
-            DeviceStatus::CpuByConfig => "cpu (build senza GPU)",
-            DeviceStatus::CpuFallback => "cpu (FALLBACK: CUDA fallita all'avvio, vedi log)",
-            DeviceStatus::CpuParked => "cpu (in attesa — VRAM riservata a eullm fuori ingestione)",
+            DeviceStatus::CpuByConfig => "cpu (built without GPU support)",
+            DeviceStatus::CpuFallback => "cpu (FALLBACK: CUDA failed at startup, see the log)",
+            DeviceStatus::CpuParked => "cpu (parked — VRAM reserved for eullm outside ingestion)",
         }
     }
 
@@ -146,22 +149,22 @@ impl EmbeddingService {
         &self.model_id
     }
 
-    /// Carica bge-m3 su CPU con status CpuParked — usato sia all'avvio
-    /// quando EMBEDDINGS__SWAP_DURING_INGESTION=true (la VRAM resta libera
-    /// per eullm finché non parte un'ingestione) sia per il rientro su CPU
-    /// a fine ingestione (vedi AppState::swap_embeddings_to_cpu).
+    /// Loads bge-m3 on CPU with CpuParked status. Used both at startup when
+    /// EMBEDDINGS__SWAP_DURING_INGESTION=true — the VRAM stays free for eullm
+    /// until an ingestion begins — and to move back to CPU once an ingestion
+    /// ends (see AppState::swap_embeddings_to_cpu).
     pub fn load_cpu_parked(model_id: &str) -> Result<Self> {
         let mut svc = Self::load_on(model_id, &Device::Cpu)?;
         svc.device_status = DeviceStatus::CpuParked;
         Ok(svc)
     }
 
-    /// Carica bge-m3 su GPU per la finestra di ingestione, dopo che eullm ha
-    /// liberato la VRAM con /api/unload — vedi
-    /// AppState::swap_embeddings_to_gpu. Richiede la feature "cuda"
-    /// compilata (stesso limite di load()) — garantito da
-    /// Settings::load(), che fallisce all'avvio se swap_during_ingestion è
-    /// attivo su una build senza CUDA.
+    /// Loads bge-m3 on the GPU for the ingestion window, after eullm has
+    /// released the VRAM through /api/unload — see
+    /// AppState::swap_embeddings_to_gpu. Requires the "cuda" feature to be
+    /// compiled in, the same constraint as load(), which Settings::load()
+    /// guarantees by failing at startup when swap_during_ingestion is enabled
+    /// on a build without CUDA.
     pub fn load_gpu_for_ingestion(model_id: &str) -> Result<Self> {
         let device = Self::try_cuda_device(0)?;
         let mut svc = Self::load_on(model_id, &device)?;
@@ -208,10 +211,10 @@ impl EmbeddingService {
         };
         let model = BertModel::load(vb, &config).context("BertModel::load")?;
 
-        tracing::info!(model_id, "embedding model pronto su {device:?}");
-        // device_status è un placeholder: il chiamante (load(), load_cpu_parked(),
-        // load_gpu_for_ingestion()) lo sovrascrive sempre subito dopo, in base a
-        // quale device/percorso ha effettivamente prodotto questo Self.
+        tracing::info!(model_id, "embedding model ready on {device:?}");
+        // device_status is a placeholder: the caller — load(), load_cpu_parked()
+        // or load_gpu_for_ingestion() — always overwrites it immediately after,
+        // according to which device and path actually produced this Self.
         Ok(Self {
             model,
             tokenizer,
@@ -227,7 +230,7 @@ impl EmbeddingService {
         Ok(batch.remove(0))
     }
 
-    /// Embedding batch, L2-normalizzato. Chunka automaticamente per batch_size.
+    /// Batch embedding, L2-normalised. Chunks automatically by batch size.
     pub fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let bs = if device_is_cuda(&self.device) { GPU_BATCH } else { CPU_BATCH };
         let mut out = Vec::with_capacity(texts.len());
@@ -250,7 +253,7 @@ impl EmbeddingService {
     }
 
     fn embed_batch_on(&self, texts: &[&str], device: &Device) -> Result<Vec<Vec<f32>>> {
-        // Tokenizzazione con padding al testo più lungo del batch
+        // Tokenise, padding to the longest text in the batch.
         let encodings = self
             .tokenizer
             .encode_batch(
@@ -261,11 +264,11 @@ impl EmbeddingService {
 
         let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
         if max_len == 0 {
-            bail!("tokenizzazione vuota");
+            bail!("empty tokenisation");
         }
         let n = texts.len();
 
-        // Padding a max_len e flatten per Tensor::from_vec
+        // Pad to max_len and flatten for Tensor::from_vec.
         let mut ids: Vec<u32> = Vec::with_capacity(n * max_len);
         let mut type_ids: Vec<u32> = Vec::with_capacity(n * max_len);
         let mut masks: Vec<u32> = Vec::with_capacity(n * max_len);
@@ -326,10 +329,10 @@ fn resolve_model_dir(dir: &Path) -> Result<(PathBuf, PathBuf, Vec<PathBuf>)> {
     let config = dir.join("config.json");
     let tokenizer = dir.join("tokenizer.json");
     if !config.exists() {
-        anyhow::bail!("config.json non trovato in {}", dir.display());
+        anyhow::bail!("config.json not found in {}", dir.display());
     }
     if !tokenizer.exists() {
-        anyhow::bail!("tokenizer.json non trovato in {}", dir.display());
+        anyhow::bail!("tokenizer.json not found in {}", dir.display());
     }
     let weights = collect_local_safetensors(dir)?;
     Ok((config, tokenizer, weights))
@@ -362,15 +365,17 @@ fn hf_cache_base() -> PathBuf {
     PathBuf::from(".")
 }
 
-/// Verifica che la directory contenga almeno un file safetensors di dimensione ragionevole.
-/// Scarta file spazzatura (es. download interrotti, 0-byte, 29-byte, ecc.).
+/// Checks that the directory holds at least one safetensors file of a
+/// plausible size, rejecting junk such as interrupted downloads (0-byte,
+/// 29-byte and the like).
 fn model_weights_valid(dir: &Path) -> bool {
-    const MIN_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — bge-m3 è ~2.3 GB
+    const MIN_BYTES: u64 = 10 * 1024 * 1024; // 10 MB — bge-m3 is around 2.3 GB
     let single = dir.join("model.safetensors");
     if single.exists() {
         return std::fs::metadata(&single).map(|m| m.len() >= MIN_BYTES).unwrap_or(false);
     }
-    // Sharded: basta che l'index.json esista e sia non-triviale (i shard vengono validati al mmap)
+    // Sharded: it is enough that index.json exists and is non-trivial; the
+    // shards themselves are validated when they are mmapped.
     let idx = dir.join("model.safetensors.index.json");
     std::fs::metadata(&idx).map(|m| m.len() > 200).unwrap_or(false)
 }
@@ -451,37 +456,36 @@ pub fn download_target_dir(model_id: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    // Entrambi i test sotto sono #[cfg(not(feature = "cuda"))] — con "cuda"
-    // attiva questo modulo è vuoto, l'import andrebbe gated allo stesso modo.
+    // Both tests below are #[cfg(not(feature = "cuda"))]: with "cuda" enabled
+    // this module is empty, so the import has to be gated the same way.
     #[cfg(not(feature = "cuda"))]
     use super::*;
 
-    // Solo per build SENZA feature "cuda" (il caso normale di questo sandbox):
-    // require_gpu=true deve fallire SUBITO, prima di toccare qualunque file
-    // modello — non deve mai degradare in silenzio su CPU (5a
-    // REGOLA ZERO — "onestà sullo stato"). Un model_id inesistente basta a
-    // dimostrare che l'errore arriva dal guard require_gpu e non da un
-    // successivo tentativo di caricamento pesi.
+    // For builds WITHOUT the "cuda" feature: require_gpu=true must fail
+    // IMMEDIATELY, before touching any model file, and must never degrade
+    // silently to CPU. A non-existent model_id is enough to show the error
+    // comes from the require_gpu guard rather than from a later attempt to
+    // load weights.
     #[cfg(not(feature = "cuda"))]
     #[test]
     fn require_gpu_fails_hard_without_cuda_feature() {
         let result = EmbeddingService::load("modello/che-non-esiste-di-sicuro", true);
         let Err(err) = result else {
-            panic!("deve fallire, non degradare su CPU");
+            panic!("must fail, not degrade to CPU");
         };
         let msg = format!("{err:#}");
         assert!(
             msg.contains("REQUIRE_GPU") && msg.contains("cuda"),
-            "messaggio d'errore non spiega la causa (REQUIRE_GPU + cuda): {msg}"
+            "the error message does not explain the cause (REQUIRE_GPU + cuda): {msg}"
         );
     }
 
-    // Senza require_gpu, la stessa build (niente feature "cuda") deve usare la
-    // CPU per scelta di build — non è un fallback, quindi l'unico modo di
-    // osservarlo da fuori load() è il fatto che NON fallisca per questo motivo
-    // (l'errore che riceve qui viene dal model_id inventato, non da un guard
-    // GPU) e che device_label/device_status lo marchino CpuByConfig, mai
-    // CpuFallback, quando il caricamento riesce.
+    // Without require_gpu, the same build (no "cuda" feature) must use the CPU
+    // by build choice. That is not a fallback, so the only way to observe it
+    // from outside load() is that it does NOT fail for this reason — the error
+    // it gets here comes from the made-up model_id, not from a GPU guard — and
+    // that device_label/device_status mark it CpuByConfig, never CpuFallback,
+    // when loading succeeds.
     #[cfg(not(feature = "cuda"))]
     #[test]
     fn cpu_by_config_is_not_reported_as_fallback_message() {
@@ -492,7 +496,7 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(
             !msg.contains("REQUIRE_GPU"),
-            "senza require_gpu l'errore non deve menzionare REQUIRE_GPU: {msg}"
+            "without require_gpu the error must not mention REQUIRE_GPU: {msg}"
         );
     }
 }
