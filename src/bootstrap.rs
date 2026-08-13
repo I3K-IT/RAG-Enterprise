@@ -769,12 +769,12 @@ async fn extract_and_verify_member(
     .context("spawn_blocking sha256")?
     .context("computing sha256")?;
 
-    tokio::fs::remove_file(partial).await.ok(); // archivio non più necessario
+    tokio::fs::remove_file(partial).await.ok(); // the archive is no longer needed
 
     if got != expected {
         tokio::fs::remove_file(&extracted).await.ok();
         bail!(
-            "{}: sha256 errato dopo estrazione\n  atteso:  {}\n  trovato: {}",
+            "{}: wrong sha256 after extraction\n  expected: {}\n  found:    {}",
             comp.name,
             expected,
             got
@@ -787,21 +787,21 @@ async fn extract_and_verify_member(
     Ok(())
 }
 
-/// Estrae un singolo file (`member`, path interno all'archivio) da un
-/// .tar.gz e lo scrive in `out_path`. Sincrona/bloccante: va chiamata dentro
-/// spawn_blocking.
+/// Extracts a single file (`member`, the path inside the archive) from a
+/// .tar.gz and writes it to `out_path`. Synchronous and blocking: call it
+/// inside spawn_blocking.
 fn extract_tar_gz_member(archive_path: &Path, member: &str, out_path: &Path) -> Result<()> {
     let file = std::fs::File::open(archive_path)
-        .with_context(|| format!("apertura archivio {}", archive_path.display()))?;
+        .with_context(|| format!("opening archive {}", archive_path.display()))?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
-    for entry in archive.entries().context("lettura entries tar")? {
-        let mut entry = entry.context("lettura entry tar")?;
+    for entry in archive.entries().context("reading tar entries")? {
+        let mut entry = entry.context("reading tar entry")?;
         let path = entry.path().context("path entry tar")?.into_owned();
         if path.as_path() == Path::new(member) {
             let mut out = std::fs::File::create(out_path)
-                .with_context(|| format!("creazione {}", out_path.display()))?;
-            std::io::copy(&mut entry, &mut out).context("estrazione file")?;
+                .with_context(|| format!("creating {}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out).context("extracting file")?;
             return Ok(());
         }
     }
@@ -1761,7 +1761,7 @@ async fn download_chunk(
                     timeout_s = CHUNK_ATTEMPT_TIMEOUT.as_secs(),
                     "piece too slow (timeout), retrying on a fresh connection"
                 );
-                last_err = Some(anyhow::anyhow!("timeout dopo {}s", CHUNK_ATTEMPT_TIMEOUT.as_secs()));
+                last_err = Some(anyhow::anyhow!("timed out after {}s", CHUNK_ATTEMPT_TIMEOUT.as_secs()));
             }
         }
         if attempt < CHUNK_MAX_ATTEMPTS {

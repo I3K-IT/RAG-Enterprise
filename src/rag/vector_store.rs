@@ -22,7 +22,9 @@ pub struct ChunkPayload {
     pub text: String,
     pub chunk_size: usize,
     pub document_type: String,
-    /// Extracted structured fields (metadata pipeline — Pro).
+    /// Free-form structured fields carried through untouched. Always None
+    /// here; the slot exists so the payload schema stays interchangeable with
+    /// producers that do populate it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_fields: Option<serde_json::Value>,
 }
@@ -34,7 +36,7 @@ pub struct SearchHit {
     pub payload: ChunkPayload,
 }
 
-/// Interfaccia verso il vector store.
+/// Interface to the vector store.
 #[async_trait]
 pub trait VectorStore: Send + Sync {
     /// Upserts embeddings with their payloads, in batches of 1000.

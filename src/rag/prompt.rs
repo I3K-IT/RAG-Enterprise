@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn truncate_does_not_panic_on_multibyte_boundary() {
-        // 800 caratteri accentati = 1600 byte: il vecchio slicing a byte
+        // 800 accented characters = 1600 bytes: the old byte slicing
         // `&s[..800]` used to land mid-way through 'à' → panic. It must cut cleanly.
         let s: String = "à".repeat(1000);
         let out = truncate(&s, 800);

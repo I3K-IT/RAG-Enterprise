@@ -203,7 +203,7 @@ impl EmbeddingService {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("tokenizer load: {e}"))?;
 
-        tracing::info!(model_id, "carico pesi embedding (~2.3 GB)…");
+        tracing::info!(model_id, "loading embedding weights (~2.3 GB)…");
         // bge-m3 = XLM-RoBERTa: weight keys prefissati con "roberta."
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&weight_files, DType::F32, device)
@@ -224,7 +224,7 @@ impl EmbeddingService {
         })
     }
 
-    /// Embedding di un singolo testo, L2-normalizzato. dim=1024.
+    /// Embeds a single text, L2-normalised. dim=1024.
     pub fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
         let mut batch = self.embed_batch(&[text])?;
         Ok(batch.remove(0))
@@ -410,7 +410,7 @@ fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
         }
     }
 
-    // 3. ~/.eullm/models/<basename>/ — dove bootstrap::ensure_embedding_model salva i pesi
+    // 3. ~/.eullm/models/<basename>/ — where bootstrap::ensure_embedding_model saves the weights
     let dl_dir = download_target_dir(model_id);
     if dl_dir.join("config.json").exists() && model_weights_valid(&dl_dir) {
         tracing::debug!(path = %dl_dir.display(), "trovato in direct-download dir");
@@ -442,7 +442,7 @@ fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Directory dove bootstrap salva i file del modello embedding.
-/// Usa I3K_DATA_DIR se impostato, altrimenti ~/.eullm (default storico).
+/// Uses I3K_DATA_DIR when set, otherwise ~/.eullm (the historical default).
 pub fn download_target_dir(model_id: &str) -> PathBuf {
     let basename = model_id.rsplit('/').next().unwrap_or(model_id);
     let root = std::env::var("I3K_DATA_DIR")

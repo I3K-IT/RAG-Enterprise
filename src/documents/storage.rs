@@ -87,7 +87,7 @@ mod tests {
             let p = s.path_for("id", hostile);
             assert!(
                 p.starts_with("/data/uploads/id"),
-                "path {p:?} è uscito dalla base per input {hostile:?}"
+                "path {p:?} escaped the base directory for input {hostile:?}"
             );
         }
     }

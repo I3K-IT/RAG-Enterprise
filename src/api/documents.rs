@@ -55,18 +55,19 @@ pub async fn upload(
     let unload_enabled = state.settings.eullm.unload_during_ingestion;
     let swap_enabled = state.settings.embeddings.swap_during_ingestion;
 
-    // Ordine: libera VRAM (eullm) PRIMA di occuparla (bge-m3) — e al
-    // termine, il rientro è speculare: bge-m3 lascia la VRAM PRIMA che
-    // eullm la riprenda, altrimenti il reload di eullm (--fit legge la
-    // VRAM libera in quel momento) la troverebbe ancora occupata.
+    // Order: free the VRAM (eullm) BEFORE taking it (bge-m3) — and on the
+    // way out the mirror image: bge-m3 leaves the VRAM BEFORE eullm reclaims
+    // it. eullm sizes its offload from the free VRAM it reads at load time,
+    // so reloading it while bge-m3 is still resident would size it against
+    // memory that is about to be released.
     if unload_enabled {
         if let Err(e) = state.eullm.unload().await {
-            tracing::error!(error = %e, "eullm: unload pre-ingestione fallito, procedo comunque (nessuna VRAM liberata)");
+            tracing::error!(error = %e, "eullm: unload before ingestion failed, continuing anyway (no VRAM freed)");
         }
     }
     if swap_enabled {
         if let Err(e) = swap_embeddings_blocking(&state, true).await {
-            tracing::error!(error = %e, "embedding: swap su GPU fallito, l'ingestione userà la CPU (più lenta)");
+            tracing::error!(error = %e, "embedding: swap to GPU failed, ingestion will use the CPU (much slower)");
         }
     }
 
@@ -74,7 +75,7 @@ pub async fn upload(
 
     if swap_enabled {
         if let Err(e) = swap_embeddings_blocking(&state, false).await {
-            tracing::error!(error = %e, "embedding: swap su CPU fallito — bge-m3 potrebbe essere ancora in VRAM, verifica manualmente");
+            tracing::error!(error = %e, "embedding: swap to CPU failed — bge-m3 may still be in VRAM, check manually");
         }
     }
     if unload_enabled {
@@ -86,9 +87,9 @@ pub async fn upload(
     response
 }
 
-/// Esegue lo swap del device dell'embedding (bloccante: mmap + copia pesi)
-/// fuori dall'executor async. `to_gpu=true` verso GPU (inizio ingestione),
-/// `false` verso CPU (fine ingestione) — vedi
+/// Swaps the embedding model's device off the async executor (it blocks:
+/// mmap plus a weight copy). `to_gpu=true` moves it to the GPU at the start
+/// of an ingestion, `false` back to the CPU at the end — see
 /// EmbeddingsSettings::swap_during_ingestion.
 async fn swap_embeddings_blocking(state: &AppState, to_gpu: bool) -> anyhow::Result<()> {
     let state = state.clone();
