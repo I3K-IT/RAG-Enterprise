@@ -1080,14 +1080,14 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
         tracing::warn!(target = ?pinned.target, "eullm: no known update asset for this platform, skipping the version check");
         return;
     };
-    // Uguaglianza, NON contains: i nomi asset di eullm sono l'uno prefisso
-    // dell'altro ("eullm-linux-arm64" è prefisso di "eullm-linux-arm64-cix-p1"
-    // e di "eullm-linux-arm64-cuda-12.8"). Con contains, una macchina ARM64
-    // generica poteva agganciare la build cix-p1 — compilata per Armv9.2, va
-    // in SIGILL su ARM64 privo di quelle estensioni — a seconda dell'ordine in
-    // cui l'API restituisce gli asset.
+    // Equality, NOT contains: eullm's asset names are prefixes of one another
+    // ("eullm-linux-arm64" is a prefix of both "eullm-linux-arm64-cix-p1" and
+    // "eullm-linux-arm64-cuda-12.8"). With contains, a generic ARM64 machine
+    // could latch onto the cix-p1 build — compiled for Armv9.2, it SIGILLs on
+    // any ARM64 lacking those extensions — depending on the order in which the
+    // API happens to return the assets.
     let Some(asset) = release.assets.iter().find(|a| a.name == hint) else {
-        tracing::warn!(latest = %latest_str, hint = %hint, "nuova versione eullm trovata ma nessun asset per questa piattaforma, skip");
+        tracing::warn!(latest = %latest_str, hint = %hint, "newer eullm release found but no asset for this platform, skipping");
         return;
     };
 
@@ -1095,23 +1095,23 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
         installed = %current_version,
         latest = %latest_str,
         release_notes = %release.html_url,
-        "eullm: nuova versione disponibile"
+        "eullm: a new version is available"
     );
 
     if !stdin_is_tty() {
         tracing::warn!(
-            "avvio non interattivo (nessun terminale su stdin) — non chiedo conferma, continuo \
-             con la versione {current_version}. Per aggiornare: avvia da un terminale, oppure \
-             elimina {} per far ripartire il controllo alla prossima occasione interattiva.",
+            "non-interactive start (no terminal on stdin) — not asking for confirmation, \
+             continuing with version {current_version}. To update, start from a terminal, or \
+             delete {} to make the check run again at the next interactive opportunity.",
             eullm_override_path(data_dir).display()
         );
         return;
     }
 
     eprintln!();
-    eprintln!("  eullm: nuova versione disponibile — installata: {current_version}, ultima: {latest_str}");
-    eprintln!("  Note di rilascio: {}", release.html_url);
-    eprint!("  Scaricare e usare la nuova versione ora? [s/N]: ");
+    eprintln!("  eullm: a new version is available — installed: {current_version}, latest: {latest_str}");
+    eprintln!("  Release notes: {}", release.html_url);
+    eprint!("  Download and use the new version now? [y/N]: ");
     {
         use std::io::Write;
         let _ = std::io::stderr().flush();
@@ -1119,19 +1119,21 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
 
     let mut answer = String::new();
     if std::io::stdin().read_line(&mut answer).is_err() {
-        tracing::warn!("lettura risposta da stdin fallita, continuo con la versione corrente");
+        tracing::warn!("could not read the answer from stdin, keeping the current version");
         return;
     }
-    let yes = matches!(answer.trim().to_lowercase().as_str(), "s" | "si" | "sì" | "y" | "yes");
+    // "s"/"si"/"sì" are still accepted so existing Italian-speaking operators
+    // are not caught out by the prompt changing language.
+    let yes = matches!(answer.trim().to_lowercase().as_str(), "y" | "yes" | "s" | "si" | "sì");
 
     if !yes {
-        tracing::info!(latest = %latest_str, "aggiornamento eullm rifiutato, resto sulla versione {current_version}");
+        tracing::info!(latest = %latest_str, "eullm update declined, staying on version {current_version}");
         ov.declined_version = Some(latest_str);
         save_eullm_override(data_dir, &ov).await;
         return;
     }
 
-    tracing::info!(url = %asset.browser_download_url, size = asset.size, "download eullm {latest_str}…");
+    tracing::info!(url = %asset.browser_download_url, size = asset.size, "downloading eullm {latest_str}…");
     let partial = dest.with_extension("partial");
     let _ = tokio::fs::remove_file(&partial).await;
 
@@ -1143,7 +1145,7 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     )
     .await
     {
-        tracing::warn!(error = ?e, "download eullm {latest_str} fallito, resto sulla versione corrente");
+        tracing::warn!(error = ?e, "downloading eullm {latest_str} failed, keeping the current version");
         let _ = tokio::fs::remove_file(&partial).await;
         return;
     }
@@ -1152,14 +1154,14 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     let sha256 = match tokio::task::spawn_blocking(move || sha256_file(&hash_target)).await {
         Ok(Ok(h)) => h,
         _ => {
-            tracing::warn!("sha256 post-download fallito, scarto il file scaricato");
+            tracing::warn!("post-download sha256 failed, discarding the downloaded file");
             let _ = tokio::fs::remove_file(&partial).await;
             return;
         }
     };
 
     if let Err(e) = tokio::fs::rename(&partial, dest).await {
-        tracing::warn!(error = ?e, "impossibile installare eullm {latest_str}");
+        tracing::warn!(error = ?e, "could not install eullm {latest_str}");
         return;
     }
     if pinned.exec {
@@ -1171,10 +1173,10 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     tracing::warn!(
         version = %latest_str,
         sha256 = %sha256,
-        "eullm aggiornato — ATTENZIONE: a differenza degli altri componenti, questa versione NON \
-         aveva uno sha256 pre-pinnato nel manifest: lo sha256 sopra è quello effettivamente \
-         scaricato ora, approvato da te a runtime, non verificato in anticipo. Annotalo se vuoi \
-         pinnarlo in manifest.toml in un prossimo aggiornamento del repo."
+        "eullm updated — CAREFUL: unlike every other component, this version had NO sha256 \
+         pinned in the manifest. The sha256 above is the one actually downloaded just now, \
+         approved by you at runtime rather than verified in advance. Note it down if you want \
+         to pin it in manifest.toml in a future update of the repository."
     );
 
     ov.installed_version = Some(latest_str);
@@ -1208,22 +1210,22 @@ fn check_disk_space(selected: &[&Component], data_dir: &Path) -> Result<()> {
     let free = free_space_bytes(data_dir);
 
     eprintln!();
-    eprintln!("  Primo avvio — download necessari:");
+    eprintln!("  First run — downloads required:");
     for item in &needed {
         eprintln!("    • {:<44}  {:>8}", item.label, fmt_bytes(item.size));
     }
     eprintln!("  ─────────────────────────────────────────────────────────────────");
     eprintln!(
-        "  Totale:  {:>8}   ·   Server: i3k.dev (Europa, IT)",
+        "  Total:   {:>8}   ·   Server: i3k.dev (Europe, IT)",
         fmt_bytes(total)
     );
 
     if free != u64::MAX {
-        eprintln!("  Spazio libero:  {}", fmt_bytes(free));
+        eprintln!("  Free space:     {}", fmt_bytes(free));
         if free < total {
             eprintln!();
             bail!(
-                "Spazio su disco insufficiente: {} liberi, {} necessari.",
+                "Not enough disk space: {} free, {} required.",
                 fmt_bytes(free),
                 fmt_bytes(total)
             );
@@ -1258,8 +1260,9 @@ fn free_space_bytes(path: &Path) -> u64 {
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
 
-/// Cerca per nome con priorità target (usato per decidere cosa avviare come qdrant).
-/// Itera i target dal più specifico: prende il primo match.
+/// Looks a component up by name, honouring target priority (used to decide
+/// which qdrant to start). Iterates targets from most specific and takes the
+/// first match.
 fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&str]) -> Option<PathBuf> {
     for &tgt in targets {
         if let Some(comp) = manifest.component.iter()
@@ -1271,21 +1274,21 @@ fn find_component(manifest: &Manifest, name: &str, data_dir: &Path, targets: &[&
     None
 }
 
-/// Cerca per nome senza filtro target (usato per decidere cosa AVVIARE).
-/// Il binario potrebbe essere già su disco anche se il target non combacia
-/// (es. scaricato in una sessione precedente, o trasferito manualmente).
+/// Looks a component up by name with no target filter (used to decide what to
+/// START). The binary may already be on disk even when the target does not
+/// match — downloaded in an earlier session, say, or copied over by hand.
 fn find_by_name(manifest: &Manifest, name: &str, data_dir: &Path) -> Option<PathBuf> {
     manifest
         .component
         .iter()
         .find(|c| c.name == name)
         .map(|c| resolve_dest(&c.dest, data_dir))
-        .filter(|p| p.exists()) // avvia solo se il file è effettivamente presente
+        .filter(|p| p.exists()) // only start it if the file is actually there
 }
 
-/// Termina eventuali istanze stantie identificate dal percorso del binario.
-/// Usata prima di spawn_eullm: garantisce che solo la nostra istanza (con il
-/// nostro modello) sia in ascolto. Best-effort: errori ignorati.
+/// Kills any stale instances identified by the binary's path. Used before
+/// spawn_eullm to guarantee that only our instance, with our model, is
+/// listening. Best-effort: errors are ignored.
 async fn kill_stale_process(bin: &Path) {
     let bin_str = bin.display().to_string();
     tracing::debug!("kill_stale_process: pkill -f {bin_str}");
@@ -1296,7 +1299,7 @@ async fn kill_stale_process(bin: &Path) {
         .stderr(std::process::Stdio::null())
         .status()
         .await;
-    // Breve attesa affinché la porta venga liberata dal kernel
+    // Brief pause so the kernel can release the port.
     tokio::time::sleep(Duration::from_millis(800)).await;
 }
 
@@ -1310,19 +1313,20 @@ fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()
-        .with_context(|| format!("avvio qdrant: {}", bin.display()))
+        .with_context(|| format!("starting qdrant: {}", bin.display()))
 }
 
-/// --ctx-size è il TOTALE eullm (llama.cpp-style), diviso tra i `batch_size`
-/// slot concorrenti — quindi num_ctx (contesto per connessione, quello che
-/// conta per far stare un prompt RAG) va moltiplicato per batch_size qui.
-/// --fit NON esiste nella release pinnata (v0.6.6, verificato dal binario:
-/// nessun auto-sizing) — senza --ctx-size/--batch-size espliciti eullm parte
-/// al suo default (4096 ctx, 1 slot), troppo piccolo per un prompt RAG con
-/// più di un paio di documenti indicizzati (causa nota di risposte vuote o
-/// troncate a metà frase).
-/// Pura e testabile: costruisce gli argomenti CLI (senza il model_path, che
-/// è un Path e complicherebbe i confronti nei test — aggiunto separatamente).
+/// --ctx-size is eullm's TOTAL context (llama.cpp style), divided across the
+/// `batch_size` concurrent slots — so num_ctx, the per-connection context that
+/// actually determines whether a RAG prompt fits, is multiplied by batch_size
+/// here. Without explicit --ctx-size/--batch-size, eullm starts at its own
+/// default of 4096 context and one slot, too small for a RAG prompt covering
+/// more than a couple of indexed documents, and a known cause of empty or
+/// mid-sentence answers.
+///
+/// Pure and testable: it builds the CLI arguments without model_path, which is
+/// a Path and would complicate comparisons in the tests, and is appended
+/// separately.
 fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
     let ctx_size_total = cfg.num_ctx * cfg.batch_size;
     let mut args = vec![
@@ -1344,11 +1348,11 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
         args.push("--n-cpu-moe".to_owned());
         args.push(n.to_string());
     }
-    // --fit non viene più passato: dalla 0.6.80 il sizing è automatico a
-    // prescindere, e il flag serve solo a chiedere conferma su uno split
-    // parziale quando stdin E stdout sono entrambi TTY (fit.rs:851 nel
-    // sorgente eullm). spawn_eullm mette stdin su null, quindi la condizione
-    // è falsa per costruzione e il flag era un no-op.
+    // --fit is no longer passed: from 0.6.80 sizing happens automatically
+    // regardless, and the flag only asks for confirmation on a partial split
+    // when stdin AND stdout are both TTYs (fit.rs:851 in eullm's source).
+    // spawn_eullm sets stdin to null, so that condition is false by
+    // construction and the flag was a no-op.
     args
 }
 
@@ -1361,10 +1365,10 @@ fn spawn_eullm(bin: &Path, model_path: &Path, cfg: &EullmSettings) -> Result<tok
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()
-        .with_context(|| format!("avvio eullm: {}", bin.display()))
+        .with_context(|| format!("starting eullm: {}", bin.display()))
 }
 
-// ── Attesa API ────────────────────────────────────────────────────────────────
+// ── Waiting for the APIs ──────────────────────────────────────────────────────
 
 async fn probe_url(url: &str) -> bool {
     reqwest::Client::new()
@@ -1379,17 +1383,17 @@ async fn probe_url(url: &str) -> bool {
 async fn wait_for_url(url: &str, timeout_secs: u64, label: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut tick: u32 = 0;
-    tracing::info!("attendo {label} su {url} (max {timeout_secs}s)");
+    tracing::info!("waiting for {label} on {url} (up to {timeout_secs}s)");
     loop {
         if probe_url(url).await {
-            tracing::info!("{label} pronto");
+            tracing::info!("{label} ready");
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!("{label} non risponde dopo {timeout_secs}s — URL: {url}");
+            bail!("{label} is not responding after {timeout_secs}s — URL: {url}");
         }
         if tick > 0 && tick % 15 == 0 {
-            tracing::info!(elapsed_s = tick * 2, "ancora in attesa di {label}…");
+            tracing::info!(elapsed_s = tick * 2, "still waiting for {label}…");
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
         tick += 1;
@@ -1407,20 +1411,22 @@ struct EullmTagEntry {
     name: String,
 }
 
-/// Interroga /api/tags e ritorna il `name` del PRIMO modello in lista — è
-/// quello attivo (eullm non implementa /api/ps: "first model in the list
-/// is the active one", stesso comportamento documentato per rag-
-/// enterprise-pro). Serve perché per un riferimento hf.co (a differenza di
-/// un path GGUF locale) eullm normalizza il nome in un formato canonico
-/// DIVERSO da quello con cui è stato lanciato — osservato in produzione:
-/// lanciato con "hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M",
-/// /api/tags lo riporta come "qwen_qwen3.6-35b-a3b-gguf-q4_k_m", e SOLO
-/// quel nome canonico è accettato nel campo "model" di /api/generate — il
-/// riferimento hf.co originale dà 500 "Model ... not found" (i due punti
-/// vengono mangiati da una normalizzazione lato eullm pensata per i tag
-/// stile Ollama, che rompe la sintassi repo:quant di hf.co). None se la
-/// query fallisce o la lista è vuota: il chiamante ricade sul nome di
-/// lancio (vedi build_eullm_client in main.rs).
+/// Queries /api/tags and returns the `name` of the FIRST model in the list,
+/// which is the active one — eullm does not implement /api/ps, and "first
+/// model in the list is the active one" is its documented behaviour.
+///
+/// This is needed because for an hf.co reference, unlike a local GGUF path,
+/// eullm normalises the name into a canonical form DIFFERENT from the one it
+/// was launched with. Observed in production: started with
+/// "hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M", /api/tags reports it as
+/// "qwen_qwen3.6-35b-a3b-gguf-q4_k_m", and ONLY that canonical name is
+/// accepted in the "model" field of /api/generate. The original hf.co
+/// reference returns a 500 "Model ... not found", because the colon is eaten
+/// by an eullm-side normalisation meant for Ollama-style tags, which breaks
+/// hf.co's repo:quant syntax.
+///
+/// None when the query fails or the list is empty: the caller then falls back
+/// to the launch name (see build_eullm_client in main.rs).
 pub async fn fetch_active_model_name(eullm_url: &str) -> Option<String> {
     let resp = reqwest::Client::new()
         .get(format!("{eullm_url}/api/tags"))
@@ -1438,14 +1444,14 @@ mod eullm_tags_tests {
 
     #[test]
     fn parses_real_tags_response_first_model_is_active() {
-        // Fixture: risposta reale di /api/tags su Orion con Qwen3.6-35B-A3B
-        // caricato via riferimento hf.co (eullm v0.6.11) — il PRIMO modello
-        // in lista è quello attivo.
+        // Fixture: a real /api/tags response from the Orion with
+        // Qwen3.6-35B-A3B loaded through an hf.co reference — the FIRST model
+        // in the list is the active one.
         let json = r#"{"models":[
             {"details":{"family":"","format":"gguf","parameter_size":"","quantization_level":"Q4_K_M"},"digest":"","name":"qwen_qwen3.6-35b-a3b-gguf-q4_k_m","size":0},
             {"details":{"display_name":"Qwen3 0.6B Instruct","domain":"general","family":"qwen3","format":"gguf","parameter_size":"0.6B","quantization_level":"Q4_K_M","source_model":"unsloth/Qwen3-0.6B-GGUF"},"digest":"","name":"qwen-0.6b","size":500000000}
         ]}"#;
-        let parsed: EullmTagsResponse = serde_json::from_str(json).expect("deve fare parse");
+        let parsed: EullmTagsResponse = serde_json::from_str(json).expect("must parse");
         assert_eq!(parsed.models[0].name, "qwen_qwen3.6-35b-a3b-gguf-q4_k_m");
     }
 
@@ -1456,28 +1462,29 @@ mod eullm_tags_tests {
     }
 }
 
-// ── Download parallelo multi-chunk ────────────────────────────────────────────
+// ── Parallel multi-chunk download ─────────────────────────────────────────────
 
 async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize) -> Result<()> {
-    // http1_only: se il server negozia HTTP/2, reqwest multiplexerebbe le N
-    // richieste Range "concorrenti" sulla STESSA connessione TCP — niente
-    // aggregazione di banda reale, tutte condividono un'unica finestra di
-    // congestione, sostanzialmente la velocità di UNA connessione (esatto
-    // sintomo osservato: il nostro codice non supera mai ~3MB/s mentre
-    // aria2c, HTTP/1.1 con connessioni realmente separate per pezzo, sullo
-    // stesso file/server sostiene 15-16MB/s). Con HTTP/1.1 ogni richiesta
-    // concorrente apre la propria connessione, aggregando banda per davvero.
+    // http1_only: if the server negotiates HTTP/2, reqwest would multiplex the
+    // N "concurrent" Range requests over the SAME TCP connection — no real
+    // bandwidth aggregation, since they all share a single congestion window,
+    // giving essentially the throughput of ONE connection. That was exactly
+    // the symptom observed: our code never exceeded ~3MB/s while aria2c, over
+    // HTTP/1.1 with genuinely separate connections per piece, sustained
+    // 15-16MB/s against the same file and server. With HTTP/1.1 each
+    // concurrent request opens its own connection and bandwidth really does
+    // add up.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3600))
         .http1_only()
         .build()?;
 
-    // Probe con Range: bytes=0-0 (1 byte) invece di una GET piena: se il
-    // server risponde 206 il supporto Range è verificato per davvero (non
-    // solo dichiarato in accept-ranges, che alcuni server/proxy annunciano
-    // senza onorarlo — vedi il controllo 206 in fetch_chunk_once) e la size
-    // totale si legge da Content-Range: bytes 0-0/{total} nella stessa
-    // risposta, senza una richiesta separata.
+    // Probe with Range: bytes=0-0 (a single byte) instead of a full GET. If
+    // the server answers 206, Range support is genuinely confirmed rather than
+    // merely advertised through accept-ranges, which some servers and proxies
+    // announce without honouring (see the 206 check in fetch_chunk_once). The
+    // total size then comes from Content-Range: bytes 0-0/{total} in that same
+    // response, with no separate request.
     let probe = client
         .get(url)
         .header(reqwest::header::RANGE, "bytes=0-0")
@@ -1487,8 +1494,9 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     let probe_status = probe.status();
 
     if probe_status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-        // Range non valido su questo file (tipicamente 0 byte): richiesta
-        // pulita senza Range invece di trattarlo come errore fatale.
+        // Range is not valid for this file, typically because it is 0 bytes:
+        // fall back to a plain request without Range rather than treating it
+        // as a fatal error.
         drop(probe);
         let full = client.get(url).send().await.context("GET (fallback 416)")?;
         if !full.status().is_success() {
@@ -1520,7 +1528,7 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
     };
 
     if total == 0 || !accepts_ranges {
-        tracing::info!("{display_name}: download streaming (Range non supportato)");
+        tracing::info!("{display_name}: streaming download (Range not supported)");
         return download_streaming(probe, dest, display_name).await;
     }
     drop(probe);
@@ -1569,12 +1577,12 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
                 continue;
             }
             let pct = done as f64 / total as f64 * 100.0;
-            // Velocità nella finestra recente (~3s), non la media cumulativa
-            // dall'inizio: quella risponde troppo lentamente a rallentamenti
-            // o riprese reali (es. micro-stalli da handoff satellitari su
-            // Starlink) — un numero basso all'inizio del download resta
-            // "congelato" per minuti anche se la velocità reale è già
-            // tornata alta, mostrando un dato fuorviante.
+            // Speed over the recent window (~3s), not the cumulative average
+            // since the start: the latter reacts far too slowly to real
+            // slowdowns or recoveries, such as the micro-stalls caused by
+            // Starlink satellite handovers. A low figure early in a download
+            // stays "frozen" for minutes even once the real speed has
+            // recovered, showing a misleading number.
             let now = Instant::now();
             let window = now.duration_since(last_tick).as_secs_f64().max(0.001);
             let rate = done.saturating_sub(last_done) as f64 / window;
@@ -1607,10 +1615,10 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         }
     });
 
-    // n worker concorrenti pescano dalla coda di pezzi: un pezzo sfortunato
-    // che rallenta non blocca un intero worker fino alla fine come con un
-    // range enorme fisso — appena un worker libera lo slot, prende il
-    // pezzo successivo in coda (vedi commento su PIECE_SIZE_BYTES).
+    // n concurrent workers pull from the queue of pieces: one unlucky slow
+    // piece does not tie up a whole worker until the end, as a single huge
+    // fixed range would. As soon as a worker frees its slot it takes the next
+    // piece off the queue (see the comment on PIECE_SIZE_BYTES).
     stream::iter(pieces.into_iter().map(Ok::<(u64, u64), anyhow::Error>))
         .try_for_each_concurrent(n, |(cs, ce)| {
             let client = client.clone();
@@ -1707,14 +1715,14 @@ async fn download_streaming(
 const CHUNK_MAX_ATTEMPTS: u32 = 5;
 const CHUNK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Un pezzo (max PIECE_SIZE_BYTES) può capitare su una connessione che un
-/// micro-drop da handover satellitare (~ogni 15s su Starlink) degrada a
-/// metà scaricamento — senza retry, quella connessione resta lenta finché
-/// TCP non rifà da sola la slow-start. Qui invece: fino a 5 tentativi,
-/// ciascuno con un timeout di 120s, backoff 1s/2s/4s/8s tra un tentativo e
-/// l'altro — un tentativo scaduto/fallito si abbandona e il successivo
-/// riparte su una connessione NUOVA invece di aspettare che quella vecchia
-/// si riprenda. Stessi parametri usati da eullm per lo stesso problema.
+/// A piece (at most PIECE_SIZE_BYTES) can land on a connection that a
+/// micro-drop from a satellite handover — roughly every 15s on Starlink —
+/// degrades halfway through. Without retries that connection stays slow until
+/// TCP works its way back through slow-start on its own. Instead: up to 5
+/// attempts, each with a 120s timeout and 1s/2s/4s/8s backoff between them. A
+/// timed-out or failed attempt is abandoned and the next one restarts on a
+/// FRESH connection rather than waiting for the old one to recover. Same
+/// parameters eullm uses for the same problem.
 async fn download_chunk(
     client: reqwest::Client,
     url: String,
@@ -1727,9 +1735,10 @@ async fn download_chunk(
     for attempt in 1..=CHUNK_MAX_ATTEMPTS {
         match tokio::time::timeout(CHUNK_ATTEMPT_TIMEOUT, fetch_chunk_once(&client, &url, start, end, &downloaded)).await {
             Ok(Ok(buf)) => {
-                // I byte sono già stati aggiunti a downloaded in streaming da
-                // fetch_chunk_once (ProgressGuard, committato a tentativo
-                // riuscito) — qui resta solo la scrittura su disco.
+                // The bytes were already added to `downloaded` as they
+                // streamed in, by fetch_chunk_once (ProgressGuard, committed
+                // once the attempt succeeds) — all that is left here is the
+                // write to disk.
                 let f = Arc::clone(&file);
                 tokio::task::spawn_blocking(move || f.write_all_at(&buf, start))
                     .await
@@ -1741,7 +1750,7 @@ async fn download_chunk(
                 tracing::warn!(
                     attempt, max_attempts = CHUNK_MAX_ATTEMPTS, error = %e,
                     range = format!("bytes={start}-{end}"),
-                    "pezzo fallito, riprovo su connessione nuova"
+                    "piece failed, retrying on a fresh connection"
                 );
                 last_err = Some(e);
             }
@@ -1750,7 +1759,7 @@ async fn download_chunk(
                     attempt, max_attempts = CHUNK_MAX_ATTEMPTS,
                     range = format!("bytes={start}-{end}"),
                     timeout_s = CHUNK_ATTEMPT_TIMEOUT.as_secs(),
-                    "pezzo troppo lento (timeout), riprovo su connessione nuova"
+                    "piece too slow (timeout), retrying on a fresh connection"
                 );
                 last_err = Some(anyhow::anyhow!("timeout dopo {}s", CHUNK_ATTEMPT_TIMEOUT.as_secs()));
             }
@@ -1759,26 +1768,25 @@ async fn download_chunk(
             tokio::time::sleep(Duration::from_secs(1u64 << (attempt - 1))).await; // 1s,2s,4s,8s
         }
     }
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download pezzo fallito dopo {CHUNK_MAX_ATTEMPTS} tentativi")))
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("piece download failed after {CHUNK_MAX_ATTEMPTS} attempts")))
 }
 
-/// Contabilizza i byte di un tentativo su `downloaded` MAN MANO che
-/// arrivano dalla rete, non in un solo scatto da PIECE_SIZE_BYTES a fine
-/// pezzo — è quello scatto in blocco il motivo per cui il rate mostrato a
-/// video "oscillava" (5/11/16/21/27/32/37 MB/s): con tick del progress_task
-/// ogni 3s e un pezzo da 16MB completato ogni ~8s per worker, il contatore
-/// restava fermo per tick interi e poi saltava di N*16MB tutti insieme —
-/// N=1,2,3,4,5,6,7 pezzi completati nello stesso tick spiega ESATTAMENTE
-/// 5.3/10.7/16.0/21.3/26.7/32.0/37.3 MB/s, i valori osservati (vedi log
-/// reale del 2026-07-10). La velocità media era già corretta (~15MB/s), era
-/// solo la lettura istantanea a essere quantizzata.
+/// Accounts an attempt's bytes against `downloaded` AS THEY ARRIVE from the
+/// network, rather than in one PIECE_SIZE_BYTES jump when the piece finishes.
+/// That block jump was why the on-screen rate appeared to "oscillate" between
+/// 5/11/16/21/27/32/37 MB/s: with progress_task ticking every 3s and a 16MB
+/// piece completing roughly every 8s per worker, the counter sat still for
+/// whole ticks and then leapt by N*16MB at once. N = 1,2,3,4,5,6,7 pieces
+/// completing within the same tick explains EXACTLY the observed
+/// 5.3/10.7/16.0/21.3/26.7/32.0/37.3 MB/s. The average speed was already
+/// correct at around 15MB/s; only the instantaneous reading was quantised.
 ///
-/// Se il tentativo fallisce o viene abbandonato per timeout (drop della
-/// future da parte di tokio::time::timeout in download_chunk — nessun punto
-/// di ritorno esplicito da cui richiamare un rollback esplicito), il Drop di
-/// questa guardia sottrae esattamente quanto aggiunto da QUESTO tentativo:
-/// il contatore resta corretto anche quando un pezzo va ritentato, senza
-/// doppio conteggio. commit() disarma il rollback a tentativo riuscito.
+/// If the attempt fails or is abandoned on timeout — tokio::time::timeout in
+/// download_chunk drops the future, leaving no explicit return point from
+/// which to trigger a rollback — this guard's Drop subtracts exactly what
+/// THIS attempt added. The counter stays correct even when a piece has to be
+/// retried, with no double counting. commit() disarms the rollback once the
+/// attempt succeeds.
 struct ProgressGuard<'a> {
     counter: &'a AtomicU64,
     added: u64,
@@ -1829,17 +1837,17 @@ mod progress_guard_tests {
             guard.add(100);
             guard.add(50);
             assert_eq!(counter.load(Ordering::Relaxed), 1_150);
-            // guard esce dallo scope senza commit() — es. errore o timeout
+            // guard leaves scope without commit() — e.g. an error or timeout
         }
         assert_eq!(counter.load(Ordering::Relaxed), 1_000);
     }
 }
 
-/// Un solo tentativo: scarica il pezzo [start,end] in un buffer in RAM (max
-/// PIECE_SIZE_BYTES), contabilizzando i byte su `downloaded` in streaming
-/// via ProgressGuard man mano che arrivano (vedi sopra). La scrittura su
-/// disco resta responsabilità del chiamante, una volta sola, solo a
-/// tentativo riuscito (vedi download_chunk).
+/// A single attempt: downloads the piece [start,end] into an in-memory buffer
+/// (at most PIECE_SIZE_BYTES), accounting the bytes against `downloaded` as
+/// they stream in, through ProgressGuard (see above). Writing to disk remains
+/// the caller's responsibility, done once and only on a successful attempt
+/// (see download_chunk).
 async fn fetch_chunk_once(
     client: &reqwest::Client,
     url: &str,
@@ -1854,12 +1862,12 @@ async fn fetch_chunk_once(
         .await
         .context("range GET")?;
 
-    // Se il server ignora la Range e risponde 200 invece di 206, questo
-    // "pezzo" riceve l'INTERO file invece del solo pezzo richiesto — con n
-    // worker paralleli vorrebbe dire scaricare il file n volte, gran parte
-    // dei byte scartati/sovrascritti: banda sprecata, non guadagnata.
-    // Verificato solo qui (non nella probe) perché accept-ranges dichiarato
-    // può non essere onorato davvero dal server/proxy per ogni richiesta.
+    // If the server ignores the Range header and answers 200 instead of 206,
+    // this "piece" receives the WHOLE file rather than just the range asked
+    // for. With n parallel workers that would mean downloading the file n
+    // times, most of those bytes discarded or overwritten: bandwidth wasted,
+    // not gained. Checked here rather than in the probe because an advertised
+    // accept-ranges may still not be honoured on every individual request.
     if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         tracing::warn!(
             status = %resp.status(),
