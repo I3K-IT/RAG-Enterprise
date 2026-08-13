@@ -1,4 +1,4 @@
-# i3k RAG Engine
+# I3K RAG Engine
 
 **Ask questions about your own documents. Everything runs on your machine.**
 
