@@ -1,4 +1,4 @@
-# I3K RAG Engine
+# i3k RAG Engine
 
 **Ask questions about your own documents. Everything runs on your machine.**
 
@@ -11,13 +11,15 @@ questions in plain language, get answers grounded in what those documents
 actually say, with the sources cited. No data ever leaves your server — there
 is no telemetry, and nothing is sent to an external API.
 
-> **v2 is a complete rewrite in Rust.** v1 was a Python stack: four containers
-> under Docker Compose — backend, frontend, Qdrant, Ollama — two of them built
-> on your machine, plus seven volumes to keep straight. v2 is one binary. It
-> starts Qdrant and the inference engine itself; there is nothing to compose and
-> nothing to build.
+> **This is a complete rewrite in Rust.** The `1.x` releases were a Python
+> stack: four containers under Docker Compose — backend, frontend, Qdrant,
+> Ollama — two of them built on your machine, plus seven volumes to keep
+> straight. This is one binary. It starts Qdrant and the inference engine
+> itself; there is nothing to compose and nothing to build.
 >
-> The Python version is preserved on the
+> The rewrite restarts the numbering at `0.1`, so it is *lower*-numbered than
+> the `1.x` line it replaces: it is a new codebase whose storage layout and HTTP
+> surface are not settled yet. The Python version is preserved on the
 > [`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags — see
 > [Upgrading from 1.x](#upgrading-from-1x).
 
@@ -38,7 +40,8 @@ data-sovereignty reasons: law firms, healthcare, finance, public administration.
 
 ## Quick start
 
-Download the tarball for your platform from the [releases](../../releases) page:
+Download the tarball for your platform from the [releases](../../releases) page
+— [CHANGELOG.md](CHANGELOG.md) records what changed in each one:
 
 | File | For |
 |---|---|
@@ -156,15 +159,16 @@ query of a session and reports on shutdown.
 
 ## Upgrading from 1.x
 
-There is no automatic migration path, because v2 changes both the storage
-layout and the runtime model: v1 kept its state in Docker volumes shared
-between containers, v2 keeps it in one data directory next to the binary.
+There is no automatic migration path, because the rewrite changes both the
+storage layout and the runtime model: `1.x` kept its state in Docker volumes
+shared between containers, `0.1.x` keeps it in one data directory next to the
+binary.
 
 The two cannot run at the same time on one machine: they both want ports 8000,
-6333 and 11434. Stop the Compose stack before starting v2 — you are re-uploading
-anyway, so there is no moment where you need both. Your v1 data stays in its
-Docker volumes until you remove them, so you can go back by bringing Compose up
-again. Once you are satisfied, `docker compose down -v` retires it for good.
+6333 and 11434. Stop the Compose stack first — you are re-uploading anyway, so
+there is no moment where you need both. Your `1.x` data stays in its Docker
+volumes until you remove them, so you can go back by bringing Compose up again.
+Once you are satisfied, `docker compose down -v` retires it for good.
 
 The 1.x Python version remains available on the
 [`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags. It is
