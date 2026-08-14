@@ -581,6 +581,95 @@ mod tests {
         assert_eq!(versions, vec![1, 2], "the applied migrations must be left alone");
     }
 
+    // ── against a real Qdrant ─────────────────────────────────────────────────
+
+    /// The snapshot upload is the one step nothing else exercises: it is a live
+    /// round trip through Qdrant's own snapshot machinery, and faking it would
+    /// test nothing worth testing.
+    ///
+    ///   QDRANT_URL_FOR_TEST=http://localhost:6333 \
+    ///     cargo test qdrant_round_trip -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "needs a running Qdrant — set QDRANT_URL_FOR_TEST"]
+    async fn qdrant_round_trip_puts_the_archived_points_back() {
+        let Ok(url) = std::env::var("QDRANT_URL_FOR_TEST") else {
+            panic!("set QDRANT_URL_FOR_TEST to the base URL of a running Qdrant");
+        };
+        let coll = "restore_round_trip";
+        let http = Client::new();
+
+        // Fresh collection every run, so a previous failure cannot make this
+        // one pass.
+        let _ = http.delete(format!("{url}/collections/{coll}")).send().await;
+        let created = http
+            .put(format!("{url}/collections/{coll}"))
+            .json(&serde_json::json!({ "vectors": { "size": 4, "distance": "Cosine" } }))
+            .send().await.unwrap();
+        assert!(created.status().is_success(), "creating the collection: {:?}", created.text().await);
+
+        let upsert = |points: serde_json::Value| {
+            let http = http.clone();
+            let url = url.clone();
+            async move {
+                http.put(format!("{url}/collections/{coll}/points?wait=true"))
+                    .json(&serde_json::json!({ "points": points }))
+                    .send().await.unwrap()
+            }
+        };
+
+        let resp = upsert(serde_json::json!([
+            { "id": 1, "vector": [0.1, 0.2, 0.3, 0.4], "payload": { "filename": "archived.pdf" } },
+            { "id": 2, "vector": [0.5, 0.6, 0.7, 0.8], "payload": { "filename": "also-archived.pdf" } },
+        ])).await;
+        assert!(resp.status().is_success(), "seeding points: {:?}", resp.text().await);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = pool_at(&dir.path().join("live.db")).await;
+        sqlx::query("CREATE TABLE documents (id INTEGER PRIMARY KEY, filename TEXT)")
+            .execute(&db).await.unwrap();
+        sqlx::query("INSERT INTO documents (id, filename) VALUES (1, 'archived.pdf')")
+            .execute(&db).await.unwrap();
+
+        let backup_dir = dir.path().join("backups");
+        let archive = create_backup(&db, "", &url, coll, backup_dir.to_str().unwrap())
+            .await
+            .expect("create_backup");
+        let archive_name = archive.file_name().unwrap().to_str().unwrap().to_owned();
+
+        // Now diverge from the archive on both sides.
+        let resp = upsert(serde_json::json!([
+            { "id": 3, "vector": [0.9, 0.9, 0.9, 0.9], "payload": { "filename": "added-after.pdf" } },
+        ])).await;
+        assert!(resp.status().is_success());
+        sqlx::query("INSERT INTO documents (id, filename) VALUES (2, 'added-after.pdf')")
+            .execute(&db).await.unwrap();
+
+        let report = restore_backup(&db, &url, coll, backup_dir.to_str().unwrap(), &archive_name)
+            .await
+            .expect("restore_backup");
+        assert!(report.qdrant_restored, "the archive must have carried a snapshot");
+        assert_eq!(report.sqlite_tables, vec!["documents".to_string()]);
+
+        // Qdrant: back to the two archived points, without the third.
+        let count: serde_json::Value = http
+            .post(format!("{url}/collections/{coll}/points/count"))
+            .json(&serde_json::json!({ "exact": true }))
+            .send().await.unwrap()
+            .json().await.unwrap();
+        assert_eq!(
+            count["result"]["count"].as_u64(),
+            Some(2),
+            "the point added after the backup must be gone: {count}"
+        );
+
+        // SQLite: same story.
+        let names: Vec<String> = sqlx::query_scalar("SELECT filename FROM documents ORDER BY id")
+            .fetch_all(&db).await.unwrap();
+        assert_eq!(names, vec!["archived.pdf".to_string()]);
+
+        let _ = http.delete(format!("{url}/collections/{coll}")).send().await;
+    }
+
     #[tokio::test]
     async fn foreign_keys_do_not_block_the_restore_and_are_on_again_afterwards() {
         // The copy empties `users` before refilling it, which a table

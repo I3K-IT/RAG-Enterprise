@@ -54,8 +54,8 @@ The `-cuda` builds require the NVIDIA driver to be installed: they will not
 start without it. If you have no GPU, take the CPU build.
 
 ```sh
-tar -xzf i3k-rag-engine-v0.1.26-linux-x86_64-cuda.tar.gz
-cd i3k-rag-engine-v0.1.26-linux-x86_64-cuda
+tar -xzf i3k-rag-engine-v0.1.27-linux-x86_64-cuda.tar.gz
+cd i3k-rag-engine-v0.1.27-linux-x86_64-cuda
 
 cat > .env <<'EOF'
 AUTH__JWT_SECRET=change-this-to-a-long-random-string

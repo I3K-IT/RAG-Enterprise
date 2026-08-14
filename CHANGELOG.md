@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.1.27] - 2026-08-14
+
 ### Added
 
 - **Restore.** `POST /api/admin/backup/restore` puts an archive back, as the
@@ -37,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     that is running, not to the archive.
   - The response reports what was actually restored, because an archive taken
     while Qdrant was unreachable contains no snapshot.
+
+  Verified end to end against a running Qdrant 1.18.2, not only in unit tests:
+  seed a collection, back it up, add a point and a row, restore, and check that
+  both additions are gone and the archived state is back. That test is
+  `#[ignore]`d by default and runs with
+  `QDRANT_URL_FOR_TEST=… cargo test qdrant_round_trip -- --ignored`.
 
 ### Fixed
 
@@ -270,7 +280,8 @@ Generation system for organisations that need complete data privacy.
 
 ---
 
-[Unreleased]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.26...HEAD
+[Unreleased]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.27...HEAD
+[0.1.27]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.26...v0.1.27
 [0.1.26]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v0.1.25
 [1.2.1]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.2.1
