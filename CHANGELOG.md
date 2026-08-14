@@ -17,6 +17,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.27] - 2026-08-14
+
+### Added
+
+- **Restore.** `POST /api/admin/backup/restore` puts an archive back, as the
+  exact inverse of the backup that produced it: the Qdrant snapshot is uploaded
+  with `priority=snapshot` so the archived vectors win, and every table the
+  archive shares with the live schema is replaced inside one transaction. Until
+  now a backup could be taken and listed but never used, which made the whole
+  feature ornamental.
+
+  Details worth knowing before running it:
+
+  - It **replaces**, it does not merge. Rows created after the backup are gone.
+  - Qdrant is restored first. If that fails nothing else is touched, so a failed
+    restore leaves the installation as it was rather than stranding fresh
+    metadata against old vectors.
+  - An archive older than the current schema still restores: tables that no
+    longer exist are skipped, and columns added by a later migration keep their
+    default.
+  - `_sqlx_migrations` is never copied back — the schema belongs to the binary
+    that is running, not to the archive.
+  - The response reports what was actually restored, because an archive taken
+    while Qdrant was unreachable contains no snapshot.
+
+  Verified end to end against a running Qdrant 1.18.2, not only in unit tests:
+  seed a collection, back it up, add a point and a row, restore, and check that
+  both additions are gone and the archived state is back. That test is
+  `#[ignore]`d by default and runs with
+  `QDRANT_URL_FOR_TEST=… cargo test qdrant_round_trip -- --ignored`.
+
+- **Backups are verified, twice.** A backup nobody has checked is a guess, and
+  the guess is only tested on the day it has to work.
+
+  When the archive is written: the SQLite copy is reopened and put through
+  `PRAGMA integrity_check`, and the Qdrant snapshot is checked against the size
+  and sha256 Qdrant itself reports for it — a truncated download used to be
+  written out silently. Each member's digest goes into a `backup.json` inside
+  the archive.
+
+  When it is restored: every member is checked against that manifest **before
+  anything is written**. A damaged archive stops there, with the installation
+  untouched, instead of being discovered halfway through.
+
+  Two failures are now told apart. If Qdrant answers with a snapshot that does
+  not match what it says it made, the backup fails outright — a verifiably
+  broken archive must never reach the backup directory. If Qdrant does not
+  answer at all, the archive is still written, without vectors, and says so:
+  losing today's copy of the users and the document metadata as well would be
+  worse, and the gap is recorded rather than hidden.
+
+  Archives written by 0.1.25 and 0.1.26 carry no manifest. They still restore,
+  and the response reports `verified: false` so it is clear they could not be
+  checked.
+
+### Fixed
+
+- The Qdrant snapshot was downloaded and written with nothing verified at all.
+  A truncated HTTP body is not an error — it just leaves a shorter file — so a
+  half-downloaded snapshot was archived as though it were sound.
+- `backup/mod.rs` described the archive as including an "optional rclone
+  upload". There is no rclone anywhere in this codebase and never was; backups
+  are local files and nothing is uploaded anywhere.
+
+---
+
 ## [0.1.26] - 2026-08-13
 
 ### Changed
@@ -241,7 +307,8 @@ Generation system for organisations that need complete data privacy.
 
 ---
 
-[Unreleased]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.26...HEAD
+[Unreleased]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.27...HEAD
+[0.1.27]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.26...v0.1.27
 [0.1.26]: https://github.com/I3K-IT/RAG-Enterprise/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v0.1.25
 [1.2.1]: https://github.com/I3K-IT/RAG-Enterprise/releases/tag/v1.2.1

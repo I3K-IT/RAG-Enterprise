@@ -1,10 +1,11 @@
 //! Admin endpoints (admin role required):
 //! POST   /api/admin/backup                  → trigger immediate backup
 //! GET    /api/admin/backup/list             → list available archives
+//! POST   /api/admin/backup/restore          → restore one of them
 //! GET    /api/admin/qdrant/stats            → collection stats
 //! GET    /api/admin/qdrant/documents        → unique documents in Qdrant
 //! DELETE /api/admin/qdrant/document/{id}   → delete all vectors for a document
-//! GET    /api/admin/sqlite/documents        → all rows (inclusi soft-deleted)
+//! GET    /api/admin/sqlite/documents        → all rows (soft-deleted included)
 
 use axum::{
     extract::{Path, State},
@@ -72,6 +73,59 @@ pub async fn list_backups(State(state): State<AppState>, claims: Claims) -> Resp
     }
     let archives = service::list_backups(&state.settings.backup.dir);
     Json(json!({ "backups": archives })).into_response()
+}
+
+// ── POST /api/admin/backup/restore ────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct RestoreRequest {
+    /// File name of an archive in the backup directory, as returned by
+    /// GET /api/admin/backup/list.
+    archive: String,
+}
+
+/// Restore a backup over the running installation.
+///
+/// Destructive by nature: the contents of the Qdrant collection and of every
+/// table also present in the archive are replaced, not merged. It is admin-only
+/// for that reason.
+pub async fn restore_backup(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(req): Json<RestoreRequest>,
+) -> Response {
+    if let Some(r) = require_admin(&claims) {
+        return r;
+    }
+
+    tracing::warn!(
+        archive = %req.archive,
+        user = %claims.username,
+        "restore requested: the collection and the database are about to be replaced"
+    );
+
+    match service::restore_backup(
+        &state.db,
+        &state.settings.qdrant.url,
+        &state.settings.qdrant.collection,
+        &state.settings.backup.dir,
+        &req.archive,
+    )
+    .await
+    {
+        Ok(report) => Json(json!({ "ok": true, "restored": report })).into_response(),
+        // A bad archive name is the caller's mistake, not a server fault; every
+        // other failure happened while restoring and is ours.
+        Err(e) if is_bad_request(&e) => err(StatusCode::BAD_REQUEST, e),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+fn is_bad_request(e: &anyhow::Error) -> bool {
+    let msg = e.to_string();
+    msg.starts_with("invalid archive name")
+        || msg.starts_with("not a backup archive")
+        || msg.starts_with("archive not found")
 }
 
 // ── GET /api/admin/qdrant/stats ───────────────────────────────────────────────

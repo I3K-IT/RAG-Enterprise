@@ -1,6 +1,6 @@
 [package]
 name = "i3k-rag-engine"
-version = "0.1.26"
+version = "0.1.27"
 edition = "2021"
 description = "i3k RAG Engine — self-hosted document intelligence, fully local"
 license = "Apache-2.0"
@@ -27,7 +27,7 @@ password-hash = "0.5"
 rand = "0.8"
 
 # --- HTTP client: eullm (LLM) + Qdrant snapshot ---
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 url = "2"
 
 # --- Vector DB ---
