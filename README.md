@@ -96,8 +96,10 @@ carried into follow-up questions.
 **Users.** JWT authentication with three roles — user, super user, admin —
 governing who may upload and delete.
 
-**Backups.** Scheduled backups of both the SQLite database and the Qdrant
-collection, so a restore brings back a consistent pair.
+**Backups.** A scheduled daily archive holding the SQLite database and a Qdrant
+snapshot taken together, so the pair is consistent, and an admin endpoint to
+restore one over the running installation. Backups are local files under
+`BACKUP__DIR`; nothing is uploaded anywhere.
 
 ## Architecture
 

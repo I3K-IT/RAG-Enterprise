@@ -15,6 +15,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Restore.** `POST /api/admin/backup/restore` puts an archive back, as the
+  exact inverse of the backup that produced it: the Qdrant snapshot is uploaded
+  with `priority=snapshot` so the archived vectors win, and every table the
+  archive shares with the live schema is replaced inside one transaction. Until
+  now a backup could be taken and listed but never used, which made the whole
+  feature ornamental.
+
+  Details worth knowing before running it:
+
+  - It **replaces**, it does not merge. Rows created after the backup are gone.
+  - Qdrant is restored first. If that fails nothing else is touched, so a failed
+    restore leaves the installation as it was rather than stranding fresh
+    metadata against old vectors.
+  - An archive older than the current schema still restores: tables that no
+    longer exist are skipped, and columns added by a later migration keep their
+    default.
+  - `_sqlx_migrations` is never copied back — the schema belongs to the binary
+    that is running, not to the archive.
+  - The response reports what was actually restored, because an archive taken
+    while Qdrant was unreachable contains no snapshot.
+
+### Fixed
+
+- `backup/mod.rs` described the archive as including an "optional rclone
+  upload". There is no rclone anywhere in this codebase and never was; backups
+  are local files and nothing is uploaded anywhere.
+
 ---
 
 ## [0.1.26] - 2026-08-13

@@ -1,8 +1,8 @@
-//! Backup service: tar+zstd of SQLite DB + Qdrant snapshot + optional rclone upload.
+//! Backup and restore: a tar.gz holding the SQLite database and a Qdrant
+//! snapshot, taken together so the pair is consistent, and put back together
+//! by `service::restore_backup`.
 //!
-//!
-//! The SQLite dump and the Qdrant snapshot are taken together so that a
-//! restore brings back a consistent pair.
+//! Backups are local files under `BACKUP__DIR`. Nothing is uploaded anywhere.
 
 pub mod scheduler;
 pub mod service;
