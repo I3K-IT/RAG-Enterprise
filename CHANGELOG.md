@@ -48,8 +48,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `#[ignore]`d by default and runs with
   `QDRANT_URL_FOR_TEST=… cargo test qdrant_round_trip -- --ignored`.
 
+- **Backups are verified, twice.** A backup nobody has checked is a guess, and
+  the guess is only tested on the day it has to work.
+
+  When the archive is written: the SQLite copy is reopened and put through
+  `PRAGMA integrity_check`, and the Qdrant snapshot is checked against the size
+  and sha256 Qdrant itself reports for it — a truncated download used to be
+  written out silently. Each member's digest goes into a `backup.json` inside
+  the archive.
+
+  When it is restored: every member is checked against that manifest **before
+  anything is written**. A damaged archive stops there, with the installation
+  untouched, instead of being discovered halfway through.
+
+  Two failures are now told apart. If Qdrant answers with a snapshot that does
+  not match what it says it made, the backup fails outright — a verifiably
+  broken archive must never reach the backup directory. If Qdrant does not
+  answer at all, the archive is still written, without vectors, and says so:
+  losing today's copy of the users and the document metadata as well would be
+  worse, and the gap is recorded rather than hidden.
+
+  Archives written by 0.1.25 and 0.1.26 carry no manifest. They still restore,
+  and the response reports `verified: false` so it is clear they could not be
+  checked.
+
 ### Fixed
 
+- The Qdrant snapshot was downloaded and written with nothing verified at all.
+  A truncated HTTP body is not an error — it just leaves a shorter file — so a
+  half-downloaded snapshot was archived as though it were sound.
 - `backup/mod.rs` described the archive as including an "optional rclone
   upload". There is no rclone anywhere in this codebase and never was; backups
   are local files and nothing is uploaded anywhere.
