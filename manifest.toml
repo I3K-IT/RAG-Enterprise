@@ -17,9 +17,19 @@
 #   hanno oggi solo alcune varianti pinnate — aggiungere le altre quando si
 #   targettano davvero quelle piattaforme (build+test, non solo manifest).
 #
-# archive_member (opzionale): se url punta a un .tar.gz invece che a un file
-# nudo, indica il path INTERNO da estrarre. sha256/size si riferiscono al
-# file ESTRATTO, non all'archivio (vedi bootstrap::extract_and_verify_member).
+# archive_member (opzionale): se url punta a un .tar.gz o .zip invece che a
+# un file nudo, indica il path INTERNO da estrarre. sha256/size si
+# riferiscono al file ESTRATTO, non all'archivio (vedi
+# bootstrap::extract_and_verify_member).
+#
+# unpack_dir (opzionale, bool): alternativa ad archive_member per gli
+# archivi .zip che vanno estratti PER INTERO invece che un file solo (es.
+# eullm.exe + le DLL CUDA che gli servono accanto su Windows — non esiste un
+# "member" singolo da nominare). dest resta il path del file eseguibile
+# finale (es. .../eullm.exe): la cartella che lo contiene viene creata,
+# riempita con TUTTO il contenuto dello zip, e deve appartenere solo a
+# questo componente (mai bin/ condivisa) — vedi bootstrap::ensure_component_dir.
+# sha256/size si riferiscono all'ARCHIVIO, non ai singoli file estratti.
 #
 # dest: usa il placeholder {data} (risolto a runtime come data_dir).
 # Pre-check disco = somma delle size dei componenti mancanti (nessun archivio).
@@ -119,32 +129,54 @@ size    = 76168120
 dest    = "{data}/bin/qdrant"
 exec    = true
 
-# Tutti i target eullm sono pinnati alla STESSA versione (0.6.80). Prima
+# Il binario UFFICIALE, a differenza di arm64: nessun problema di page size
+# su Windows (l'allocatore jemalloc si comporta bene con la 4K standard di
+# x86_64), quindi non serve una build custom come per l'ARM. url punta a un
+# .zip (non un .tar.gz — la release ufficiale di qdrant lo pubblica solo
+# così per Windows), da qui extract_and_verify_member() sceglie
+# extract_zip_member invece di extract_tar_gz_member guardando l'estensione.
+[[component]]
+name           = "qdrant"
+version        = "1.18.2"
+kind           = "binary"
+target         = "windows-x86_64"
+url            = "https://github.com/qdrant/qdrant/releases/download/v1.18.2/qdrant-x86_64-pc-windows-msvc.zip"
+archive_member = "qdrant.exe"
+sha256         = "b029d8b1c54ee14b164c93cc60f722ff87dae9f6379f779cd378f5e33b17474e"
+size           = 85080576
+dest           = "{data}/bin/qdrant.exe"
+exec           = true
+
+# Tutti i target eullm sono pinnati alla STESSA versione (0.6.81). Prima
 # divergevano (0.6.6 / 0.6.10 / 0.6.60) perché ogni entry veniva bumpata da
 # sola quando serviva: il risultato era che la piattaforma di produzione più
 # comune, x86_64+CUDA, girava sulla pin più vecchia delle tre. sha256 e size
 # sono byte esatti, presi da checksums.txt e dal content-length della release
-# (non più approssimati dalla UI GitHub).
+# (non più approssimati dalla UI GitHub). checksums.txt stesso verificato:
+# per due asset su sei (il più piccolo e il più grande della release) sha256
+# e size ricalcolati da un download diretto e indipendente combaciano byte
+# per byte con quanto pubblicato — i restanti quattro sono presi da lì senza
+# riscaricarli tutti, stesso metodo già in uso per la 0.6.80.
 [[component]]
 name    = "eullm"
-version = "0.6.80"
+version = "0.6.81"
 kind    = "binary"
 target  = "linux-x86_64-cuda"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-x64-cuda-12.8"
-sha256  = "465ae9e37829fb6b824e015a7e68af711f79ce284772177a182ce8191c55b191"
-size    = 901988832
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-x64-cuda-12.8"
+sha256  = "228a34a1dbb0e8896f328469e1e8db901f501f833566348a61a053b991a279e6"
+size    = 901996768
 dest    = "{data}/bin/eullm"
 exec    = true
 
 # ARM64+CUDA (es. Radxa Orion O6 con GPU NVIDIA esterna via PCIe).
 [[component]]
 name    = "eullm"
-version = "0.6.80"
+version = "0.6.81"
 kind    = "binary"
 target  = "linux-aarch64-cuda"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64-cuda-12.8"
-sha256  = "07dd91216c13d552628c4f104fde66617b96a5bda57ec0fc47b17b26e8291577"
-size    = 862953528
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-arm64-cuda-12.8"
+sha256  = "4fc0a3cf467b42be4adf21bd3e623e8b366896659348a6c04c57c4e1fcde961b"
+size    = 863019064
 dest    = "{data}/bin/eullm"
 exec    = true
 
@@ -155,9 +187,9 @@ exec    = true
 # Bootstrap ricadeva sul ramo "eullm o modello non trovati — RAG senza
 # LLM" (main.rs) — appariva silenziosamente senza motore di inferenza.
 #
-# NOTA: esiste ANCHE una build "eullm-linux-arm64-cix-p1" (13.843.264 byte,
-# sha256 b68021f7dc269cbdbe3d98a2f40bf41ed00401652f58a4d5b1ebec6bab8fc41d
-# per la 0.6.80), compilata per le estensioni Armv9.2 del CIX P1 — la CI di
+# NOTA: esiste ANCHE una build "eullm-linux-arm64-cix-p1" (14.039.984 byte,
+# sha256 dab184aabf6caad2c54de9d4370632121db01cc968edbf3d36fa9058efb48f95
+# per la 0.6.81), compilata per le estensioni Armv9.2 del CIX P1 — la CI di
 # eullm la costruisce con GGML_CPU_ARM_ARCH=armv9.2-a+sve2+bf16+i8mm+dotprod
 # (job build-arm-cix-p1 in release-engine.yml, verificato nel sorgente).
 # NON pinnata qui, e la ragione NON è pigrizia: quel binario va in SIGILL su
@@ -183,12 +215,12 @@ exec    = true
 # quindi invariante; la misura la contraddice.
 [[component]]
 name    = "eullm"
-version = "0.6.80"
+version = "0.6.81"
 kind    = "binary"
 target  = "linux-aarch64"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64"
-sha256  = "de8f011feb02d2eb1b2455a27bc7e16a956f0538f12eaf2458dd1c0bbbddb6d3"
-size    = 18774016
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-arm64"
+sha256  = "a41134a7cc3ec135d900c0bc33387e80ed0417593d1f4aab1ae822aef71971d7"
+size    = 18749712
 dest    = "{data}/bin/eullm"
 exec    = true
 
@@ -200,14 +232,58 @@ exec    = true
 # presente vince comunque -cuda, perché questa build è CPU-only.
 [[component]]
 name    = "eullm"
-version = "0.6.80"
+version = "0.6.81"
 kind    = "binary"
 target  = "linux-aarch64-cix"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.80/eullm-linux-arm64-cix-p1"
-sha256  = "b68021f7dc269cbdbe3d98a2f40bf41ed00401652f58a4d5b1ebec6bab8fc41d"
-size    = 13843264
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-arm64-cix-p1"
+sha256  = "dab184aabf6caad2c54de9d4370632121db01cc968edbf3d36fa9058efb48f95"
+size    = 14039984
 dest    = "{data}/bin/eullm"
 exec    = true
+
+# CPU-only, un unico eseguibile senza librerie accanto. Vedi la entry -cuda
+# subito sotto per la variante GPU, che invece è un archivio a più file
+# (unpack_dir) — a differenza di quanto ipotizzato in una fase precedente
+# ("nessuna build CUDA pubblicata per Windows"), verificato con l'asset reale
+# scaricato: eullm-windows-x64-cuda-12.8.zip esiste, semplicemente il nome
+# non è un .exe come questo qui.
+[[component]]
+name    = "eullm"
+version = "0.6.81"
+kind    = "binary"
+target  = "windows-x86_64"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-windows-x64.exe"
+sha256  = "a08896a13b8485eeb8b3c287384834027a813fc27b856887275d597d35acd85a"
+size    = 14898176
+dest    = "{data}/bin/eullm.exe"
+exec    = true
+
+# Windows + CUDA. A differenza di ogni altra entry eullm, url NON punta a un
+# eseguibile nudo ma a uno zip con QUATTRO file (verificato con unzip -l, non
+# assunto): eullm.exe + cublas64_12.dll + cublasLt64_12.dll + cudart64_12.dll
+# — le DLL che eullm dlopen-a dalla propria cartella all'avvio, esattamente
+# come su Linux libcublas.so/libcudart.so sono risolte dal linker dinamico
+# invece di essere statiche. Non esiste un singolo "member" da estrarre: va
+# scompattato per intero (unpack_dir) dentro una cartella dedicata SOLO a
+# questo componente, non bin/ condivisa con qdrant.exe — vedi
+# bootstrap::ensure_component_dir sul perché. sha256/size sono dell'ARCHIVIO
+# stesso (riproducibili con un sha256sum diretto sullo zip scaricato, prima
+# di estrarlo — infatti verificati così, non sui singoli file interni).
+#
+# Esclusa dall'update check interattivo (maybe_update_eullm): quel percorso
+# sa sostituire un file solo, non un archivio a più file — vedi il commento
+# sul ramo catch-all di eullm_asset_hint().
+[[component]]
+name       = "eullm"
+version    = "0.6.81"
+kind       = "binary"
+target     = "windows-x86_64-cuda"
+url        = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-windows-x64-cuda-12.8.zip"
+unpack_dir = true
+sha256     = "025c84b863cffcaa2c562bbc927741a504f058122015f11aa3579afbc48136d6"
+size       = 697589940
+dest       = "{data}/bin/eullm-cuda/eullm.exe"
+exec       = true
 
 # pdfium (OCR, feature "ocr"): libreria bundlata, no dipendenza host — vedi
 # ocr.rs::resolve_pdfium_library_path(), che cerca proprio in {data}/lib/.

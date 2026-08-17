@@ -82,6 +82,24 @@ pub struct HardwareInfo {
     pub eullm_model: String,
 }
 
+/// Runs a one-line PowerShell script and returns its trimmed stdout. Used
+/// only for the three Windows hardware queries below — `--bench` runs this
+/// once per session, not per query, so the process-spawn cost of PowerShell
+/// (heavier than a /proc read) does not matter.
+#[cfg(windows)]
+fn powershell(script: &str) -> Option<String> {
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(not(windows))]
 fn cpu_model() -> String {
     std::fs::read_to_string("/proc/cpuinfo")
         .ok()
@@ -93,7 +111,12 @@ fn cpu_model() -> String {
         })
         .unwrap_or_else(|| "unknown".to_owned())
 }
+#[cfg(windows)]
+fn cpu_model() -> String {
+    powershell("(Get-CimInstance Win32_Processor).Name").unwrap_or_else(|| "unknown".to_owned())
+}
 
+#[cfg(not(windows))]
 fn ram_total_mb() -> u64 {
     std::fs::read_to_string("/proc/meminfo")
         .ok()
@@ -106,7 +129,16 @@ fn ram_total_mb() -> u64 {
         .map(|kb| kb / 1024)
         .unwrap_or(0)
 }
+#[cfg(windows)]
+fn ram_total_mb() -> u64 {
+    // TotalPhysicalMemory is bytes, unlike /proc/meminfo's MemTotal (KiB).
+    powershell("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory")
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|bytes| bytes / 1024 / 1024)
+        .unwrap_or(0)
+}
 
+#[cfg(not(windows))]
 fn os_info() -> String {
     let pretty_name = std::fs::read_to_string("/etc/os-release").ok().and_then(|s| {
         s.lines()
@@ -124,6 +156,11 @@ fn os_info() -> String {
         (None, Some(k)) => format!("Linux (kernel {k})"),
         (None, None) => format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
     }
+}
+#[cfg(windows)]
+fn os_info() -> String {
+    let script = r#"$os = Get-CimInstance Win32_OperatingSystem; "$($os.Caption) (build $($os.BuildNumber))""#;
+    powershell(script).unwrap_or_else(|| format!("{} {}", std::env::consts::OS, std::env::consts::ARCH))
 }
 
 /// Uses nvidia-smi rather than the CUDA APIs directly: it works regardless of
