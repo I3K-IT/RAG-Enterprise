@@ -42,29 +42,66 @@ name: CI
 #     stessa convenzione "portable app dir" di config::default_data_dir),
 #     non CWD-relative: funziona da qualunque cartella si lanci il binario,
 #     basta che "frontend/dist" stia accanto ad esso.
-#   - lib/libtesseract.so.5 + lib/liblept.so.5 (+ le lib CUDA runtime per le
-#     varianti -cuda: cublas/cublasLt/cudart/nvrtc/curand) copiate via ldd
-#     dopo la build. Il binario è compilato con RUSTFLAGS
+#   - Per le varianti -cuda: lib/libcublas.so.12 + libcublasLt.so.12 +
+#     libcudart.so.12 + libnvrtc.so.12 + libcurand.so.10, copiate via ldd dopo
+#     la build. Il binario è compilato con RUSTFLAGS
 #     "-Wl,-rpath,$ORIGIN/lib -Wl,-z,origin": cerca lì PRIMA delle lib di
-#     sistema, quindi funziona anche su una macchina senza
-#     libtesseract-dev/libleptonica-dev installate. libcuda.so.1 (il driver
-#     NVIDIA vero) resta l'unica eccezione non bundlabile — deve venire dal
-#     sistema target (vedi sopra).
-#   - Le altre dipendenze dinamiche (glibc, libssl, libcurl, libpng/jpeg/
-#     tiff/webp da leptonica, ICU…) NON sono bundlate: sono libreria di base
-#     presenti su qualunque distro Linux reale, bundlarle anche loro
-#     aggiungerebbe fragilità (versioni/ABI) senza un beneficio reale, e per
-#     libssl/libcrypto sarebbe pure controproducente (niente aggiornamenti
-#     di sicurezza dal sistema).
+#     sistema, quindi funziona anche su una macchina col solo driver NVIDIA
+#     installato (non il CUDA toolkit completo). libcuda.so.1 (il driver vero)
+#     resta l'unica eccezione non bundlabile — deve venire dal sistema target.
+#     Le varianti CPU non hanno bisogno di questo RUSTFLAGS: non linkano più
+#     niente che vada cercato a runtime in ./lib.
+#   - lib/libtesseract.so.5 + lib/libleptonica.so.6: costruite da sorgente in
+#     ogni job (Tesseract 5.5.0 + Leptonica 1.85.0, DISABLE_CURL/ARCHIVE +
+#     codec immagine OFF — Tesseract riceve solo pixel già decodificati da
+#     pdfium, mai un file da rasterizzare da solo) e copiate in stage/lib,
+#     RPATH $ORIGIN via patchelf così libtesseract trova libleptonica accanto
+#     a sé ovunque il paio venga copiato. A differenza di pdfium (bblanchon/
+#     pdfium-binaries, un repo di binari upstream pronti) Tesseract non ha un
+#     equivalente — comprimerli qui invece che scaricarli dal manifest evita
+#     di dover ospitare e mantenere noi stessi quei binari. Da quando l'OCR
+#     li carica a runtime via libloading (src/documents/ocr.rs) invece di
+#     collegarsi a compilazione, non sono più un NEEDED del nostro binario —
+#     ldd non li vedrebbe più senza questo step, motivo per cui va rifatto
+#     esplicitamente qui e non lasciato al vecchio meccanismo compile-time.
+#   - Le altre dipendenze dinamiche (glibc, libssl, libcurl…) NON sono
+#     bundlate: sono librerie di base presenti su qualunque distro Linux
+#     reale, bundlarle anche loro aggiungerebbe fragilità (versioni/ABI) senza
+#     un beneficio reale, e per libssl/libcrypto sarebbe pure controproducente
+#     (niente aggiornamenti di sicurezza dal sistema).
 #
-# macOS/Windows restano fuori: mancano i binari qdrant/eullm per quelle
-# piattaforme nel manifest, e Windows ha 3 punti di codice unix-only da
-# sistemare prima di poter anche solo compilare
-# (std::os::unix::fs::FileExt/PermissionsExt, libc::statvfs in
-# src/bootstrap.rs).
+# release-windows-x86_64: cross-compilata da un runner Linux (mingw-w64,
+# target x86_64-pc-windows-gnu — nessun runner Windows nativo necessario).
+# Solo CPU: --features cuda richiede nvcc, che sul toolchain mingw non è
+# disponibile e cross-compilare CUDA per Windows da un host Linux non è una
+# combinazione supportata (cudarc cerca nvcc a build.rs, non un target
+# Windows) — verificato con un tentativo reale, non assunto. eullm resta
+# indipendente (processo esterno, non compilato qui): eullm-windows-x64-cuda
+# in manifest.toml continua a dare inferenza GPU su Windows, è solo
+# l'embedding (Candle, dentro questo binario) a restare su CPU lì. Tesseract/
+# Leptonica: stesso principio dei job Linux, ma col linking statico
+# -static-libgcc/-static-libstdc++/-lwinpthread (altrimenti le DLL cercano il
+# runtime mingw, assente su un Windows pulito — verificato via objdump: senza
+# quei flag comparivano libgcc_s_seh-1.dll/libstdc++-6.dll/libwinpthread-1.dll
+# fra le importazioni, con quei flag restano solo KERNEL32/msvcrt/GDI32/
+# USER32 più la sibling libleptonica.dll). pdfium.dll NON è bundlato: arriva
+# già dal manifest al primo avvio, come su Linux.
+#
+# i3k-rag-engine.exe stesso, a differenza di Tesseract/Leptonica, NON riesce
+# a fare a meno di libstdc++-6.dll: esaxx-rs (dipendenza C++ di tokenizers,
+# algoritmo Unigram) la collega dinamicamente, e il collegamento finale del
+# binario passa dal driver C di rustc (gcc, non g++) — gli stessi flag
+# -static-libgcc/-static-libstdc++ che funzionano per Tesseract/Leptonica
+# (costruiti via CMake/g++) lì non hanno effetto, verificato con più
+# combinazioni (RUSTFLAGS, .cargo/config.toml, -C linker=g++, crt-static),
+# non solo assunto. Bundlata invece, accanto all'exe (non in lib/: è una
+# dipendenza di caricamento del PE, non qualcosa che libloading risolve).
+#
+# macOS resta fuori: manca il binario qdrant per quella piattaforma nel
+# manifest.
 #
 # Cache: Swatinem/rust-cache su tutti i job che compilano (chiave distinta
-# per config: debug-ocr / release-x86_64(-cuda) / release-arm64(-cuda) — il
+# per config: debug / release-x86_64(-cuda) / release-arm64(-cuda) — il
 # default dell'action non distingue per --features, quindi senza chiave
 # esplicita una build CPU e una CUDA potrebbero condividere cache in modo
 # scorretto). Non actions/cache "a mano" su target/: quel path aveva
@@ -125,16 +162,10 @@ env:
 
 jobs:
   rust:
-    name: Rust — build, test, clippy (--features ocr)
+    name: Rust — build, test, clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # Vedi BUILD.md §2a — stesse dev-lib richieste in locale per --features ocr.
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
 
       # Swatinem/rust-cache invece di actions/cache "a mano" su target/ grezza:
       # actions/cache con target/ intera aveva riempito i 14GB del runner
@@ -145,23 +176,23 @@ jobs:
       # ogni push ricompilava ~300 crate da zero invece di solo i cambiati.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: debug-ocr
+          key: debug
 
-      - name: cargo build --features ocr --locked
-        run: cargo build --features ocr --locked --verbose
+      - name: cargo build --locked
+        run: cargo build --locked --verbose
 
-      # I 2 test OCR con fixture reali (bundled_pdfium_path_resolution_and_ocr_roundtrip,
-      # tessdata_resolved_from_data_dir) fanno skip gracioso qui: richiedono
-      # PDFIUM_LIB_FOR_TEST/TESSDATA_DIR_FOR_TEST con asset scaricati per davvero
-      # (vedi doc dei test in src/documents/ocr.rs) — non li scarichiamo in CI
-      # per restare leggeri sui minuti. Tutto il resto gira per davvero.
-      - name: cargo test --features ocr --locked
-        run: cargo test --features ocr --locked --verbose
+      # Il test OCR con fixture reali (bundled_libraries_path_resolution_and_ocr_roundtrip)
+      # fa skip gracioso qui: richiede PDFIUM_LIB_FOR_TEST/TESSERACT_LIB_FOR_TEST
+      # con asset scaricati per davvero (vedi doc del test in
+      # src/documents/ocr.rs) — non li scarichiamo in CI per restare leggeri
+      # sui minuti. Tutto il resto gira per davvero.
+      - name: cargo test --locked
+        run: cargo test --locked --verbose
 
       # Non-bloccante: ci sono lint pre-esistenti non legati a questo setup CI
       # (vedi cargo clippy in locale) — qui solo per visibilità, non per gate.
-      - name: cargo clippy --features ocr (informativo)
-        run: cargo clippy --features ocr --all-targets --locked || true
+      - name: cargo clippy (informativo)
+        run: cargo clippy --all-targets --locked || true
 
   frontend:
     name: Frontend — build (vite)
@@ -218,11 +249,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
-
       # shared-key (non key!) — key si AGGIUNGE alla chiave automatica per-job
       # di rust-cache (github.job), non la sostituisce: con "key" la cache di
       # warm-cache-x86_64 e quella di release-linux-x86_64 restavano su due
@@ -235,10 +261,8 @@ jobs:
         with:
           shared-key: release-x86_64
 
-      - name: cargo build --release --features ocr --locked
-        env:
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: cargo build --release --features ocr --locked --verbose
+      - name: cargo build --release --locked
+        run: cargo build --release --locked --verbose
 
   warm-cache-x86_64-cuda:
     name: Riscalda cache — linux x86_64 (CUDA)
@@ -254,11 +278,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get clean
 
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
-
       - name: "Installa CUDA Toolkit 12.8 (minimo: nvcc, cudart, cublas, nvrtc, curand)"
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
@@ -273,14 +292,36 @@ jobs:
         with:
           shared-key: release-x86_64-cuda
 
-      - name: cargo build --release --features ocr,cuda --locked
+      - name: cargo build --release --features cuda --locked
         env:
           CUDA_COMPUTE_CAP: "80"
           LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
           RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: |
           export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features ocr,cuda --locked --verbose
+          cargo build --release --features cuda --locked --verbose
+
+  warm-cache-windows-x86_64:
+    name: Riscalda cache — windows x86_64 (CPU, cross da Linux)
+    needs: detect-deps-change
+    if: needs.detect-deps-change.outputs.changed == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows-x86_64
+
+      - name: Aggiungi target Windows (mingw)
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix
+
+      - name: cargo build --release --target x86_64-pc-windows-gnu --locked
+        run: cargo build --release --target x86_64-pc-windows-gnu --locked --verbose
 
   warm-cache-arm64:
     name: Riscalda cache — linux arm64 (CPU)
@@ -291,20 +332,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
-
       # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-arm64
 
-      - name: cargo build --release --features ocr --locked
-        env:
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: cargo build --release --features ocr --locked --verbose
+      - name: cargo build --release --locked
+        run: cargo build --release --locked --verbose
 
   warm-cache-arm64-cuda:
     name: Riscalda cache — linux arm64 (CUDA)
@@ -320,11 +354,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get clean
 
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
-
       - name: "Installa CUDA Toolkit 12.8 SBSA (minimo: nvcc, cudart, cublas, nvrtc, curand)"
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
@@ -339,14 +368,14 @@ jobs:
         with:
           shared-key: release-arm64-cuda
 
-      - name: cargo build --release --features ocr,cuda --locked
+      - name: cargo build --release --features cuda --locked
         env:
           CUDA_COMPUTE_CAP: "80"
           LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
           RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: |
           export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features ocr,cuda --locked --verbose
+          cargo build --release --features cuda --locked --verbose
 
   # ─────────────────────────────────────────────────────────────────────────
   # Release (solo tag v*) — vedi commento in cima al file per il perché delle
@@ -378,11 +407,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
-
       # Vedi commento nel job "rust" sul perché rust-cache invece di
       # actions/cache su target/ grezza. shared-key, non key — vedi commento
       # in warm-cache-x86_64 sul perché (key non condivide tra job diversi).
@@ -402,29 +426,46 @@ jobs:
           npm ci
           npm run build
 
-      # RPATH $ORIGIN/lib: il binario cerca le lib bundlate in ./lib PRIMA di
-      # quelle di sistema — vedi step successivo, che le copia lì. Senza
-      # questo, su una macchina senza libtesseract5/liblept5 installate a
-      # livello di sistema il binario non parte nemmeno (error while loading
-      # shared libraries), come riscontrato in produzione sull'Orion.
-      - name: cargo build --release --features ocr --locked
-        env:
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: cargo build --release --features ocr --locked --verbose
+      - name: cargo build --release --locked
+        run: cargo build --release --locked --verbose
 
-      - name: Impacchetta binario + lib bundlate + frontend + checksum
+      - name: Installa patchelf (per il RPATH di libtesseract)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
+
+      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
         run: |
-          mkdir -p dist stage/lib stage/frontend
+          set -e
+          W=$(mktemp -d)
+          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
+          tar xzf "$W/leptonica.tar.gz" -C "$W"
+          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
+
+          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF -DENABLE_ZLIB=ON \
+            -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF \
+            -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
+          cmake --build "$W/build-lept" -j"$(nproc)"
+          cmake --install "$W/build-lept"
+
+          PKG_CONFIG_PATH="$W/out/lib/pkgconfig" cmake -S "$W/tesseract" -B "$W/build-tess" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DCMAKE_PREFIX_PATH="$W/out" -DBUILD_SHARED_LIBS=ON \
+            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF
+          cmake --build "$W/build-tess" -j"$(nproc)"
+
+          mkdir -p stage/lib
+          cp -L "$W/build-tess"/libtesseract.so.5.5.0 stage/lib/libtesseract.so.5
+          cp -L "$W/build-lept/src"/libleptonica.so.6.0.0 stage/lib/libleptonica.so.6
+          patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
+          patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
+
+      - name: Impacchetta binario + lib OCR + frontend + checksum
+        run: |
+          mkdir -p dist stage/frontend
           cp target/release/i3k-rag-engine stage/
           cp -r frontend/dist stage/frontend/dist
-          for lib in libtesseract.so.5 liblept.so.5; do
-            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
-            if [ -z "$path" ]; then
-              echo "ERRORE: $lib non trovata nell'output di ldd" >&2
-              exit 1
-            fi
-            cp -L "$path" "stage/lib/$lib"
-          done
           # Versione nel nome del tarball: GITHUB_REF su un tag è
           # "refs/tags/v0.1.3" — questo job gira solo su tag (if: sopra),
           # quindi è sempre valorizzato qui.
@@ -452,11 +493,6 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get clean
-
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
 
       - name: "Installa CUDA Toolkit 12.8 (minimo: nvcc, cudart, cublas, nvrtc, curand)"
         run: |
@@ -494,7 +530,7 @@ jobs:
       # completo) altrimenti non le avrebbe. libcuda.so.1 (il driver vero)
       # NON è bundlabile: deve venire dal sistema target, non c'è modo di
       # aggirarlo (vedi commento in cima al file).
-      - name: cargo build --release --features ocr,cuda --locked
+      - name: cargo build --release --features cuda --locked
         env:
           # Niente GPU fisica sul runner → candle-kernels non riesce a
           # rilevare la compute cap da nvidia-smi (ComputeCapDetectionFailed).
@@ -505,7 +541,39 @@ jobs:
           RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: |
           export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features ocr,cuda --locked --verbose
+          cargo build --release --features cuda --locked --verbose
+
+      - name: Installa patchelf (per il RPATH di libtesseract)
+        run: sudo apt-get install -y --no-install-recommends patchelf
+
+      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
+        run: |
+          set -e
+          W=$(mktemp -d)
+          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
+          tar xzf "$W/leptonica.tar.gz" -C "$W"
+          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
+
+          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF -DENABLE_ZLIB=ON \
+            -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF \
+            -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
+          cmake --build "$W/build-lept" -j"$(nproc)"
+          cmake --install "$W/build-lept"
+
+          PKG_CONFIG_PATH="$W/out/lib/pkgconfig" cmake -S "$W/tesseract" -B "$W/build-tess" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DCMAKE_PREFIX_PATH="$W/out" -DBUILD_SHARED_LIBS=ON \
+            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF
+          cmake --build "$W/build-tess" -j"$(nproc)"
+
+          mkdir -p stage/lib
+          cp -L "$W/build-tess"/libtesseract.so.5.5.0 stage/lib/libtesseract.so.5
+          cp -L "$W/build-lept/src"/libleptonica.so.6.0.0 stage/lib/libleptonica.so.6
+          patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
+          patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
 
       - name: Impacchetta binario + lib bundlate + frontend + checksum
         run: |
@@ -513,7 +581,7 @@ jobs:
           mkdir -p dist stage/lib stage/frontend
           cp target/release/i3k-rag-engine stage/
           cp -r frontend/dist stage/frontend/dist
-          for lib in libtesseract.so.5 liblept.so.5 libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
+          for lib in libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
             path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
             if [ -z "$path" ]; then
               path=$(find /usr/local/cuda-12.8 -name "$lib" 2>/dev/null | head -1)
@@ -542,11 +610,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
-
       # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -564,10 +627,8 @@ jobs:
           npm ci
           npm run build
 
-      - name: cargo build --release --features ocr --locked
-        env:
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: cargo build --release --features ocr --locked --verbose
+      - name: cargo build --release --locked
+        run: cargo build --release --locked --verbose
 
       # Bundlato, non scaricato al bootstrap come gli altri componenti — vedi
       # commento sopra la entry qdrant/linux-aarch64 in manifest.toml: build
@@ -583,19 +644,43 @@ jobs:
           echo "61c98880fd44d915ae20192a0c3e8554cdbd5f40562d67eeff86e60c3e04f375  stage/bin/qdrant" | sha256sum -c -
           chmod +x stage/bin/qdrant
 
-      - name: Impacchetta binario + lib bundlate + frontend + qdrant + checksum
+      - name: Installa patchelf (per il RPATH di libtesseract)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
+
+      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
         run: |
-          mkdir -p dist stage/lib stage/frontend
+          set -e
+          W=$(mktemp -d)
+          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
+          tar xzf "$W/leptonica.tar.gz" -C "$W"
+          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
+
+          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF -DENABLE_ZLIB=ON \
+            -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF \
+            -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
+          cmake --build "$W/build-lept" -j"$(nproc)"
+          cmake --install "$W/build-lept"
+
+          PKG_CONFIG_PATH="$W/out/lib/pkgconfig" cmake -S "$W/tesseract" -B "$W/build-tess" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DCMAKE_PREFIX_PATH="$W/out" -DBUILD_SHARED_LIBS=ON \
+            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF
+          cmake --build "$W/build-tess" -j"$(nproc)"
+
+          mkdir -p stage/lib
+          cp -L "$W/build-tess"/libtesseract.so.5.5.0 stage/lib/libtesseract.so.5
+          cp -L "$W/build-lept/src"/libleptonica.so.6.0.0 stage/lib/libleptonica.so.6
+          patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
+          patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
+
+      - name: Impacchetta binario + lib OCR + frontend + qdrant + checksum
+        run: |
+          mkdir -p dist stage/frontend
           cp target/release/i3k-rag-engine stage/
           cp -r frontend/dist stage/frontend/dist
-          for lib in libtesseract.so.5 liblept.so.5; do
-            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
-            if [ -z "$path" ]; then
-              echo "ERRORE: $lib non trovata nell'output di ldd" >&2
-              exit 1
-            fi
-            cp -L "$path" "stage/lib/$lib"
-          done
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz.sha256"
@@ -618,11 +703,6 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get clean
-
-      - name: Installa libtesseract-dev + libleptonica-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libtesseract-dev libleptonica-dev
 
       # Repo "sbsa" = server arm64 con GPU discreta (Orion+RTX3060). Il repo
       # "arm64" di NVIDIA è tutt'altra cosa (libnvidia-container/Jetson) —
@@ -653,14 +733,14 @@ jobs:
           npm ci
           npm run build
 
-      - name: cargo build --release --features ocr,cuda --locked
+      - name: cargo build --release --features cuda --locked
         env:
           CUDA_COMPUTE_CAP: "80"
           LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
           RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
         run: |
           export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features ocr,cuda --locked --verbose
+          cargo build --release --features cuda --locked --verbose
 
       # Vedi commento sopra la entry qdrant/linux-aarch64 in manifest.toml e
       # nel job arm64 CPU: build custom col fix jemalloc page-size, bundlata
@@ -672,13 +752,45 @@ jobs:
           echo "61c98880fd44d915ae20192a0c3e8554cdbd5f40562d67eeff86e60c3e04f375  stage/bin/qdrant" | sha256sum -c -
           chmod +x stage/bin/qdrant
 
+      - name: Installa patchelf (per il RPATH di libtesseract)
+        run: sudo apt-get install -y --no-install-recommends patchelf
+
+      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
+        run: |
+          set -e
+          W=$(mktemp -d)
+          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
+          tar xzf "$W/leptonica.tar.gz" -C "$W"
+          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
+
+          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF -DENABLE_ZLIB=ON \
+            -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF \
+            -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
+          cmake --build "$W/build-lept" -j"$(nproc)"
+          cmake --install "$W/build-lept"
+
+          PKG_CONFIG_PATH="$W/out/lib/pkgconfig" cmake -S "$W/tesseract" -B "$W/build-tess" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DCMAKE_PREFIX_PATH="$W/out" -DBUILD_SHARED_LIBS=ON \
+            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF
+          cmake --build "$W/build-tess" -j"$(nproc)"
+
+          mkdir -p stage/lib
+          cp -L "$W/build-tess"/libtesseract.so.5.5.0 stage/lib/libtesseract.so.5
+          cp -L "$W/build-lept/src"/libleptonica.so.6.0.0 stage/lib/libleptonica.so.6
+          patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
+          patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
+
       - name: Impacchetta binario + lib bundlate + frontend + qdrant + checksum
         run: |
           sudo ldconfig
           mkdir -p dist stage/lib stage/frontend
           cp target/release/i3k-rag-engine stage/
           cp -r frontend/dist stage/frontend/dist
-          for lib in libtesseract.so.5 liblept.so.5 libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
+          for lib in libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
             path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
             if [ -z "$path" ]; then
               path=$(find /usr/local/cuda-12.8 -name "$lib" 2>/dev/null | head -1)
@@ -692,6 +804,144 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz.sha256"
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  release-windows-x86_64:
+    name: Release — windows x86_64 (CPU)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows-x86_64
+
+      # Cross-compilazione da runner Linux: nessun runner Windows nativo
+      # necessario. posix, non la variante win32: std::thread di Rust lo
+      # richiede. patchelf non serve qui (Windows non ha RPATH ELF), resta
+      # solo per i job Linux — Ws2_32: il CMakeLists di Tesseract cerca
+      # -lWs2_32 (maiuscolo, convenzione MSVC/Windows), mingw fornisce solo
+      # libws2_32.a minuscolo.
+      - name: Aggiungi target Windows e mingw-w64
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix
+          sudo ln -sf libws2_32.a /usr/x86_64-w64-mingw32/lib/libWs2_32.a
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # Solo CPU: --features cuda richiede nvcc, non disponibile per il
+      # target mingw — vedi commento in cima al file sul perché non è una
+      # combinazione supportata. eullm resta indipendente: la entry
+      # windows-x86_64-cuda in manifest.toml dà comunque inferenza GPU per
+      # l'LLM su Windows, è solo l'embedding (dentro questo binario) a
+      # restare su CPU lì.
+      - name: cargo build --release --target x86_64-pc-windows-gnu --locked
+        run: cargo build --release --target x86_64-pc-windows-gnu --locked --verbose
+
+      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 per Windows (mingw, linking statico)
+        run: |
+          set -e
+          W=$(mktemp -d)
+          cat > "$W/toolchain.cmake" <<'TOOLCHAIN'
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR x86_64)
+          set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+          set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+          set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+          set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          TOOLCHAIN
+
+          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
+          tar xzf "$W/leptonica.tar.gz" -C "$W"
+          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
+
+          # Senza questi flag le due DLL cercano il runtime mingw a runtime
+          # (libgcc_s_seh-1.dll/libstdc++-6.dll/libwinpthread-1.dll), assente
+          # su un Windows pulito — verificato via objdump -p: con questi
+          # flag restano solo KERNEL32/msvcrt/GDI32/USER32 (di sistema) più
+          # la sibling libleptonica.dll.
+          LINK_FLAGS="-static-libgcc -static-libstdc++ -static -lwinpthread -dynamic"
+
+          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
+            -DCMAKE_TOOLCHAIN_FILE="$W/toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF \
+            -DENABLE_ZLIB=OFF -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF \
+            -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF \
+            -DCMAKE_SHARED_LINKER_FLAGS="$LINK_FLAGS"
+          cmake --build "$W/build-lept" -j"$(nproc)"
+          cmake --install "$W/build-lept"
+
+          cmake -S "$W/tesseract" -B "$W/build-tess" \
+            -DCMAKE_TOOLCHAIN_FILE="$W/toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
+            -DCMAKE_PREFIX_PATH="$W/out" -DLeptonica_DIR="$W/out/lib/cmake/leptonica" \
+            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF \
+            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF \
+            -DCMAKE_SHARED_LINKER_FLAGS="$LINK_FLAGS" -DCMAKE_EXE_LINKER_FLAGS="$LINK_FLAGS"
+          cmake --build "$W/build-tess" -j"$(nproc)"
+
+          mkdir -p stage/lib
+          cp "$W/build-tess/bin/libtesseract55.dll" stage/lib/
+          cp "$W/build-lept/bin/libleptonica.dll" stage/lib/
+
+      # i3k-rag-engine.exe stesso dipende da libstdc++-6.dll (verificato con
+      # objdump -p): esaxx-rs, il crate C++ che tokenizers usa per
+      # l'algoritmo Unigram, lo collega dinamicamente, e a differenza di
+      # Tesseract/Leptonica — costruiti da noi via CMake, dove -static-
+      # libgcc/-static-libstdc++ funzionano davvero — qui il collegamento
+      # finale passa dal driver C di rustc (gcc, non g++), che quei flag non
+      # li applica allo stesso modo: verificato con un confronto diretto,
+      # non assunto — build minime isolate con lo stesso identico toolchain
+      # confermano che via g++ il flag funziona, via cargo/rustc no,
+      # indipendentemente da come lo si passa (RUSTFLAGS, .cargo/config.toml,
+      # -C linker=g++, crt-static: nessuna combinazione ha eliminato la
+      # dipendenza). Soluzione più semplice: bundlare la DLL, come già si fa
+      # con le redistributable CUDA su Linux. Va ACCANTO all'exe, non in
+      # lib/: a differenza di pdfium/Tesseract (caricate a runtime via
+      # libloading con path esplicito) questa è una dipendenza di caricamento
+      # del PE stesso, risolta da Windows PRIMA che main() parta — l'ordine
+      # di ricerca DLL di Windows controlla la cartella dell'eseguibile, non
+      # le sue sottocartelle.
+      #
+      # .zip, non .tar.gz — convenzione Windows. pdfium.dll NON è bundlato
+      # qui: arriva già dal manifest al primo avvio (bblanchon/pdfium-
+      # binaries), come su Linux. qdrant.exe/eullm.exe idem, entrambi già
+      # pinnati in manifest.toml per windows-x86_64 — non binari da
+      # costruire o scaricare in questo workflow.
+      - name: Impacchetta binario + runtime mingw + lib OCR + frontend + checksum
+        run: |
+          mkdir -p dist stage/frontend
+          cp target/x86_64-pc-windows-gnu/release/i3k-rag-engine.exe stage/
+          cp /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll stage/
+          cp -r frontend/dist stage/frontend/dist
+          VERSION="${GITHUB_REF#refs/tags/}"
+          (cd stage && zip -r "../dist/i3k-rag-engine-${VERSION}-windows-x86_64.zip" .)
+          sha256sum "dist/i3k-rag-engine-${VERSION}-windows-x86_64.zip" > "dist/i3k-rag-engine-${VERSION}-windows-x86_64.zip.sha256"
 
       - uses: softprops/action-gh-release@v3
         with:

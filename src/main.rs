@@ -190,8 +190,28 @@ fn open_browser(port: u16) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
         tracing::info!("opening browser: {url}");
-        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        let _ = spawn_open_url(&url);
     });
+}
+
+/// Launches the platform's "open this in the default application" command.
+/// Best-effort: the caller only logs, never surfaces a failure — not being
+/// able to auto-open a browser tab is not worth failing startup over.
+#[cfg(target_os = "windows")]
+fn spawn_open_url(url: &str) -> std::io::Result<std::process::Child> {
+    // `start` is a cmd builtin, not its own executable — must go through cmd.
+    // The empty "" is required: `start` treats the first quoted argument as
+    // the window title, so without it a URL passed as the "title" slot is
+    // silently not opened.
+    std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn()
+}
+#[cfg(target_os = "macos")]
+fn spawn_open_url(url: &str) -> std::io::Result<std::process::Child> {
+    std::process::Command::new("open").arg(url).spawn()
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_open_url(url: &str) -> std::io::Result<std::process::Child> {
+    std::process::Command::new("xdg-open").arg(url).spawn()
 }
 
 async fn load_embedding(settings: &config::Settings) -> Result<clients::embeddings::EmbeddingService> {

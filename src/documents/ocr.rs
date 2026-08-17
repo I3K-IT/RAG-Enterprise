@@ -1,20 +1,31 @@
-//! OCR for scanned PDFs: pdfium-render → leptess (Tesseract ita+eng).
-//! Tessdata is looked up in {data_dir}/tessdata/ — the same data_dir the
-//! manifest and bootstrap use — then in the system TESSDATA_PREFIX. Enabled
-//! with `cargo build --features ocr`.
+//! OCR for scanned PDFs: pdfium-render → Tesseract (ita+eng), both loaded at
+//! runtime through libloading. Neither the build machine nor the target
+//! machine needs a system install of either: the manifest downloads them like
+//! every other component, and this file dlopens them from a path next to the
+//! executable. Tessdata is looked up in {data_dir}/tessdata/ — the same
+//! data_dir the manifest and bootstrap use — then in the system
+//! TESSDATA_PREFIX.
 //!
-//! libpdfium is **bundlable**: loaded at runtime through dlopen, searching in
-//! order PDFIUM_DYNAMIC_LIB_PATH → next to the executable → ./lib/ next to the
-//! executable → the system search, which is convenient in development but not
-//! required for a distributed build. Official binaries for every platform live
-//! at github.com/bblanchon/pdfium-binaries.
+//! Tesseract's own build must set its RPATH/RUNPATH to `$ORIGIN` (Linux) so
+//! it finds its sibling libleptonica next to itself with no LD_LIBRARY_PATH
+//! and no dependency on the directory it happened to be built in — verified:
+//! without it, the library still loads on the machine that built it (its
+//! RUNPATH silently points at the build directory) and fails everywhere else.
+//! Windows needs no equivalent: LoadLibrary already searches the directory of
+//! the main executable first, where both DLLs are bundled.
 //!
-//! leptess/Tesseract, by contrast, links **at compile time** and has no
-//! equivalent of bind_to_library: it still needs libtesseract and libleptonica
-//! on the build system and — for a distributed build with no host dependency —
-//! an rpath pointing at a bundled ./lib/. Not set up yet.
+//! Pixels go from pdfium to Tesseract as raw RGBA (bitmap.as_rgba_bytes()),
+//! not as a re-encoded PNG: Tesseract's C API takes raw pixels directly
+//! (TessBaseAPISetImage), so encoding one just to decode it straight back
+//! inside Tesseract was pure overhead — and pulled in the `image` crate, and
+//! through it libpng/libjpeg/etc., for nothing.
 
-#[cfg(feature = "ocr")]
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
+
+use anyhow::{Context, Result};
+
+// ── libpdfium ────────────────────────────────────────────────────────────────
+
 fn resolve_pdfium_library_path() -> std::path::PathBuf {
     use pdfium_render::prelude::Pdfium;
 
@@ -44,17 +55,176 @@ fn resolve_pdfium_library_path() -> std::path::PathBuf {
     std::path::PathBuf::from(Pdfium::pdfium_platform_library_name())
 }
 
+// ── libtesseract ─────────────────────────────────────────────────────────────
+
+/// The file name libtesseract is bundled under. We build this ourselves (see
+/// the module doc), so the name is our own choice, matching the CI build.
+#[cfg(target_os = "windows")]
+const TESSERACT_LIBRARY_NAME: &str = "libtesseract55.dll";
+#[cfg(target_os = "macos")]
+const TESSERACT_LIBRARY_NAME: &str = "libtesseract.5.dylib";
+#[cfg(all(unix, not(target_os = "macos")))]
+const TESSERACT_LIBRARY_NAME: &str = "libtesseract.so.5";
+
+fn resolve_tesseract_library_path() -> std::path::PathBuf {
+    // 1. Explicit override, mirroring PDFIUM_DYNAMIC_LIB_PATH.
+    if let Ok(p) = std::env::var("TESSERACT_DYNAMIC_LIB_PATH") {
+        return std::path::PathBuf::from(p);
+    }
+
+    // 2. Next to the executable, then in ./lib/ beside it.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(TESSERACT_LIBRARY_NAME);
+            if candidate.is_file() {
+                return candidate;
+            }
+            let candidate = dir.join("lib").join(TESSERACT_LIBRARY_NAME);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    // 3. Fallback: the bare name → standard dlopen system search.
+    std::path::PathBuf::from(TESSERACT_LIBRARY_NAME)
+}
+
+type TessHandle = *mut c_void;
+
+/// The handful of Tesseract C API entry points OCR needs. Loaded once per
+/// `ocr_pdf` call rather than cached process-wide: ingestion is not hot enough
+/// for the dlopen cost to matter, and not caching means a corrupted or
+/// missing library fails the one document being ingested, not the process.
+struct TessApi {
+    _lib: libloading::Library,
+    create: unsafe extern "C" fn() -> TessHandle,
+    init3: unsafe extern "C" fn(TessHandle, *const c_char, *const c_char, c_int) -> c_int,
+    set_image: unsafe extern "C" fn(TessHandle, *const u8, c_int, c_int, c_int, c_int),
+    get_utf8_text: unsafe extern "C" fn(TessHandle) -> *mut c_char,
+    delete_text: unsafe extern "C" fn(*mut c_char),
+    end: unsafe extern "C" fn(TessHandle),
+    delete: unsafe extern "C" fn(TessHandle),
+}
+
+impl TessApi {
+    fn load(path: &std::path::Path) -> Result<Self> {
+        unsafe {
+            let lib = libloading::Library::new(path).map_err(|e| {
+                anyhow::anyhow!(
+                    "libtesseract not found at {}: {e}\n  → place it next to the executable \
+                     (or in ./lib/), or set TESSERACT_DYNAMIC_LIB_PATH",
+                    path.display()
+                )
+            })?;
+            // Deliberately NOT going through `*const ()` and `.cast()`: the
+            // struct field's declared type below drives `lib.get::<T>()`'s
+            // inference exactly as it would for a plain `let x: T = ...`, and
+            // a manual raw-pointer cast to a function-pointer type here
+            // produced a `Symbol` that crashed on the first call — verified
+            // the hard way (SIGSEGV), not a style preference.
+            macro_rules! sym {
+                ($name:literal) => {
+                    *lib.get($name).with_context(|| {
+                        format!(
+                            "libtesseract: missing symbol {}",
+                            String::from_utf8_lossy($name)
+                        )
+                    })?
+                };
+            }
+            Ok(Self {
+                create: sym!(b"TessBaseAPICreate\0"),
+                init3: sym!(b"TessBaseAPIInit3\0"),
+                set_image: sym!(b"TessBaseAPISetImage\0"),
+                get_utf8_text: sym!(b"TessBaseAPIGetUTF8Text\0"),
+                delete_text: sym!(b"TessDeleteText\0"),
+                end: sym!(b"TessBaseAPIEnd\0"),
+                delete: sym!(b"TessBaseAPIDelete\0"),
+                _lib: lib,
+            })
+        }
+    }
+}
+
+/// One OCR session: a TessBaseAPI handle plus the vtable that operates on it.
+/// `Drop` calls End then Delete unconditionally — Init3 failing before a
+/// caller gets a `TessSession` never happens, since `new()` checks the
+/// return code itself and never hands back a handle that failed to init.
+struct TessSession<'a> {
+    api: &'a TessApi,
+    handle: TessHandle,
+}
+
+impl<'a> TessSession<'a> {
+    fn new(api: &'a TessApi, tessdata_path: Option<&str>, languages: &str) -> Result<Self> {
+        unsafe {
+            let handle = (api.create)();
+            if handle.is_null() {
+                anyhow::bail!("TessBaseAPICreate returned null");
+            }
+            let session = Self { api, handle };
+
+            let dir = tessdata_path.map(CString::new).transpose()?;
+            let dir_ptr = dir.as_deref().map_or(std::ptr::null(), CStr::as_ptr);
+            let langs = CString::new(languages)?;
+            // OEM_DEFAULT = 3: whichever of the legacy/LSTM engines the
+            // installed tessdata provides — the .traineddata the manifest
+            // downloads only ships the LSTM data, so this resolves to LSTM.
+            let rc = (session.api.init3)(session.handle, dir_ptr, langs.as_ptr(), 3);
+            if rc != 0 {
+                anyhow::bail!(
+                    "TessBaseAPIInit3 failed (rc={rc})\n  → tessdata {languages} in {:?}?",
+                    tessdata_path.unwrap_or("TESSDATA_PREFIX")
+                );
+            }
+            Ok(session)
+        }
+    }
+
+    /// `rgba` must be `width * height * 4` bytes, tightly packed (no row
+    /// padding) — exactly what `PdfBitmap::as_rgba_bytes()` returns. Verified
+    /// against 3-byte RGB too, but RGBA is what pdfium already hands us, so
+    /// there is no conversion step to get wrong.
+    fn set_image_rgba(&self, rgba: &[u8], width: i32, height: i32) {
+        unsafe {
+            (self.api.set_image)(
+                self.handle,
+                rgba.as_ptr(),
+                width,
+                height,
+                4,
+                width * 4,
+            );
+        }
+    }
+
+    fn get_text(&self) -> Result<String> {
+        unsafe {
+            let raw = (self.api.get_utf8_text)(self.handle);
+            if raw.is_null() {
+                anyhow::bail!("TessBaseAPIGetUTF8Text returned null");
+            }
+            let text = CStr::from_ptr(raw).to_string_lossy().into_owned();
+            (self.api.delete_text)(raw);
+            Ok(text)
+        }
+    }
+}
+
+impl Drop for TessSession<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            (self.api.end)(self.handle);
+            (self.api.delete)(self.handle);
+        }
+    }
+}
+
 /// `data_dir` is the same data root resolved by `Settings.data.data_path()`;
 /// the bootstrap and manifest download the tessdata into
 /// `{data_dir}/tessdata/`.
-#[cfg(feature = "ocr")]
-pub fn ocr_pdf(
-    path: &std::path::Path,
-    page_count: u32,
-    data_dir: &std::path::Path,
-) -> anyhow::Result<String> {
-    use anyhow::Context;
-    use leptess::LepTess;
+pub fn ocr_pdf(path: &std::path::Path, page_count: u32, data_dir: &std::path::Path) -> Result<String> {
     use pdfium_render::prelude::*;
 
     let pdfium = Pdfium::new(
@@ -67,6 +237,8 @@ pub fn ocr_pdf(
     let doc = pdfium
         .load_pdf_from_file(path, None)
         .map_err(|e| anyhow::anyhow!("pdfium: loading {:?}: {e}", path))?;
+
+    let tess = TessApi::load(&resolve_tesseract_library_path())?;
 
     // Look for tessdata in {data_dir}/tessdata/, where the manifest downloads
     // it; if absent (development without the bootstrap) fall back to the
@@ -81,39 +253,25 @@ pub fn ocr_pdf(
         let page = doc
             .pages()
             .get(i as u16)
-            .with_context(|| format!("pdfium: pagina {i}"))?;
+            .with_context(|| format!("pdfium: page {i}"))?;
 
-        // Rasterizza a ~200 dpi (A4: 1654×2339 px)
+        // Rasterise at ~200 dpi (A4: 1654×2339 px)
         let bitmap = page
             .render_with_config(
                 &PdfRenderConfig::new()
                     .set_target_width(1654)
                     .set_maximum_height(2339),
             )
-            .with_context(|| format!("pdfium: render pagina {i}"))?;
+            .with_context(|| format!("pdfium: render page {i}"))?;
 
-        // set_image_from_mem si aspetta un formato immagine completo (PNG), NON raw bytes
-        let img = bitmap.as_image();
-        let mut png_buf: Vec<u8> = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut png_buf),
-            image::ImageFormat::Png,
-        )
-        .with_context(|| format!("png encode pagina {i}"))?;
+        let rgba = bitmap.as_rgba_bytes();
+        let (width, height) = (bitmap.width() as i32, bitmap.height() as i32);
 
-        let mut lt = LepTess::new(tessdata_path.as_deref(), "ita+eng").map_err(|e| {
-            anyhow::anyhow!(
-                "leptess init: {e}\n  → tessdata ita+eng in {:?}?",
-                tessdata_path.as_deref().unwrap_or("TESSDATA_PREFIX")
-            )
-        })?;
-        lt.set_image_from_mem(&png_buf)
-            .map_err(|e| anyhow::anyhow!("leptess set_image pagina {i}: {e}"))?;
-        let page_text = lt
-            .get_utf8_text()
-            .map_err(|e| anyhow::anyhow!("OCR pagina {i}: {e}"))?;
+        let session = TessSession::new(&tess, tessdata_path.as_deref(), "ita+eng")?;
+        session.set_image_rgba(&rgba, width, height);
+        let page_text = session.get_text().with_context(|| format!("OCR page {i}"))?;
 
-        tracing::debug!(page = i, chars = page_text.len(), "OCR pagina");
+        tracing::debug!(page = i, chars = page_text.len(), "OCR page");
         full_text.push_str(&page_text);
         full_text.push('\n');
     }
@@ -122,23 +280,22 @@ pub fn ocr_pdf(
         file = %path.display(),
         pages = page_count,
         chars = full_text.len(),
-        "OCR completato"
+        "OCR complete"
     );
     Ok(full_text)
 }
 
-#[cfg(all(test, feature = "ocr"))]
+#[cfg(test)]
 mod smoke_test {
     use super::*;
 
-    /// The two tests below mutate PDFIUM_DYNAMIC_LIB_PATH, a process-wide
-    /// environment variable. cargo test runs tests in parallel by default, so
-    /// without serialisation one test could read the variable the other has
-    /// just set or removed.
+    /// The tests below mutate process-wide environment variables. cargo test
+    /// runs tests in parallel by default, so without serialisation one test
+    /// could read the variable the other has just set or removed.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Builds a minimal PDF with no dependencies, containing one line of
-    /// vector text, so the pdfium (rasterise) → leptess (OCR) pipeline has
+    /// vector text, so the pdfium (rasterise) → Tesseract (OCR) pipeline has
     /// something real to read.
     fn minimal_pdf_with_text(text: &str) -> Vec<u8> {
         let objects = [
@@ -173,93 +330,82 @@ mod smoke_test {
         out
     }
 
-    /// Smoke test: checks that libpdfium is resolved and loaded from a
-    /// NON-system path — next to the test executable, the "bundled" layout —
-    /// and that the pdfium → PNG → leptess pipeline really does extract the
-    /// expected text.
+    /// Smoke test: checks that both libpdfium and libtesseract are resolved
+    /// and loaded from a NON-system path — next to the test executable, the
+    /// "bundled" layout — and that the pdfium → raw RGBA → Tesseract pipeline
+    /// really does extract the expected text.
     ///
     /// Requires (locally only, not in CI):
-    ///   - PDFIUM_LIB_FOR_TEST=/path/to/libpdfium.so (a copy downloaded from
-    ///     github.com/bblanchon/pdfium-binaries; it must NOT be on a system path)
-    ///   - tessdata ita+eng installed (see BUILD.md §2a)
+    ///   - PDFIUM_LIB_FOR_TEST=/path/to/libpdfium.so (downloaded from
+    ///     github.com/bblanchon/pdfium-binaries; must NOT be on a system path)
+    ///   - TESSERACT_LIB_FOR_TEST=/path/to/libtesseract.so.5, built with
+    ///     RPATH=$ORIGIN and a sibling libleptonica in the same directory
+    ///   - tessdata ita+eng — set TESSDATA_DIR_FOR_TEST, or install to the
+    ///     system TESSDATA_PREFIX
     #[test]
-    fn bundled_pdfium_path_resolution_and_ocr_roundtrip() {
+    fn bundled_libraries_path_resolution_and_ocr_roundtrip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let Ok(scratch_lib) = std::env::var("PDFIUM_LIB_FOR_TEST") else {
-            eprintln!("PDFIUM_LIB_FOR_TEST unset — skipping (see the test docs)");
+        let (Ok(pdfium_scratch), Ok(tesseract_scratch)) = (
+            std::env::var("PDFIUM_LIB_FOR_TEST"),
+            std::env::var("TESSERACT_LIB_FOR_TEST"),
+        ) else {
+            eprintln!("PDFIUM_LIB_FOR_TEST/TESSERACT_LIB_FOR_TEST unset — skipping (see the test docs)");
             return;
         };
 
-        // Simulate the release layout: copy libpdfium next to the current test
-        // executable, then remove any explicit override so
-        // resolve_pdfium_library_path() is forced down the "next to the
-        // executable" branch.
+        // Simulate the release layout: copy both libraries (and libtesseract's
+        // own sibling libleptonica, if TESSERACT_LIB_FOR_TEST's directory has
+        // one) next to the current test executable, then clear any explicit
+        // override so both resolve_*_library_path() functions are forced down
+        // the "next to the executable" branch.
         std::env::remove_var("PDFIUM_DYNAMIC_LIB_PATH");
+        std::env::remove_var("TESSERACT_DYNAMIC_LIB_PATH");
         let exe = std::env::current_exe().expect("current_exe");
         let dir = exe.parent().expect("exe parent");
-        let dest = dir.join(
-            pdfium_render::prelude::Pdfium::pdfium_platform_library_name(),
-        );
-        std::fs::copy(&scratch_lib, &dest).expect("copying libpdfium next to the test binary");
+
+        let pdfium_dest = dir.join(pdfium_render::prelude::Pdfium::pdfium_platform_library_name());
+        std::fs::copy(&pdfium_scratch, &pdfium_dest).expect("copying libpdfium next to the test binary");
+
+        let tesseract_dest = dir.join(TESSERACT_LIBRARY_NAME);
+        std::fs::copy(&tesseract_scratch, &tesseract_dest).expect("copying libtesseract next to the test binary");
+        let mut copied_siblings = vec![pdfium_dest.clone(), tesseract_dest.clone()];
+        if let Some(src_dir) = std::path::Path::new(&tesseract_scratch).parent() {
+            if let Ok(entries) = std::fs::read_dir(src_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.contains("leptonica") {
+                        let dest = dir.join(&*name);
+                        if std::fs::copy(entry.path(), &dest).is_ok() {
+                            copied_siblings.push(dest);
+                        }
+                    }
+                }
+            }
+        }
 
         let pdf_bytes = minimal_pdf_with_text("i3k OCR bundling smoke test");
         let tmp_pdf = std::env::temp_dir().join("i3k_ocr_smoke.pdf");
         std::fs::write(&tmp_pdf, &pdf_bytes).expect("writing the test PDF");
 
-        // An "empty" data_dir with no tessdata/ inside, so ocr_pdf falls back
-        // to the system TESSDATA_PREFIX.
-        let empty_data_dir = std::env::temp_dir().join("i3k_ocr_smoke_empty_data_dir");
-        let _ = std::fs::create_dir_all(&empty_data_dir);
+        let data_dir = std::env::var("TESSDATA_DIR_FOR_TEST")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir().join("i3k_ocr_smoke_empty_data_dir"));
+        let _ = std::fs::create_dir_all(&data_dir);
 
-        let result = ocr_pdf(&tmp_pdf, 1, &empty_data_dir);
+        let result = ocr_pdf(&tmp_pdf, 1, &data_dir);
 
         // Clean up before the assertions, so nothing is left behind even if
         // the test fails.
-        let _ = std::fs::remove_file(&dest);
+        for f in &copied_siblings {
+            let _ = std::fs::remove_file(f);
+        }
         let _ = std::fs::remove_file(&tmp_pdf);
-        let _ = std::fs::remove_dir_all(&empty_data_dir);
 
-        let text = result.expect("ocr_pdf must succeed with libpdfium bundled next to the executable");
+        let text = result.expect("ocr_pdf must succeed with both libraries bundled next to the executable");
         assert!(
             text.to_lowercase().contains("bundling") || text.to_lowercase().contains("smoke"),
-            "unexpected OCR text: {text:?}"
-        );
-    }
-
-    /// Checks that tessdata is read from {data_dir}/tessdata/, the path the
-    /// manifest downloads it to, and NOT from an environment variable
-    /// disconnected from the rest of the system — an earlier bug read
-    /// I3K_DATA_DIR, which nothing ever set.
-    ///
-    /// Requires TESSDATA_DIR_FOR_TEST=/path/to/dir/containing/tessdata/{ita,eng}.traineddata
-    /// — the data root, mirroring {data} in the manifest, not the tessdata
-    /// folder itself. Skipped gracefully when unset.
-    #[test]
-    fn tessdata_resolved_from_data_dir() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let (Ok(scratch_lib), Ok(data_dir)) = (
-            std::env::var("PDFIUM_LIB_FOR_TEST"),
-            std::env::var("TESSDATA_DIR_FOR_TEST"),
-        ) else {
-            eprintln!("PDFIUM_LIB_FOR_TEST/TESSDATA_DIR_FOR_TEST unset — skipping");
-            return;
-        };
-        std::env::set_var("PDFIUM_DYNAMIC_LIB_PATH", &scratch_lib);
-
-        let pdf_bytes = minimal_pdf_with_text("data dir tessdata roundtrip");
-        let tmp_pdf = std::env::temp_dir().join("i3k_ocr_smoke_datadir.pdf");
-        std::fs::write(&tmp_pdf, &pdf_bytes).expect("writing the test PDF");
-
-        let result = ocr_pdf(&tmp_pdf, 1, std::path::Path::new(&data_dir));
-
-        std::env::remove_var("PDFIUM_DYNAMIC_LIB_PATH");
-        let _ = std::fs::remove_file(&tmp_pdf);
-
-        let text = result.expect("ocr_pdf must succeed reading tessdata from {data_dir}/tessdata/");
-        assert!(
-            text.to_lowercase().contains("roundtrip") || text.to_lowercase().contains("data dir"),
             "unexpected OCR text: {text:?}"
         );
     }

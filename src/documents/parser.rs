@@ -3,7 +3,7 @@
 //! Extraction chain, following ocr_service.py:
 //! 1. .txt/.md/.csv  → read directly as UTF-8
 //! 2. PDF            → pdf_oxide (text_ratio > 0.5 AND len > 500)
-//!                     → optional OCR when the "ocr" feature is enabled
+//!                     → OCR fallback below that ratio (see ocr.rs)
 //! 3. DOCX           → docx-rs
 //! 4. XLSX/XLS       → calamine
 //! 5. HTML           → scraper
@@ -42,7 +42,6 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>
 
 // ── PDF ───────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(not(feature = "ocr"), allow(unused_variables))]
 fn extract_pdf(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
     let doc = pdf_oxide::PdfDocument::open(path)
         .with_context(|| format!("pdf_oxide open {}", path.display()))?;
@@ -80,22 +79,14 @@ fn extract_pdf(path: &Path, data_dir: &Path) -> Result<(String, Option<u32>)> {
         return Ok((full_text, Some(page_count)));
     }
 
-    // Not enough text: fall back to OCR when available
-    #[cfg(feature = "ocr")]
-    {
-        let ocr_text = super::ocr::ocr_pdf(path, page_count, data_dir)?;
-        Ok((ocr_text, Some(page_count)))
-    }
-
-    #[cfg(not(feature = "ocr"))]
-    {
-        tracing::warn!(
-            file = %path.display(),
-            text_ratio = format!("{:.0}%", text_ratio * 100.0).as_str(),
-            "PDF probabilmente scansionato — compila con --features ocr"
-        );
-        Ok((full_text, Some(page_count)))
-    }
+    // Not enough text: probably a scanned page, fall back to OCR.
+    tracing::info!(
+        file = %path.display(),
+        text_ratio = format!("{:.0}%", text_ratio * 100.0).as_str(),
+        "text ratio too low, falling back to OCR"
+    );
+    let ocr_text = super::ocr::ocr_pdf(path, page_count, data_dir)?;
+    Ok((ocr_text, Some(page_count)))
 }
 
 // ── DOCX ──────────────────────────────────────────────────────────────────────

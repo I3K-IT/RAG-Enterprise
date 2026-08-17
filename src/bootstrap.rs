@@ -26,7 +26,6 @@
 use anyhow::{bail, Context, Result};
 use futures_util::{stream, TryStreamExt};
 use serde::Deserialize;
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -57,13 +56,26 @@ struct Component {
     /// Path carrying the "{data}" placeholder, resolved at runtime.
     dest: String,
     exec: bool,
-    /// When present, `url` points at a .tar.gz archive and this is the path
-    /// INSIDE it of the file to extract into `dest`. sha256 and size refer to
-    /// the EXTRACTED file, not the archive: verification happens after
-    /// extraction, so the stamp-file fast path (which hashes `dest`) works
-    /// unchanged in both cases.
+    /// When present, `url` points at an archive (.tar.gz, or .zip when the
+    /// URL ends in .zip — see `extract_and_verify_member`) and this is the
+    /// path INSIDE it of the file to extract into `dest`. sha256 and size
+    /// refer to the EXTRACTED file, not the archive: verification happens
+    /// after extraction, so the stamp-file fast path (which hashes `dest`)
+    /// works unchanged in both cases.
     #[serde(default)]
     archive_member: Option<String>,
+    /// When true, `url` points at a .zip that must be extracted WHOLESALE
+    /// into `dest` (a directory, not a file) instead of pulling out one
+    /// named member — for archives that genuinely bundle several files
+    /// belonging together, with no single "member" to name (e.g. eullm.exe
+    /// plus the CUDA DLLs it dlopens from its own directory on Windows).
+    /// Mutually exclusive with archive_member. sha256/size refer to the
+    /// ARCHIVE itself — the one thing actually downloaded, reproducible with
+    /// a plain `sha256sum` on the .zip, unlike per-file hashes that would
+    /// have to be computed by hand for every file inside. See
+    /// `ensure_component_dir`.
+    #[serde(default)]
+    unpack_dir: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +99,11 @@ mod manifest_tests {
             assert_eq!(comp.sha256.len(), 64, "{}: sha256 is not 64 hex chars", comp.name);
             assert!(comp.dest.contains("{data}"), "{}: dest lacks the {{data}} placeholder", comp.name);
             assert!(comp.url.starts_with("https://"), "{}: url is not https", comp.name);
+            assert!(
+                comp.archive_member.is_none() || !comp.unpack_dir,
+                "{}: archive_member and unpack_dir are mutually exclusive",
+                comp.name
+            );
         }
         for name in ["tessdata-ita", "tessdata-eng"] {
             let comp = manifest
@@ -269,6 +286,93 @@ mod archive_extraction_tests {
         );
         assert_eq!(comp.archive_member.as_deref(), Some("lib/libpdfium.so"));
     }
+
+    /// The .zip counterpart of the test above — qdrant's official Windows
+    /// release ships as .zip, not .tar.gz, which is why extract_zip_member
+    /// exists at all.
+    ///
+    /// Requires (locally only, not in CI):
+    ///   QDRANT_WIN_ZIP_FOR_TEST=/path/to/qdrant-x86_64-pc-windows-msvc.zip
+    ///   (downloaded from github.com/qdrant/qdrant/releases)
+    /// Skipped gracefully when unset.
+    #[test]
+    fn extract_zip_member_matches_manifest_qdrant_windows_entry() {
+        let Ok(archive) = std::env::var("QDRANT_WIN_ZIP_FOR_TEST") else {
+            eprintln!("QDRANT_WIN_ZIP_FOR_TEST unset — skipping (see the test docs)");
+            return;
+        };
+
+        let out = std::env::temp_dir().join("i3k_qdrant_win_extract_test.exe");
+        let _ = std::fs::remove_file(&out);
+
+        extract_zip_member(Path::new(&archive), "qdrant.exe", &out).expect("extraction must succeed");
+
+        let got = sha256_file(&out).expect("sha256 of the extracted file");
+        let _ = std::fs::remove_file(&out);
+
+        let manifest = load_manifest().expect("manifest.toml must parse");
+        let comp = manifest
+            .component
+            .iter()
+            .find(|c| c.name == "qdrant" && c.target.as_deref() == Some("windows-x86_64"))
+            .expect("qdrant windows-x86_64 component missing from the manifest");
+
+        assert_eq!(
+            got, comp.sha256,
+            "the extracted file does not match the sha256 pinned in manifest.toml"
+        );
+        assert_eq!(comp.archive_member.as_deref(), Some("qdrant.exe"));
+    }
+
+    /// The unpack_dir counterpart of the two tests above: eullm's Windows
+    /// CUDA build ships as a .zip bundling eullm.exe with the three CUDA
+    /// runtime DLLs it dlopens from its own directory — there is no single
+    /// "member" to extract, hence Component::unpack_dir instead of
+    /// archive_member (see ensure_component_dir). Checks both halves: the
+    /// ARCHIVE's sha256 matches what's pinned — the same bytes anyone can
+    /// confirm with a plain `sha256sum` on the .zip, without extracting
+    /// anything — and that extraction actually produces every file the
+    /// running eullm.exe needs beside it.
+    ///
+    /// Requires (locally only, not in CI):
+    ///   EULLM_WIN_CUDA_ZIP_FOR_TEST=/path/to/eullm-windows-x64-cuda-12.8.zip
+    ///   (downloaded from github.com/eullm/eullm/releases)
+    /// Skipped gracefully when unset.
+    #[test]
+    fn extract_zip_all_matches_manifest_eullm_windows_cuda_entry() {
+        let Ok(archive) = std::env::var("EULLM_WIN_CUDA_ZIP_FOR_TEST") else {
+            eprintln!("EULLM_WIN_CUDA_ZIP_FOR_TEST unset — skipping (see the test docs)");
+            return;
+        };
+
+        let got = sha256_file(Path::new(&archive)).expect("sha256 of the archive");
+
+        let manifest = load_manifest().expect("manifest.toml must parse");
+        let comp = manifest
+            .component
+            .iter()
+            .find(|c| c.name == "eullm" && c.target.as_deref() == Some("windows-x86_64-cuda"))
+            .expect("eullm windows-x86_64-cuda component missing from the manifest");
+
+        assert_eq!(
+            got, comp.sha256,
+            "the archive does not match the sha256 pinned in manifest.toml"
+        );
+        assert!(comp.unpack_dir, "windows-x86_64-cuda must use unpack_dir, not archive_member");
+        assert!(comp.archive_member.is_none());
+
+        let out_dir = std::env::temp_dir().join("i3k_eullm_win_cuda_extract_test");
+        let _ = std::fs::remove_dir_all(&out_dir);
+        std::fs::create_dir_all(&out_dir).expect("create test output dir");
+
+        extract_zip_all(Path::new(&archive), &out_dir).expect("extraction must succeed");
+
+        for f in ["eullm.exe", "cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"] {
+            assert!(out_dir.join(f).is_file(), "extraction did not produce {f}");
+        }
+
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
 }
 
 #[cfg(test)]
@@ -319,6 +423,23 @@ mod eullm_update_tests {
 
         for comp in eullm_components {
             let asset_name = comp.url.rsplit('/').next().unwrap_or("");
+            if comp.unpack_dir {
+                // Multi-file archive: the hot-swap path in maybe_update_eullm
+                // only knows how to replace a single file, so this target is
+                // deliberately NOT wired into the version check (see the
+                // comment on eullm_asset_hint's catch-all arm). Assert the
+                // exclusion is still in effect, so an accidental hint added
+                // here without teaching maybe_update_eullm about unpack_dir
+                // fails loudly instead of silently mis-installing later.
+                assert!(
+                    eullm_asset_hint(comp.target.as_deref()).is_none(),
+                    "target {:?} is unpack_dir but has an asset hint — the auto-update path \
+                     cannot handle a multi-file archive, remove the hint or make \
+                     maybe_update_eullm aware of unpack_dir",
+                    comp.target
+                );
+                continue;
+            }
             let hint = eullm_asset_hint(comp.target.as_deref()).unwrap_or_else(|| {
                 panic!(
                     "eullm_asset_hint does not recognise target {:?} (pinned asset: {asset_name:?}) \
@@ -390,29 +511,30 @@ fn cix_p1_isa_available() -> bool {
 /// Order matters: `select_components` takes the FIRST match per dest.
 ///
 /// Target scheme:
-///   linux-x86_64-cuda   — Linux x86_64 with an NVIDIA GPU (driver loaded)
-///   linux-x86_64        — Linux x86_64 CPU-only / fallback
-///   linux-aarch64-cuda  — Linux ARM64 with an NVIDIA GPU (e.g. Orion + PCIe dGPU)
-///   linux-aarch64-cix   — Linux ARM64 with the full Armv9.2 ISA (CIX P1)
-///   linux-aarch64       — Linux ARM64 CPU-only / fallback
-///   darwin-arm64, darwin-x86_64, windows-x86_64, windows-arm64
+///   linux-x86_64-cuda    — Linux x86_64 with an NVIDIA GPU (driver loaded)
+///   linux-x86_64         — Linux x86_64 CPU-only / fallback
+///   linux-aarch64-cuda   — Linux ARM64 with an NVIDIA GPU (e.g. Orion + PCIe dGPU)
+///   linux-aarch64-cix    — Linux ARM64 with the full Armv9.2 ISA (CIX P1)
+///   linux-aarch64        — Linux ARM64 CPU-only / fallback
+///   windows-x86_64-cuda  — Windows x86_64 with an NVIDIA GPU
+///   windows-x86_64       — Windows x86_64 CPU-only / fallback
+///   darwin-arm64, darwin-x86_64, windows-arm64
 fn current_targets() -> Vec<&'static str> {
     let mut t = Vec::new();
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        // CUDA: /dev/nvidia0 exists when the NVIDIA driver is loaded.
-        if std::path::Path::new("/dev/nvidia0").exists() {
+        if nvidia_gpu_present() {
             t.push("linux-x86_64-cuda");
         }
         t.push("linux-x86_64");
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
-        // Same heuristic as x86_64 — it also holds for ARM64 with a discrete
+        // Same check as x86_64 — it also holds for ARM64 with a discrete
         // NVIDIA GPU over PCIe (e.g. a Radxa Orion O6 with an external card),
         // not just for Jetson-style SoCs.
-        if std::path::Path::new("/dev/nvidia0").exists() {
+        if nvidia_gpu_present() {
             t.push("linux-aarch64-cuda");
         }
         // Between -cuda and the generic one: if an NVIDIA GPU is present that
@@ -432,11 +554,38 @@ fn current_targets() -> Vec<&'static str> {
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     t.push("darwin-x86_64");
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    t.push("windows-x86_64");
+    {
+        if nvidia_gpu_present() {
+            t.push("windows-x86_64-cuda");
+        }
+        t.push("windows-x86_64");
+    }
     #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
     t.push("windows-arm64");
 
     t
+}
+
+/// Whether an NVIDIA GPU with a working driver is present, on whichever OS
+/// this is running on.
+///
+/// Not `/dev/nvidia0` (Linux-only — the earlier version of this check): the
+/// driver installer puts `nvidia-smi` on PATH on every platform it supports,
+/// `Command::new("nvidia-smi")` resolves it the same way a shell would
+/// (including trying the `.exe` suffix on Windows, via PATHEXT), and success
+/// means more than a device node existing — the user-mode driver stack is
+/// actually answering. Same command bench.rs already uses for the same
+/// reason.
+#[cfg(any(
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "windows", target_arch = "x86_64"),
+))]
+fn nvidia_gpu_present() -> bool {
+    std::process::Command::new("nvidia-smi")
+        .arg("--query-gpu=name")
+        .arg("--format=csv,noheader")
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 /// Selects the components to download and verify.
@@ -693,8 +842,7 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
     }
 
     if comp.exec {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))
+        set_executable(dest)
             .await
             .with_context(|| format!("chmod +x {}", dest.display()))?;
     }
@@ -751,9 +899,14 @@ async fn extract_and_verify_member(
     let member_owned = member.to_owned();
     let extracted_path = extracted.clone();
     let name = comp.name.clone();
+    let is_zip = comp.url.ends_with(".zip");
     tokio::task::spawn_blocking(move || {
         tracing::info!("{name}: extracting {member_owned} from the archive…");
-        extract_tar_gz_member(&archive_path, &member_owned, &extracted_path)
+        if is_zip {
+            extract_zip_member(&archive_path, &member_owned, &extracted_path)
+        } else {
+            extract_tar_gz_member(&archive_path, &member_owned, &extracted_path)
+        }
     })
     .await
     .context("spawn_blocking extraction")??;
@@ -806,6 +959,151 @@ fn extract_tar_gz_member(archive_path: &Path, member: &str, out_path: &Path) -> 
         }
     }
     bail!("member '{member}' not found in archive {}", archive_path.display())
+}
+
+/// Extracts a single file (`member`, the path inside the archive) from a
+/// .zip and writes it to `out_path` — the Windows counterpart of
+/// `extract_tar_gz_member`, picked by `extract_and_verify_member` when
+/// `comp.url` ends in `.zip` (qdrant's official Windows release; pdfium's own
+/// Windows builds are .tar.gz like everything else, so this only exists for
+/// components that genuinely ship as .zip). Synchronous and blocking: call it
+/// inside spawn_blocking.
+fn extract_zip_member(archive_path: &Path, member: &str, out_path: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive_path)
+        .with_context(|| format!("opening archive {}", archive_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("reading zip {}", archive_path.display()))?;
+    let mut entry = archive
+        .by_name(member)
+        .with_context(|| format!("member '{member}' not found in archive {}", archive_path.display()))?;
+    let mut out =
+        std::fs::File::create(out_path).with_context(|| format!("creating {}", out_path.display()))?;
+    std::io::copy(&mut entry, &mut out).context("extracting file")?;
+    Ok(())
+}
+
+/// The unpack_dir case: `comp.url` is a .zip that must be extracted
+/// WHOLESALE into `dest`'s PARENT directory, because the archive genuinely
+/// bundles several files that belong together and there is no single
+/// "member" to pull out (see `Component::unpack_dir`). `dest` itself still
+/// names the one file every OTHER function in this module cares about (the
+/// executable eullm actually spawns) — exactly like every other component;
+/// only its sibling DLLs come along for the ride into the same directory.
+/// That parent directory must belong to this component alone (a dedicated
+/// `.../eullm-cuda/` next to the shared `bin/`, not `bin/` itself): a stale
+/// install is repaired by wiping the whole directory, which would take out
+/// unrelated files — qdrant.exe, another target's eullm — if it were
+/// shared.
+///
+/// comp.sha256/size verify the ARCHIVE itself, exactly like the
+/// no-archive_member case in `verify_and_place`, just followed by a full
+/// unzip instead of a rename. The stamp file (the same `stamp_path()` used
+/// everywhere else) records that archive hash next to `dest` once
+/// extraction succeeds, so an intact install is trusted on the next start
+/// without re-downloading hundreds of MB just to re-verify it. When the
+/// stamp is missing or stale, the whole containing directory is wiped and
+/// rebuilt from scratch — there is no cheaper partial-repair path, same as
+/// every other component.
+async fn ensure_component_dir(comp: &Component, dest: &Path) -> Result<()> {
+    let out_dir = dest.parent().context("dest has no parent directory")?.to_owned();
+    let stamp = stamp_path(dest);
+
+    if dest.exists() {
+        if let Ok(stamped) = tokio::fs::read_to_string(&stamp).await {
+            if stamped.trim() == comp.sha256 {
+                let ver = comp.version.as_deref().map(|v| format!(" ({v})")).unwrap_or_default();
+                tracing::info!("{}{ver}: present and verified", comp.name);
+                return Ok(());
+            }
+        }
+        tracing::warn!("{}: stamp missing or mismatched, re-downloading", comp.name);
+        tokio::fs::remove_dir_all(&out_dir).await.ok();
+        remove_stamp(dest).await;
+    }
+
+    tokio::fs::create_dir_all(&out_dir).await?;
+
+    let partial = out_dir.join(".download.partial");
+    tokio::fs::remove_file(&partial).await.ok();
+    parallel_download(&comp.url, &partial, &comp.name, download_connections()).await?;
+
+    let expected = comp.sha256.clone();
+    let p = partial.clone();
+    let name = comp.name.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        tracing::info!("{name}: verifying sha256 of the archive…");
+        sha256_file(&p)
+    })
+    .await
+    .context("spawn_blocking sha256")?
+    .context("computing sha256")?;
+
+    if got != expected {
+        tokio::fs::remove_file(&partial).await.ok();
+        bail!(
+            "{}: wrong sha256 after download\n  expected: {}\n  got:      {}",
+            comp.name,
+            expected,
+            got
+        );
+    }
+
+    let archive_path = partial.clone();
+    let extract_dir = out_dir.clone();
+    let name2 = comp.name.clone();
+    tokio::task::spawn_blocking(move || {
+        tracing::info!("{name2}: extracting into {}…", extract_dir.display());
+        extract_zip_all(&archive_path, &extract_dir)
+    })
+    .await
+    .context("spawn_blocking extraction")??;
+
+    tokio::fs::remove_file(&partial).await.ok(); // the archive is no longer needed
+
+    if !dest.exists() {
+        bail!(
+            "{}: extraction completed but {} is missing from the archive",
+            comp.name,
+            dest.display()
+        );
+    }
+    if comp.exec {
+        set_executable(dest).await.with_context(|| format!("chmod +x {}", dest.display()))?;
+    }
+    write_stamp(dest, &got).await;
+
+    tracing::info!("{}: installed at {}", comp.name, dest.display());
+    Ok(())
+}
+
+/// Extracts every file in a .zip into `out_dir`, preserving the archive's
+/// internal directory structure — the counterpart of `extract_zip_member`
+/// for components whose dest is a whole directory rather than one named
+/// file (see `Component::unpack_dir`). Synchronous and blocking: call it
+/// inside spawn_blocking.
+fn extract_zip_all(archive_path: &Path, out_dir: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive_path)
+        .with_context(|| format!("opening archive {}", archive_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("reading zip {}", archive_path.display()))?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).context("reading zip entry")?;
+        let Some(relative) = entry.enclosed_name() else {
+            bail!("zip entry {i} has an unsafe path, refusing to extract");
+        };
+        let out_path = out_dir.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path)?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out = std::fs::File::create(&out_path)
+            .with_context(|| format!("creating {}", out_path.display()))?;
+        std::io::copy(&mut entry, &mut out).context("extracting file")?;
+    }
+    Ok(())
 }
 
 /// Verifies a component already present on disk.
@@ -920,6 +1218,16 @@ fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
         Some("linux-aarch64-cuda") => Some("eullm-linux-arm64-cuda-12.8"),
         Some("linux-aarch64-cix") => Some("eullm-linux-arm64-cix-p1"),
         Some("linux-aarch64") => Some("eullm-linux-arm64"),
+        Some("windows-x86_64") => Some("eullm-windows-x64.exe"),
+        // windows-x86_64-cuda deliberately has no hint here: its manifest
+        // entry is unpack_dir (a 4-file archive — eullm.exe plus three CUDA
+        // DLLs, see ensure_component_dir), and this hot-swap path only knows
+        // how to replace a single file (see the rename near the end of
+        // maybe_update_eullm). Falling through to None skips the version
+        // check for it, same as for any other target with no known asset —
+        // updates for that target still happen, just only through a
+        // manifest.toml bump like every pin was updated before this feature
+        // existed.
         _ => None,
     }
 }
@@ -1035,7 +1343,11 @@ async fn effective_eullm_component(pinned: &Component, data_dir: &Path) -> Compo
 /// component — then check whether an even newer version exists.
 async fn ensure_eullm_component(pinned: &Component, dest: &Path, data_dir: &Path) -> Result<()> {
     let effective = effective_eullm_component(pinned, data_dir).await;
-    ensure_component(&effective, dest).await?;
+    if effective.unpack_dir {
+        ensure_component_dir(&effective, dest).await?;
+    } else {
+        ensure_component(&effective, dest).await?;
+    }
     maybe_update_eullm(pinned, dest, data_dir).await;
     Ok(())
 }
@@ -1165,8 +1477,7 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
         return;
     }
     if pinned.exec {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755)).await;
+        let _ = set_executable(dest).await;
     }
     write_stamp(dest, &sha256).await;
 
@@ -1235,8 +1546,21 @@ fn check_disk_space(selected: &[&Component], data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Marks `path` executable. A no-op on Windows, where there is no permission
+/// bit to set — `.exe` is what makes a file runnable there, and the manifest
+/// component's own file name already carries the right extension.
+#[cfg(unix)]
+async fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).await?;
+    Ok(())
+}
+#[cfg(windows)]
+async fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 fn free_space_bytes(path: &Path) -> u64 {
-    use std::ffi::CString;
     let mut p = path.to_path_buf();
     loop {
         if p.exists() {
@@ -1247,6 +1571,12 @@ fn free_space_bytes(path: &Path) -> u64 {
             None => return u64::MAX,
         }
     }
+    free_space_bytes_at(&p)
+}
+
+#[cfg(unix)]
+fn free_space_bytes_at(p: &Path) -> u64 {
+    use std::ffi::CString;
     let Ok(cpath) = CString::new(p.as_os_str().as_encoded_bytes()) else {
         return u64::MAX;
     };
@@ -1256,6 +1586,62 @@ fn free_space_bytes(path: &Path) -> u64 {
     } else {
         u64::MAX
     }
+}
+
+// GetDiskFreeSpaceExW, not a new crate dependency: one FFI declaration is
+// simpler than pulling in windows-sys for a single Win32 call, and matches
+// how the Unix side already calls libc::statvfs directly.
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetDiskFreeSpaceExW(
+        lp_directory_name: *const u16,
+        lp_free_bytes_available_to_caller: *mut u64,
+        lp_total_number_of_bytes: *mut u64,
+        lp_total_number_of_free_bytes: *mut u64,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+fn free_space_bytes_at(p: &Path) -> u64 {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = p.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut free_to_caller: u64 = 0;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_to_caller, std::ptr::null_mut(), std::ptr::null_mut())
+    };
+    if ok != 0 {
+        free_to_caller
+    } else {
+        u64::MAX
+    }
+}
+
+/// Writes the whole buffer at `offset`, without moving — or depending on — any
+/// shared file cursor, so concurrent chunk downloads can each own a clone of
+/// the same `File` and write their own byte range independently.
+///
+/// Unix's `write_at` can do a short write same as plain `write`, hence
+/// `write_all_at` looping until the buffer is exhausted; Windows' `seek_write`
+/// has the identical short-write behaviour for the identical reason, it is
+/// just missing the "_all" that would loop for you — see the Rust std docs
+/// for both, this mirrors `Write::write_all`'s own loop over `write`.
+#[cfg(unix)]
+fn write_all_at_portable(file: &std::fs::File, buf: &[u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, buf, offset)
+}
+#[cfg(windows)]
+fn write_all_at_portable(file: &std::fs::File, mut buf: &[u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        let n = file.seek_write(buf, offset)?;
+        if n == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "seek_write wrote 0 bytes"));
+        }
+        buf = &buf[n..];
+        offset += n as u64;
+    }
+    Ok(())
 }
 
 // ── Avvio processi ────────────────────────────────────────────────────────────
@@ -1740,7 +2126,7 @@ async fn download_chunk(
                 // once the attempt succeeds) — all that is left here is the
                 // write to disk.
                 let f = Arc::clone(&file);
-                tokio::task::spawn_blocking(move || f.write_all_at(&buf, start))
+                tokio::task::spawn_blocking(move || write_all_at_portable(&f, &buf, start))
                     .await
                     .context("spawn_blocking write")?
                     .context("pwrite")?;

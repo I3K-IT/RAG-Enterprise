@@ -29,17 +29,58 @@ The nightly toolchain is not required.
 
 ## 2. System dependencies
 
-A plain `cargo build` needs nothing but the Rust toolchain. The dependencies
-below are only required by the optional `ocr` and `cuda` features.
+A plain `cargo build` needs nothing but the Rust toolchain. CUDA (§2c) is the
+only build-time system dependency left, and only for `--features cuda`.
 
-### 2a. leptess → libtesseract + libleptonica (dev libs) + traineddata
+### 2a. libtesseract + libleptonica (bundled, no system-wide install)
 
-`leptess` links **at compile time** against the system `libtesseract` /
-`libleptonica`, so the dev libraries must be present on the build machine:
+Like `pdfium-render` in §2b, OCR loads `libtesseract` **at runtime from an
+explicit path**, through `libloading`, not by linking against it at compile
+time. Nothing on the build machine is required, and — unlike the old
+`leptess`-based approach — nothing on the *target* machine is either: the pair
+travels inside the release tarball itself, next to the binary.
+
+Unlike pdfium (§2b), Tesseract has no upstream prebuilt-binaries repo, so
+there is nowhere to point a manifest.toml entry at — `bootstrap.rs` never
+downloads it. Instead `ci.yml` builds both from source in every release job
+(Tesseract 5.5.0 + Leptonica 1.85.0) and bundles the result directly into the
+tarball, the same way the CUDA runtime libraries already are for the `-cuda`
+variants: a distro's Tesseract links `libcurl` and `libarchive` and pulls in
+roughly fifty shared libraries transitively, for URL-fetching and multi-page
+TIFF support this engine never uses, since it only ever feeds Tesseract raw
+pixels straight from pdfium. Built with `-DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON`
+and Leptonica's own image-codec options off (no PNG/JPEG/TIFF/WebP — again,
+unneeded when the input is already decoded pixels), the pair comes down to
+`libtesseract` + `libleptonica` and nothing else beyond libc (on Windows:
+statically-linked libgcc/libstdc++/libwinpthread instead, so the DLL pair
+needs nothing beyond what a stock Windows install already has). The Linux
+build sets `libtesseract`'s RPATH to `$ORIGIN` (via `patchelf`, in `ci.yml`)
+so it finds its sibling `libleptonica` next to itself wherever the pair is
+copied to — without it, the library only loads on the machine that happens to
+still have the original build directory, which is not a fact about the
+*library*, it just means the one test that would have caught it never ran
+outside that machine's own leftover files.
+
+Resolution order, mirroring `resolve_pdfium_library_path()`:
+
+1. `TESSERACT_DYNAMIC_LIB_PATH` — explicit override, convenient during
+   development.
+2. `libtesseract.so.5` / `libtesseract55.dll` / `libtesseract.5.dylib` **next
+   to the executable**, then in `./lib/` next to it — the layout the release
+   tarballs use.
+3. Fallback: the bare name → standard dlopen system search.
+
+**Local development**: any working `libtesseract.so.5` + `libleptonica.so.6`
+pair is fine for testing against — the OCR output does not depend on which
+build produced them, only the pixel pipeline does, and that is exercised the
+same way regardless. The distro's plain runtime packages (no `-dev`, no
+headers or pkg-config needed since nothing compiles against them) are the
+quickest way to get a pair locally:
 
 ```sh
 # Ubuntu 22.04 / 24.04
-sudo apt-get install -y libtesseract-dev libleptonica-dev
+sudo apt-get install -y libtesseract5 liblept5
+export TESSERACT_DYNAMIC_LIB_PATH=/usr/lib/x86_64-linux-gnu/libtesseract.so.5
 ```
 
 **Traineddata (ita+eng)** is resolved at runtime from `{data_dir}/tessdata/` —
@@ -50,10 +91,11 @@ the highest-accuracy variant). On first run the bootstrap downloads and
 verifies it on its own: no `apt-get install tesseract-ocr-ita` is needed in
 production.
 
-**Developing without the bootstrap** — for instance running
-`cargo test --features ocr` before the binary has ever started — either run the
-bootstrap once, or install the system language packs as a fallback. `leptess`
-falls back to `TESSDATA_PREFIX` when `{data_dir}/tessdata/` does not exist:
+**Developing without the bootstrap** — for instance running `cargo test`
+before the binary has ever started — either run the bootstrap once, or set
+`TESSDATA_DIR_FOR_TEST` for the regression test below, or install the system
+language packs and let Tesseract fall back to `TESSDATA_PREFIX` when
+`{data_dir}/tessdata/` does not exist:
 
 ```sh
 sudo apt-get install -y tesseract-ocr-ita tesseract-ocr-eng
@@ -61,14 +103,18 @@ find /usr/share/tesseract-ocr -name "*.traineddata"   # check where they landed
 export TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/    # adjust to the version found
 ```
 
-**Regression test** — exercises OCR for real, not just linking (see
+**Regression test** — exercises OCR for real, not just symbol resolution (see
 `src/documents/ocr.rs::smoke_test`):
 
 ```sh
 export PDFIUM_LIB_FOR_TEST=/absolute/path/to/libpdfium.so     # downloaded as in §2b
+export TESSERACT_LIB_FOR_TEST=/absolute/path/to/libtesseract.so.5
 export TESSDATA_DIR_FOR_TEST=/path/to/folder/containing/tessdata/
-cargo test --features ocr documents::ocr::smoke_test
+cargo test bundled_libraries_path_resolution_and_ocr_roundtrip
 ```
+
+Without those variables the test is skipped rather than failed: it needs real
+shared libraries, which not every environment has.
 
 ---
 
@@ -96,23 +142,15 @@ rebuilt weekly upstream — we compile nothing ourselves.
 wget https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
 tar -xzf pdfium-linux-x64.tgz          # extracts ./lib/libpdfium.so
 export PDFIUM_DYNAMIC_LIB_PATH=$PWD/lib/libpdfium.so
-cargo build --features ocr
+cargo build
 ```
 
 **Distributed build** (option 2 above): download the archive for the target
 platform and copy `libpdfium.so` / `pdfium.dll` / `libpdfium.dylib` next to the
 compiled binary, or into a `lib/` subfolder beside it, before packaging. The
-end user installs nothing.
-
-**Regression test** — verifies the bundled load path for real:
-
-```sh
-export PDFIUM_LIB_FOR_TEST=/absolute/path/to/libpdfium.so
-cargo test --features ocr bundled_pdfium_path_resolution_and_ocr_roundtrip
-```
-
-Without that variable the test is skipped rather than failed: it needs a real
-shared library, which not every environment has.
+end user installs nothing. The regression test for this path is the same one
+listed at the end of §2a — it exercises pdfium and Tesseract together, since
+that is how OCR is actually used.
 
 ---
 
@@ -152,29 +190,23 @@ on purpose.
 
 ## 3. Build commands
 
-### CPU only, no OCR
+### CPU
 
 ```sh
 cargo build --release
 ```
 
-No native dependencies beyond the Rust toolchain.
+No native dependencies beyond the Rust toolchain. OCR is always compiled in —
+see §2a, §2b for how it loads its two libraries at runtime rather than at
+build time.
 
-### With OCR, CPU only
-
-```sh
-cargo build --release --features ocr
-```
-
-Requires libtesseract-dev, libleptonica-dev and libpdfium (§2a, §2b).
-
-### Full build — OCR + GPU
+### CPU + GPU
 
 ```sh
-cargo build --release --features ocr,cuda
+cargo build --release --features cuda
 ```
 
-Requires all of the above plus the CUDA Toolkit with libcublas-dev (§2c).
+Requires the CUDA Toolkit with libcublas-dev (§2c).
 
 The binary lands in `target/release/i3k-rag-engine`.
 
@@ -182,8 +214,10 @@ The binary lands in `target/release/i3k-rag-engine`.
 
 ```sh
 cargo test
-cargo test --features ocr    # adds the OCR tests; see §2a/§2b for the env vars
 ```
+
+The two OCR tests that need real shared libraries skip gracefully unless
+`PDFIUM_LIB_FOR_TEST` / `TESSERACT_LIB_FOR_TEST` are set — see §2a, §2b.
 
 ---
 
@@ -191,11 +225,12 @@ cargo test --features ocr    # adds the OCR tests; see §2a/§2b for the env var
 
 | Error | Cause | Fix |
 |---|---|---|
-| `Package lept was not found` | `libtesseract-dev` / `libleptonica-dev` missing | §2a |
-| `libpdfium.so: cannot open` | pdfium not reachable | §2b |
 | `error: could not find CUDA` | `nvcc` or `libcublas-dev` missing | §2c |
 | `ld: cannot find -lcublas` | `libcublas-dev` not installed | §2c |
 | `CUDA compute capability sm_12X not supported` | CUDA Toolkit older than 12.8 on an RTX 5070 Ti | upgrade the toolkit |
+| `libpdfium not found at …` (at runtime, from OCR) | pdfium not next to the executable | §2b |
+| `libtesseract not found at …` (at runtime, from OCR) | Tesseract not next to the executable | §2a |
+| `TessBaseAPIInit3 failed` (at runtime, from OCR) | tessdata missing or wrong language code | §2a — check `{data_dir}/tessdata/` or `TESSDATA_PREFIX` |
 
 ---
 

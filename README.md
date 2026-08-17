@@ -49,9 +49,14 @@ Download the tarball for your platform from the [releases](../../releases) page
 | `linux-x86_64` | PC or server, CPU only |
 | `linux-arm64-cuda` | ARM64 board with an NVIDIA GPU |
 | `linux-arm64` | ARM64 board, CPU only |
+| `windows-x86_64` | Windows PC, CPU embeddings — eullm still uses the GPU if present |
 
 The `-cuda` builds require the NVIDIA driver to be installed: they will not
-start without it. If you have no GPU, take the CPU build.
+start without it. If you have no GPU, take the CPU build. The Windows build
+runs the embedding model on CPU regardless — Candle's CUDA support is not
+cross-compiled for Windows (§2c of [BUILD.md](BUILD.md)) — but the language
+model (eullm) is a separate process and still uses the GPU on Windows when
+one is available.
 
 ```sh
 tar -xzf i3k-rag-engine-v0.1.27-linux-x86_64-cuda.tar.gz
@@ -111,7 +116,7 @@ restore one over the running installation. Backups are local files under
 | **Vector database** | [Qdrant](https://qdrant.tech), 1024-dim, cosine distance |
 | **Language model** | [eullm](https://github.com/eullm/eullm) as a separate process |
 | **Application database** | SQLite through sqlx — users, documents, conversations |
-| **OCR** | pdfium for rasterising, Tesseract through leptess |
+| **OCR** | pdfium for rasterising, Tesseract — both loaded at runtime from a bundled path, not linked at compile time |
 
 The embedding model is loaded before the language model on purpose: eullm sizes
 its own GPU offload from the free VRAM it observes at startup, so it has to see
@@ -183,7 +188,7 @@ want to modify the engine or target a platform we do not publish, see
 [BUILD.md](BUILD.md) for the native dependencies and the feature flags.
 
 ```sh
-cargo build --release --features ocr,cuda
+cargo build --release --features cuda
 ```
 
 ## Privacy and security
