@@ -87,6 +87,16 @@ name: CI
 # USER32 più la sibling libleptonica.dll). pdfium.dll NON è bundlato: arriva
 # già dal manifest al primo avvio, come su Linux.
 #
+# i3k-rag-engine.exe stesso, a differenza di Tesseract/Leptonica, NON riesce
+# a fare a meno di libstdc++-6.dll: esaxx-rs (dipendenza C++ di tokenizers,
+# algoritmo Unigram) la collega dinamicamente, e il collegamento finale del
+# binario passa dal driver C di rustc (gcc, non g++) — gli stessi flag
+# -static-libgcc/-static-libstdc++ che funzionano per Tesseract/Leptonica
+# (costruiti via CMake/g++) lì non hanno effetto, verificato con più
+# combinazioni (RUSTFLAGS, .cargo/config.toml, -C linker=g++, crt-static),
+# non solo assunto. Bundlata invece, accanto all'exe (non in lib/: è una
+# dipendenza di caricamento del PE, non qualcosa che libloading risolve).
+#
 # macOS resta fuori: manca il binario qdrant per quella piattaforma nel
 # manifest.
 #
@@ -899,15 +909,35 @@ jobs:
           cp "$W/build-tess/bin/libtesseract55.dll" stage/lib/
           cp "$W/build-lept/bin/libleptonica.dll" stage/lib/
 
+      # i3k-rag-engine.exe stesso dipende da libstdc++-6.dll (verificato con
+      # objdump -p): esaxx-rs, il crate C++ che tokenizers usa per
+      # l'algoritmo Unigram, lo collega dinamicamente, e a differenza di
+      # Tesseract/Leptonica — costruiti da noi via CMake, dove -static-
+      # libgcc/-static-libstdc++ funzionano davvero — qui il collegamento
+      # finale passa dal driver C di rustc (gcc, non g++), che quei flag non
+      # li applica allo stesso modo: verificato con un confronto diretto,
+      # non assunto — build minime isolate con lo stesso identico toolchain
+      # confermano che via g++ il flag funziona, via cargo/rustc no,
+      # indipendentemente da come lo si passa (RUSTFLAGS, .cargo/config.toml,
+      # -C linker=g++, crt-static: nessuna combinazione ha eliminato la
+      # dipendenza). Soluzione più semplice: bundlare la DLL, come già si fa
+      # con le redistributable CUDA su Linux. Va ACCANTO all'exe, non in
+      # lib/: a differenza di pdfium/Tesseract (caricate a runtime via
+      # libloading con path esplicito) questa è una dipendenza di caricamento
+      # del PE stesso, risolta da Windows PRIMA che main() parta — l'ordine
+      # di ricerca DLL di Windows controlla la cartella dell'eseguibile, non
+      # le sue sottocartelle.
+      #
       # .zip, non .tar.gz — convenzione Windows. pdfium.dll NON è bundlato
       # qui: arriva già dal manifest al primo avvio (bblanchon/pdfium-
       # binaries), come su Linux. qdrant.exe/eullm.exe idem, entrambi già
       # pinnati in manifest.toml per windows-x86_64 — non binari da
       # costruire o scaricare in questo workflow.
-      - name: Impacchetta binario + lib OCR + frontend + checksum
+      - name: Impacchetta binario + runtime mingw + lib OCR + frontend + checksum
         run: |
           mkdir -p dist stage/frontend
           cp target/x86_64-pc-windows-gnu/release/i3k-rag-engine.exe stage/
+          cp /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll stage/
           cp -r frontend/dist stage/frontend/dist
           VERSION="${GITHUB_REF#refs/tags/}"
           (cd stage && zip -r "../dist/i3k-rag-engine-${VERSION}-windows-x86_64.zip" .)
