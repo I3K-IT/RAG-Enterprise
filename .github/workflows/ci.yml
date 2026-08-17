@@ -283,9 +283,15 @@ jobs:
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
+          # liblzma-dev: non c'entra con CUDA, ma qualcosa in questo runner
+          # (probabilmente l'apt-get update di cuda-keyring qui sopra) lascia
+          # il sistema senza liblzma.so — il link di i3k-rag-engine fallisce
+          # con "cannot find -llzma" (zip/docx-rs la richiedono). I job
+          # CPU-only vanno bene: non fanno questo apt-get update. Innocuo
+          # installarla sempre qui.
           sudo apt-get install -y --no-install-recommends \
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
 
       # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
@@ -359,9 +365,11 @@ jobs:
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
+          # liblzma-dev: vedi commento nel job x86_64 (CUDA) — stesso apt-get
+          # update, stesso sintomo ("cannot find -llzma" in link).
           sudo apt-get install -y --no-install-recommends \
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
 
       # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
@@ -499,9 +507,15 @@ jobs:
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
+          # liblzma-dev: non c'entra con CUDA, ma qualcosa in questo runner
+          # (probabilmente l'apt-get update di cuda-keyring qui sopra) lascia
+          # il sistema senza liblzma.so — il link di i3k-rag-engine fallisce
+          # con "cannot find -llzma" (zip/docx-rs la richiedono). I job
+          # CPU-only vanno bene: non fanno questo apt-get update. Innocuo
+          # installarla sempre qui.
           sudo apt-get install -y --no-install-recommends \
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
 
       # Prima non c'era NESSUNA cache qui — ogni run ricompilava candle/
       # cudarc/candle-kernels da zero (~20+ min), il vero grosso dei 35 min
@@ -712,9 +726,11 @@ jobs:
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
+          # liblzma-dev: vedi commento nel job x86_64 (CUDA) — stesso apt-get
+          # update, stesso sintomo ("cannot find -llzma" in link).
           sudo apt-get install -y --no-install-recommends \
             cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8
+            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
 
       # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
@@ -895,6 +911,19 @@ jobs:
           cmake --build "$W/build-lept" -j"$(nproc)"
           cmake --install "$W/build-lept"
 
+          # LEPT_TIFF_RESULT/LEPT_TIFF_COMPILE_SUCCESS: Tesseract's CMakeLists.txt
+          # (check_leptonica_tiff_support, cmake/CheckFunctions.cmake) probes
+          # whether the linked Leptonica has real TIFF support by compiling
+          # AND RUNNING a tiny test program via try_run(). Cross-compiling,
+          # the resulting .exe can't run on this Linux host — CMake's own
+          # try_run() then errors ("please set the following cache variables
+          # appropriately: LEPT_TIFF_RESULT") and fails the whole configure,
+          # regardless of how Tesseract's own logic would have handled the
+          # placeholder value it falls back to. Pre-seeding both cache
+          # variables skips the execution attempt entirely. 1 is not a
+          # guess: it is the exact value try_run() computes natively on the
+          # Linux Tesseract job for this identical Leptonica build (-DENABLE_
+          # TIFF=OFF there too) — verified in that job's CMakeCache.txt.
           cmake -S "$W/tesseract" -B "$W/build-tess" \
             -DCMAKE_TOOLCHAIN_FILE="$W/toolchain.cmake" \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
@@ -902,6 +931,7 @@ jobs:
             -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF \
             -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
             -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF \
+            -DLEPT_TIFF_RESULT=1 -DLEPT_TIFF_COMPILE_SUCCESS=TRUE \
             -DCMAKE_SHARED_LINKER_FLAGS="$LINK_FLAGS" -DCMAKE_EXE_LINKER_FLAGS="$LINK_FLAGS"
           cmake --build "$W/build-tess" -j"$(nproc)"
 
