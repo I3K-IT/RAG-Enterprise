@@ -43,15 +43,14 @@ tokenizers = "0.20"
 # --- Document ingestion ---
 # Text PDFs: pdf_oxide (pure Rust, validated against PyMuPDF)
 pdf_oxide = "0.3"
-# OCR (enable with --features ocr):
-#   pdfium-render: libpdfium can be bundled and is loaded at runtime from an
-#     explicit path (see ocr.rs) — a distributed build needs no system install.
-#   leptess: links at compile time against the system libtesseract+libleptonica
-#     (it has no equivalent of bind_to_library), so the dev libraries are still
-#     required on the build machine. Cross-platform bundling: see BUILD.md.
-pdfium-render = { version = "0.8", features = ["sync"], optional = true }
-leptess = { version = "0.14", optional = true }
-image = { version = "0.25", optional = true }  # used by ocr.rs to encode PNG
+# OCR: both libpdfium and libtesseract/libleptonica are bundled and loaded at
+# runtime through libloading (see ocr.rs) — the build machine needs no system
+# install of either, and neither does the target machine: the manifest
+# downloads them like every other component. Always on, no build-time system
+# dependency, so unlike a genuinely optional feature there is nothing to gate
+# behind one.
+pdfium-render = { version = "0.8", features = ["sync"] }
+libloading = "0.8"
 # Other formats (no Tika in the Community core):
 calamine = "0.26"
 docx-rs = "0.4"
@@ -97,11 +96,7 @@ thiserror = "2"
 anyhow = "1"
 
 [features]
-# "ocr"  — requires leptonica + pdfium installed on the system.
-#           cargo build --features ocr
-ocr = ["leptess", "pdfium-render", "image"]
-
 # "cuda" — GPU for Candle (bge-m3 in VRAM). NO cuDNN: uses cudarc+cuBLAS.
 #           Requires the CUDA Toolkit (nvcc + libcublas-dev), NOT cuDNN.
-#           cargo build --features ocr,cuda
+#           cargo build --features cuda
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
