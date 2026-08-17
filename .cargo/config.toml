@@ -1,0 +1,8 @@
+# x86_64-pc-windows-gnu: static-link the mingw runtime (libgcc/libstdc++/
+# winpthread) into the binary instead of depending on their DLLs, which are
+# not present on a stock Windows install. Needed because esaxx-rs
+# (tokenizers' Unigram algorithm) compiles C++ and pulls in libstdc++ by
+# default — verified via objdump -p on the cross-compiled .exe: without this,
+# libstdc++-6.dll shows up as an import; with it, only system DLLs remain.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-args=-static-libgcc -static-libstdc++ -static -lwinpthread"]

@@ -37,24 +37,29 @@ only build-time system dependency left, and only for `--features cuda`.
 Like `pdfium-render` in §2b, OCR loads `libtesseract` **at runtime from an
 explicit path**, through `libloading`, not by linking against it at compile
 time. Nothing on the build machine is required, and — unlike the old
-`leptess`-based approach — nothing on the *target* machine is either: the two
-libraries travel with the release the same way `libpdfium` already does.
+`leptess`-based approach — nothing on the *target* machine is either: the pair
+travels inside the release tarball itself, next to the binary.
 
-We build both ourselves rather than pointing at a distro package or an
-upstream binaries repo (pdfium has one at bblanchon/pdfium-binaries; Tesseract
-does not): a distro's Tesseract links `libcurl` and `libarchive` and pulls in
+Unlike pdfium (§2b), Tesseract has no upstream prebuilt-binaries repo, so
+there is nowhere to point a manifest.toml entry at — `bootstrap.rs` never
+downloads it. Instead `ci.yml` builds both from source in every release job
+(Tesseract 5.5.0 + Leptonica 1.85.0) and bundles the result directly into the
+tarball, the same way the CUDA runtime libraries already are for the `-cuda`
+variants: a distro's Tesseract links `libcurl` and `libarchive` and pulls in
 roughly fifty shared libraries transitively, for URL-fetching and multi-page
 TIFF support this engine never uses, since it only ever feeds Tesseract raw
 pixels straight from pdfium. Built with `-DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON`
 and Leptonica's own image-codec options off (no PNG/JPEG/TIFF/WebP — again,
 unneeded when the input is already decoded pixels), the pair comes down to
-`libtesseract` + `libleptonica` and nothing else beyond libc. Built with
-`CMAKE_INSTALL_RPATH=$ORIGIN` so `libtesseract` finds its sibling
-`libleptonica` next to itself, wherever the pair is copied to — without it,
-the library only loads on the machine that happens to still have the original
-build directory, which is not a fact about the *library*, it just means the
-one test that would have caught it never ran outside that machine's own
-leftover files.
+`libtesseract` + `libleptonica` and nothing else beyond libc (on Windows:
+statically-linked libgcc/libstdc++/libwinpthread instead, so the DLL pair
+needs nothing beyond what a stock Windows install already has). The Linux
+build sets `libtesseract`'s RPATH to `$ORIGIN` (via `patchelf`, in `ci.yml`)
+so it finds its sibling `libleptonica` next to itself wherever the pair is
+copied to — without it, the library only loads on the machine that happens to
+still have the original build directory, which is not a fact about the
+*library*, it just means the one test that would have caught it never ran
+outside that machine's own leftover files.
 
 Resolution order, mirroring `resolve_pdfium_library_path()`:
 
