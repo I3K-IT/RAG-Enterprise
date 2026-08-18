@@ -210,6 +210,60 @@ Requires the CUDA Toolkit with libcublas-dev (§2c).
 
 The binary lands in `target/release/i3k-rag-engine`.
 
+### Windows (cross-compiled from Linux, CPU only)
+
+No Windows machine needed — the release binary is cross-compiled from a
+Linux host:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+sudo apt-get install -y --no-install-recommends \
+  g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix
+# posix, not the win32 variant: Rust's std::thread requires it.
+
+# Tesseract's CMakeLists (built separately, see §2a) looks for -lWs2_32
+# (uppercase, the MSVC/Windows convention); mingw only provides lowercase
+# libws2_32.a. A case-sensitive Linux filesystem doesn't resolve one for
+# the other on its own — Windows itself wouldn't have this problem.
+sudo ln -sf libws2_32.a /usr/x86_64-w64-mingw32/lib/libWs2_32.a
+
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+`--features cuda` does not exist for this target: `nvcc` cross-compiling
+Windows CUDA code from a Linux host is not a combination cudarc/candle
+support — confirmed by trying it, not assumed. eullm remains unaffected,
+since it is a separate downloaded process, not compiled here: GPU chat
+inference still works on Windows through `eullm-windows-x64-cuda` in
+`manifest.toml`, only this binary's own embedding path is CPU-only. See
+`config::IngestionEmbedding::Eullm` for routing document-ingestion
+embedding through eullm instead — GPU-accelerated on Windows too, since
+eullm does its own device management independent of this binary's CUDA
+feature.
+
+**`libstdc++-6.dll`**: unlike Tesseract/Leptonica (§2a, statically linked,
+no runtime DLL dependency), the engine binary itself dynamically links
+libstdc++ — esaxx-rs, a C++ dependency of `tokenizers`' Unigram algorithm,
+pulls it in, and the usual `-static-libgcc -static-libstdc++` fix does not
+apply here: this binary's final link goes through rustc's C driver (`gcc`,
+not `g++`), which does not resolve the reference the way Tesseract's own
+CMake/g++ build does — confirmed with several combinations (RUSTFLAGS,
+`.cargo/config.toml`, `-C linker=g++`, `+crt-static`), not assumed. Bundle
+the DLL instead, from the mingw sysroot, **next to the .exe** (not in
+`lib/`: unlike pdfium/Tesseract, which this engine loads itself through
+`libloading` with an explicit path, this is a load-time PE dependency
+Windows resolves before `main()` runs, and the executable's own directory
+is the first place it looks):
+
+```sh
+cp /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll ./dist/
+```
+
+The binary lands in `target/x86_64-pc-windows-gnu/release/i3k-rag-engine.exe`.
+See `.github/workflows/ci.yml`'s `release-windows-x86_64` job for the full
+release packaging (frontend, `libstdc++-6.dll`, Tesseract/Leptonica built
+per §2a) — this section covers only the plain `cargo build` step.
+
 ### Tests
 
 ```sh
