@@ -140,6 +140,33 @@ pub struct EullmSettings {
     /// by loading bge-m3 before eullm, precisely so the probe sees it.
     #[serde(default)]
     pub n_cpu_moe: Option<u32>,
+    /// Only consulted when embeddings.ingestion_embedding=Eullm — see its doc
+    /// comment. Governs whether bootstrap::spawn_eullm ALSO passes
+    /// --embedding-model (eullm >= 0.6.90) at startup, permanently reserving
+    /// bge-m3 a place in VRAM next to the chat model, or leaves it out,
+    /// relying purely on POST /api/embed's own on-demand coexist-or-evict
+    /// (eullm >= 0.6.82) each time an ingestion actually needs it.
+    ///
+    /// These are NOT two ways to reach the same outcome — they suit opposite
+    /// hardware, and picking the wrong one is worse than picking neither:
+    ///
+    ///   - true: for a card known to comfortably fit both models together.
+    ///     Zero swap overhead, ever — bge-m3 loads once, at eullm's own
+    ///     startup, and stays. --embedding-model's reservation runs BEFORE
+    ///     --fit sizes the chat model, so on a card that does NOT fit both,
+    ///     it is bge-m3 that claims VRAM first and the chat model that gets
+    ///     squeezed — the opposite of what a RAG deployment wants.
+    ///   - false (default): for a card too small, or of unknown size, to fit
+    ///     both permanently. eullm measures free VRAM on every /api/embed
+    ///     call and decides then whether bge-m3 fits alongside the chat model
+    ///     or must evict it, reloading the chat model automatically on the
+    ///     next /api/generate — the same unload/reload dance this project
+    ///     used to orchestrate by hand (POST /api/unload before, reload()
+    ///     after — see documents::upload), now internal to eullm and
+    ///     triggered by the ordinary act of calling it, no special
+    ///     coordination required on this side.
+    #[serde(default)]
+    pub reserve_embedding_model: bool,
 }
 
 /// How the ingestion window (documents::upload) gets its embeddings —
@@ -363,6 +390,7 @@ impl Settings {
         validate_ingestion_embedding(
             s.embeddings.ingestion_embedding,
             s.eullm.unload_during_ingestion,
+            s.eullm.reserve_embedding_model,
             cfg!(feature = "cuda"),
         )?;
 
@@ -377,9 +405,20 @@ impl Settings {
 fn validate_ingestion_embedding(
     ingestion_embedding: IngestionEmbedding,
     unload_during_ingestion: bool,
+    reserve_embedding_model: bool,
     cuda_feature: bool,
 ) -> Result<()> {
     match ingestion_embedding {
+        IngestionEmbedding::Off | IngestionEmbedding::CandleGpu
+            if reserve_embedding_model =>
+        {
+            anyhow::bail!(
+                "EULLM__RESERVE_EMBEDDING_MODEL=true has no effect without \
+                 EMBEDDINGS__INGESTION_EMBEDDING=eullm — it governs whether eullm is started \
+                 with --embedding-model, which only matters when this process actually asks \
+                 eullm to embed with it."
+            );
+        }
         IngestionEmbedding::Off => Ok(()),
         IngestionEmbedding::CandleGpu => {
             if !unload_during_ingestion {
@@ -404,7 +443,12 @@ fn validate_ingestion_embedding(
             // model, unprompted — see IngestionEmbedding::Eullm's doc comment.
             // unload_during_ingestion=true together with this IS allowed (it
             // just adds a redundant, harmless manual unload before eullm's
-            // own automatic one), not worth rejecting.
+            // own automatic one), not worth rejecting. reserve_embedding_model
+            // is a free choice either way — see its own doc comment for which
+            // hardware wants which value; wrong-for-your-card is a real
+            // footgun (--embedding-model can starve the chat model on a card
+            // too small for both) but not an invalid *combination* the way
+            // the Off/CandleGpu case above is.
             Ok(())
         }
     }
@@ -416,34 +460,60 @@ mod tests {
 
     #[test]
     fn ingestion_embedding_off_never_fails() {
-        assert!(validate_ingestion_embedding(IngestionEmbedding::Off, false, false).is_ok());
-        assert!(validate_ingestion_embedding(IngestionEmbedding::Off, true, true).is_ok());
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Off, false, false, false).is_ok());
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Off, true, false, true).is_ok());
     }
 
     #[test]
     fn candle_gpu_without_unload_fails() {
-        let err =
-            validate_ingestion_embedding(IngestionEmbedding::CandleGpu, false, true).unwrap_err();
+        let err = validate_ingestion_embedding(IngestionEmbedding::CandleGpu, false, false, true)
+            .unwrap_err();
         assert!(err.to_string().contains("UNLOAD_DURING_INGESTION"));
     }
 
     #[test]
     fn candle_gpu_without_cuda_feature_fails() {
-        let err =
-            validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, false).unwrap_err();
+        let err = validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, false, false)
+            .unwrap_err();
         assert!(err.to_string().contains("cuda"));
     }
 
     #[test]
     fn candle_gpu_with_unload_and_cuda_ok() {
-        assert!(validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, true).is_ok());
+        assert!(
+            validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, false, true).is_ok()
+        );
     }
 
     #[test]
-    fn eullm_never_fails_regardless_of_unload_or_cuda() {
-        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, false, false).is_ok());
-        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, true, false).is_ok());
-        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, false, true).is_ok());
-        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, true, true).is_ok());
+    fn eullm_never_fails_regardless_of_unload_reserve_or_cuda() {
+        for unload in [false, true] {
+            for reserve in [false, true] {
+                for cuda in [false, true] {
+                    assert!(
+                        validate_ingestion_embedding(IngestionEmbedding::Eullm, unload, reserve, cuda)
+                            .is_ok(),
+                        "unload={unload} reserve={reserve} cuda={cuda}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The new rejection case: reserve_embedding_model only means anything
+    /// when this process actually asks eullm to embed (IngestionEmbedding::
+    /// Eullm) — with Off or CandleGpu, bge-m3 either never runs through
+    /// eullm or is Candle's concern, so a --embedding-model reservation
+    /// would sit there unused. Caught at startup rather than silently
+    /// ignored, same as every other invalid combination in this function.
+    #[test]
+    fn reserve_embedding_model_without_eullm_fails() {
+        let err =
+            validate_ingestion_embedding(IngestionEmbedding::Off, false, true, false).unwrap_err();
+        assert!(err.to_string().contains("RESERVE_EMBEDDING_MODEL"));
+
+        let err = validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, true, true)
+            .unwrap_err();
+        assert!(err.to_string().contains("RESERVE_EMBEDDING_MODEL"));
     }
 }

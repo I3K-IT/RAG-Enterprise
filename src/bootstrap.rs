@@ -135,6 +135,7 @@ mod eullm_args_tests {
             unload_during_ingestion: false,
             model_override: None,
             n_cpu_moe: None,
+            reserve_embedding_model: false,
         }
     }
 
@@ -779,11 +780,18 @@ pub async fn start_eullm(
             .map(std::path::PathBuf::from)
             .or_else(|| find_by_name(&manifest, "qwen3-14b", &data_dir));
         // Reserved as a companion at eullm's own startup — see spawn_eullm's
-        // --embedding-model comment — only when this process will actually
-        // ask eullm to embed with it (config::IngestionEmbedding::Eullm).
-        // Off/CandleGpu: no reservation, bge-m3 is Candle's concern only.
+        // --embedding-model comment — only when BOTH this process will
+        // actually ask eullm to embed with it (IngestionEmbedding::Eullm)
+        // AND the operator opted into the permanent-reservation strategy
+        // (EullmSettings::reserve_embedding_model — see its doc comment: this
+        // is hardware-dependent, not a default to turn on unconditionally).
+        // Off/CandleGpu, or Eullm with reserve_embedding_model=false: no
+        // reservation — bge-m3 stays either Candle's concern (Off/CandleGpu)
+        // or eullm's own on-demand /api/embed coexist-or-evict (Eullm with
+        // reserve=false), never a --embedding-model startup arg.
         let embedding_gguf = (settings.embeddings.ingestion_embedding
-            == crate::config::IngestionEmbedding::Eullm)
+            == crate::config::IngestionEmbedding::Eullm
+            && settings.eullm.reserve_embedding_model)
             .then(|| find_by_name(&manifest, "bge-m3-gguf", &data_dir))
             .flatten();
         match (find_by_name(&manifest, "eullm", &data_dir), gguf) {
@@ -1769,15 +1777,19 @@ fn spawn_eullm(
     let mut cmd = Command::new(bin);
     cmd.arg("run").arg(model_path).args(eullm_args(cfg));
 
-    // --embedding-model (eullm >= TODO_VERSION): loads bge-m3 as a reserved
+    // --embedding-model (eullm >= 0.6.90): loads bge-m3 as a reserved
     // companion at startup instead of on the first /api/embed request —
     // eullm reads the file's own size and reserves its compute-buffer
     // margin from free VRAM before --fit sizes the chat model, so
     // coexistence is decided once, correctly, from the inside, instead of
     // being gambled on the load order the way this process used to have to
     // (see config::IngestionEmbedding's doc comment). Only passed when
-    // ingestion_embedding=Eullm — no reason to reserve VRAM for a model
-    // nothing will ask this eullm process to embed with.
+    // ingestion_embedding=Eullm AND reserve_embedding_model=true — see
+    // EullmSettings::reserve_embedding_model's doc comment for why the flag
+    // is a separate, hardware-dependent opt-in rather than following
+    // ingestion_embedding automatically: on a card too small to fit both
+    // models, this reservation runs BEFORE --fit and starves the chat model
+    // instead of helping it.
     if let Some(embedding_model) = embedding_model_path {
         cmd.arg("--embedding-model").arg(embedding_model);
     }
