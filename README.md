@@ -59,8 +59,8 @@ model (eullm) is a separate process and still uses the GPU on Windows when
 one is available.
 
 ```sh
-tar -xzf i3k-rag-engine-v0.1.27-linux-x86_64-cuda.tar.gz
-cd i3k-rag-engine-v0.1.27-linux-x86_64-cuda
+tar -xzf i3k-rag-engine-v0.1.30-linux-x86_64-cuda.tar.gz
+cd i3k-rag-engine-v0.1.30-linux-x86_64-cuda
 
 cat > .env <<'EOF'
 AUTH__JWT_SECRET=change-this-to-a-long-random-string

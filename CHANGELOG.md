@@ -17,6 +17,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.30] - 2026-08-18
+
+### Added
+
+- **Document-ingestion embedding through eullm.** `EMBEDDINGS__INGESTION_EMBEDDING=eullm`
+  routes the embedding step of document ingestion through eullm's own
+  `POST /api/embed` (eullm ≥ 0.6.82) instead of the in-process Candle path —
+  an alternative for GPU-accelerated embedding that does not need this
+  binary itself compiled with `--features cuda`, since eullm manages its own
+  device placement. Query-time embedding is unaffected either way: it always
+  runs through the resident Candle instance, a single short text per
+  request. Off by default; existing deployments see no change unless this is
+  set. See `config::IngestionEmbedding` for the two other explicit modes
+  (`candle_gpu`, the pre-existing CPU↔GPU swap; `off`, unchanged).
+
+  With eullm ≥ 0.6.90, `bootstrap::spawn_eullm` also passes
+  `--embedding-model` at startup, so bge-m3 loads as a reserved companion
+  next to the chat model when there is room for both — decided once, inside
+  eullm, instead of gambled on which of two independently-started processes
+  happened to claim VRAM first.
+
+### Changed
+
+- `manifest.toml`'s eullm fleet moves to 0.6.90 (all six pinned targets).
+
+## [0.1.28] - 2026-08-17
+
+### Added
+
+- **Native Windows x86_64 support**, CPU and CUDA. `i3k-rag-engine.exe`
+  cross-compiles from a Linux host (no Windows runner needed) — see
+  BUILD.md's "Windows (cross-compiled from Linux, CPU only)". OCR
+  (Tesseract 5.5.0 + Leptonica 1.85.0) is built statically for the release
+  tarball, no runtime mingw dependency; the engine binary itself still needs
+  `libstdc++-6.dll` bundled alongside it, a dependency Tesseract's own build
+  does not have. Embedding is CPU-only on this platform (Candle's CUDA
+  support is not cross-compiled for Windows); eullm — a separate process —
+  still uses the GPU when one is present, so chat inference is accelerated
+  regardless.
+- OCR no longer needs a build-time `--features ocr` flag: `libtesseract` and
+  `libleptonica` load at runtime through `libloading`, from an explicit path
+  next to the executable, the same pattern already used for `libpdfium`. It
+  is always compiled in now.
+
+---
+
 ## [0.1.27] - 2026-08-14
 
 ### Added
