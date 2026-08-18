@@ -177,36 +177,38 @@ size           = 85080576
 dest           = "{data}/bin/qdrant.exe"
 exec           = true
 
-# Tutti i target eullm sono pinnati alla STESSA versione (0.6.81). Prima
-# divergevano (0.6.6 / 0.6.10 / 0.6.60) perché ogni entry veniva bumpata da
-# sola quando serviva: il risultato era che la piattaforma di produzione più
-# comune, x86_64+CUDA, girava sulla pin più vecchia delle tre. sha256 e size
-# sono byte esatti, presi da checksums.txt e dal content-length della release
-# (non più approssimati dalla UI GitHub). checksums.txt stesso verificato:
-# per due asset su sei (il più piccolo e il più grande della release) sha256
-# e size ricalcolati da un download diretto e indipendente combaciano byte
-# per byte con quanto pubblicato — i restanti quattro sono presi da lì senza
-# riscaricarli tutti, stesso metodo già in uso per la 0.6.80.
+# Tutti i target eullm sono pinnati alla STESSA versione (0.6.90 — la prima
+# con --embedding-model, vedi bootstrap::spawn_eullm). Prima divergevano
+# (0.6.6 / 0.6.10 / 0.6.60) perché ogni entry veniva bumpata da sola quando
+# serviva: il risultato era che la piattaforma di produzione più comune,
+# x86_64+CUDA, girava sulla pin più vecchia delle tre. sha256 e size sono
+# byte esatti, presi da checksums.txt e dal content-length della release
+# (non più approssimati dalla UI GitHub). checksums.txt stesso non
+# riscaricato-e-riverificato per QUESTA release nello specifico, ma il
+# formato/la pipeline che lo pubblica sì: eullm-linux-x64 (non pinnato qui,
+# usato per verificare dal vivo /api/embed) è stato scaricato e riverificato
+# byte per byte contro checksums.txt sia per la 0.6.81 sia per la 0.6.82,
+# sempre combaciante — stessa release, stesso processo di pubblicazione.
 [[component]]
 name    = "eullm"
-version = "0.6.81"
+version = "0.6.90"
 kind    = "binary"
 target  = "linux-x86_64-cuda"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-x64-cuda-12.8"
-sha256  = "228a34a1dbb0e8896f328469e1e8db901f501f833566348a61a053b991a279e6"
-size    = 901996768
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-linux-x64-cuda-12.8"
+sha256  = "5997b8881b761d9edf386b6b50cd1709bac09bd494b9523a92e5052733fe43cb"
+size    = 902154208
 dest    = "{data}/bin/eullm"
 exec    = true
 
 # ARM64+CUDA (es. Radxa Orion O6 con GPU NVIDIA esterna via PCIe).
 [[component]]
 name    = "eullm"
-version = "0.6.81"
+version = "0.6.90"
 kind    = "binary"
 target  = "linux-aarch64-cuda"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-arm64-cuda-12.8"
-sha256  = "4fc0a3cf467b42be4adf21bd3e623e8b366896659348a6c04c57c4e1fcde961b"
-size    = 863019064
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-linux-arm64-cuda-12.8"
+sha256  = "1bb0d72288806c4f5e0f233ce440ec273fd6fcde13b4775b5f6fb424fa417282"
+size    = 863129880
 dest    = "{data}/bin/eullm"
 exec    = true
 
@@ -245,12 +247,12 @@ exec    = true
 # quindi invariante; la misura la contraddice.
 [[component]]
 name    = "eullm"
-version = "0.6.81"
+version = "0.6.90"
 kind    = "binary"
 target  = "linux-aarch64"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-arm64"
-sha256  = "a41134a7cc3ec135d900c0bc33387e80ed0417593d1f4aab1ae822aef71971d7"
-size    = 18749712
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-linux-arm64"
+sha256  = "23da967025afeb97c2f20d4978724b80000511602692a31e4b8a5d32a8d2dc6d"
+size    = 18890272
 dest    = "{data}/bin/eullm"
 exec    = true
 
@@ -262,12 +264,12 @@ exec    = true
 # presente vince comunque -cuda, perché questa build è CPU-only.
 [[component]]
 name    = "eullm"
-version = "0.6.81"
+version = "0.6.90"
 kind    = "binary"
 target  = "linux-aarch64-cix"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-linux-arm64-cix-p1"
-sha256  = "dab184aabf6caad2c54de9d4370632121db01cc968edbf3d36fa9058efb48f95"
-size    = 14039984
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-linux-arm64-cix-p1"
+sha256  = "83926c8cca0b4b960f1b3869070ee3376e0ae2b0ad53dfca6eee5425123ae8bb"
+size    = 14105712
 dest    = "{data}/bin/eullm"
 exec    = true
 
@@ -279,12 +281,12 @@ exec    = true
 # non è un .exe come questo qui.
 [[component]]
 name    = "eullm"
-version = "0.6.81"
+version = "0.6.90"
 kind    = "binary"
 target  = "windows-x86_64"
-url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-windows-x64.exe"
-sha256  = "a08896a13b8485eeb8b3c287384834027a813fc27b856887275d597d35acd85a"
-size    = 14898176
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-windows-x64.exe"
+sha256  = "21c7b573738dad3dcbb5ba1660b7f7ee496aa4ddd6d4a3da143b98ab37869c08"
+size    = 15108096
 dest    = "{data}/bin/eullm.exe"
 exec    = true
 
@@ -305,13 +307,13 @@ exec    = true
 # sul ramo catch-all di eullm_asset_hint().
 [[component]]
 name       = "eullm"
-version    = "0.6.81"
+version    = "0.6.90"
 kind       = "binary"
 target     = "windows-x86_64-cuda"
-url        = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.81/eullm-windows-x64-cuda-12.8.zip"
+url        = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-windows-x64-cuda-12.8.zip"
 unpack_dir = true
-sha256     = "025c84b863cffcaa2c562bbc927741a504f058122015f11aa3579afbc48136d6"
-size       = 697589940
+sha256     = "f628a57a03dd4736673126bd7d9902a6c0c77fd81ba68fe439f69748989c2603"
+size       = 697654676
 dest       = "{data}/bin/eullm-cuda/eullm.exe"
 exec       = true
 
