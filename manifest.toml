@@ -72,6 +72,25 @@ size   = 9001753984
 dest   = "{data}/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
 exec   = false
 
+# bge-m3 per eullm (>= 0.6.82, POST /api/embed) invece che per Candle — path
+# alternativo a bge-m3-weights/-tokenizer/-config qui sopra, non un
+# sostituto: quello resta il modello per il binario compilato --features
+# cuda, questo per chi passa dall'embedding via eullm. F16 (non quantizzato),
+# conversione llama.cpp da BAAI/bge-m3 (pqnet/bge-m3-gguf su HF, poi
+# rimirrorata su i3k.dev). Verificato con eullm 0.6.82 reale, non solo dai
+# metadati dichiarati: `eullm run` la carica senza errori, e il GGUF stesso
+# dichiara general.architecture=bert, bert.embedding_length=1024 (identico a
+# EMBED_DIM in clients/embeddings.rs) e bert.pooling_type=2 — CLS, la stessa
+# strategia già usata dal path Candle, non mean pooling.
+[[component]]
+name   = "bge-m3-gguf"
+kind   = "model"
+url    = "https://www.i3k.dev/models/bge-m3-gguf/bge-m3-f16.gguf"
+sha256 = "970365953c8d47b07751a37d3333f641d2287495bea27111b1b955aa0ea20dca"
+size   = 1157671168
+dest   = "{data}/models/bge-m3-gguf/bge-m3-f16.gguf"
+exec   = false
+
 # OCR (leptess/Tesseract, lang="ita+eng"). Source: tessdata_best
 # (LSTM, highest accuracy — github.com/tesseract-ocr/tessdata_best).
 [[component]]
