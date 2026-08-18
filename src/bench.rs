@@ -890,7 +890,11 @@ pub async fn run(
     // may not find enough VRAM and fail silently, which would once again
     // measure the wrong path: CPU instead of GPU.
     let unload_enabled = settings.eullm.unload_during_ingestion;
-    let swap_enabled = settings.embeddings.swap_during_ingestion;
+    // --bench only exercises the Candle swap path, not IngestionEmbedding::Eullm:
+    // it runs without an AppState (no database, no server), so there is nothing
+    // for documents::upload()'s eullm-embed branch to plug into here.
+    let swap_enabled = settings.embeddings.ingestion_embedding
+        == crate::config::IngestionEmbedding::CandleGpu;
     if unload_enabled {
         if let Err(e) = eullm.unload().await {
             tracing::error!(error = %e, "eullm: unload before ingestion failed, carrying on anyway (no VRAM freed)");
@@ -934,7 +938,7 @@ fn swap_embedding_device(embeddings: &mut EmbeddingService, to_gpu: bool) {
     let model_id = embeddings.model_id().to_owned();
     let loaded = if to_gpu {
         tracing::info!(
-            "swap_during_ingestion enabled: moving the embedding model to GPU for the benchmark ingestion"
+            "ingestion_embedding=candle_gpu: moving the embedding model to GPU for the benchmark ingestion"
         );
         EmbeddingService::load_gpu_for_ingestion(&model_id)
     } else {

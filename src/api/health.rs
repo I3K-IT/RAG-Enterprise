@@ -22,8 +22,10 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
 /// Exposes the state actually chosen at startup, not merely the desired
 /// configuration — embedding_device in particular, so a silent CPU fallback
 /// stays visible long after the boot log has scrolled out of the terminal.
-/// With swap_during_ingestion=true it reflects the CURRENT state (CPU at rest,
-/// GPU during an ingestion), not a fixed boot-time value.
+/// With ingestion_embedding=CandleGpu it reflects the CURRENT state (CPU at
+/// rest, GPU during an ingestion), not a fixed boot-time value. Says nothing
+/// about ingestion_embedding=Eullm ingestion activity — bge-m3 (Candle)
+/// never moves in that mode, only eullm does, invisibly to this endpoint.
 pub async fn info(State(state): State<AppState>) -> impl IntoResponse {
     let (device_label, device_ok) = match state.embeddings.read() {
         Ok(guard) => (

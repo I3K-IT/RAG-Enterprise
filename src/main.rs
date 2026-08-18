@@ -217,15 +217,20 @@ fn spawn_open_url(url: &str) -> std::io::Result<std::process::Child> {
 async fn load_embedding(settings: &config::Settings) -> Result<clients::embeddings::EmbeddingService> {
     let model_id = settings.embeddings.model_id.clone();
     let require_gpu = settings.embeddings.require_gpu;
-    let swap_during_ingestion = settings.embeddings.swap_during_ingestion;
+    let ingestion_embedding = settings.embeddings.ingestion_embedding;
     tokio::task::spawn_blocking(move || {
-        if swap_during_ingestion {
+        if ingestion_embedding == config::IngestionEmbedding::CandleGpu {
             // At rest on CPU: the VRAM stays free for eullm until an
             // ingestion begins (see AppState::swap_embeddings_to_gpu).
             // require_gpu no longer governs startup in this mode — see
-            // EmbeddingsSettings::swap_during_ingestion.
+            // IngestionEmbedding::CandleGpu.
             clients::embeddings::EmbeddingService::load_cpu_parked(&model_id)
         } else {
+            // Off: candle is never swapped, require_gpu governs this one
+            // permanent load as always. Eullm: candle never touches the GPU
+            // at all in this mode (eullm does, on demand, for ingestion) —
+            // this is therefore also the right load for it, and in practice
+            // require_gpu should be false alongside it.
             clients::embeddings::EmbeddingService::load(&model_id, require_gpu)
         }
     })

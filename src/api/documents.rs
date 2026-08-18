@@ -53,19 +53,25 @@ pub async fn upload(
     // VRAM.
     let _ingestion_guard = crate::state::IngestionGuard::start(&state.active_ingestions);
     let unload_enabled = state.settings.eullm.unload_during_ingestion;
-    let swap_enabled = state.settings.embeddings.swap_during_ingestion;
+    let ingestion_embedding = state.settings.embeddings.ingestion_embedding;
+    let candle_gpu = ingestion_embedding == crate::config::IngestionEmbedding::CandleGpu;
+    let via_eullm = ingestion_embedding == crate::config::IngestionEmbedding::Eullm;
 
     // Order: free the VRAM (eullm) BEFORE taking it (bge-m3) — and on the
     // way out the mirror image: bge-m3 leaves the VRAM BEFORE eullm reclaims
     // it. eullm sizes its offload from the free VRAM it reads at load time,
     // so reloading it while bge-m3 is still resident would size it against
-    // memory that is about to be released.
+    // memory that is about to be released. Only relevant to CandleGpu: with
+    // Eullm, eullm evicts (or not) its own chat model by itself the moment
+    // process_upload() asks it to embed — no manual unload from us either
+    // way, config::validate_ingestion_embedding lets unload_during_ingestion
+    // be true here too but it would just be a redundant no-op unload.
     if unload_enabled {
         if let Err(e) = state.eullm.unload().await {
             tracing::error!(error = %e, "eullm: unload before ingestion failed, continuing anyway (no VRAM freed)");
         }
     }
-    if swap_enabled {
+    if candle_gpu {
         if let Err(e) = swap_embeddings_blocking(&state, true).await {
             tracing::error!(error = %e, "embedding: swap to GPU failed, ingestion will use the CPU (much slower)");
         }
@@ -73,12 +79,18 @@ pub async fn upload(
 
     let response = process_upload(&state, multipart).await;
 
-    if swap_enabled {
+    if candle_gpu {
         if let Err(e) = swap_embeddings_blocking(&state, false).await {
             tracing::error!(error = %e, "embedding: swap to CPU failed — bge-m3 may still be in VRAM, check manually");
         }
     }
-    if unload_enabled {
+    // Bring the chat model back promptly instead of leaving its reload for
+    // whichever user query happens to arrive first. Fires for Eullm too,
+    // not just the manual-unload case: asking eullm for bge-m3 may itself
+    // have evicted the chat model (eullm's decision, see
+    // config::IngestionEmbedding::Eullm), and reload() is a harmless no-op
+    // if it turns out eullm never evicted it at all.
+    if unload_enabled || via_eullm {
         if let Err(e) = state.eullm.reload().await {
             tracing::error!(error = %e, "eullm: reload after ingestion failed — the model may not be resident in VRAM, check manually");
         }
@@ -90,7 +102,7 @@ pub async fn upload(
 /// Swaps the embedding model's device off the async executor (it blocks:
 /// mmap plus a weight copy). `to_gpu=true` moves it to the GPU at the start
 /// of an ingestion, `false` back to the CPU at the end — see
-/// EmbeddingsSettings::swap_during_ingestion.
+/// config::IngestionEmbedding::CandleGpu.
 async fn swap_embeddings_blocking(state: &AppState, to_gpu: bool) -> anyhow::Result<()> {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
@@ -173,22 +185,33 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         );
     }
 
-    // 5. Embed — CPU/GPU bound, spawn_blocking
+    // 5. Embed. Candle is CPU/GPU-bound (spawn_blocking); eullm is an HTTP
+    // call (.await directly) — see config::IngestionEmbedding::Eullm.
     let embed_start = std::time::Instant::now();
-    let embeddings_svc = state.embeddings.clone();
-    let chunk_strs: Vec<String> = chunks.clone();
-    let embeddings = match tokio::task::spawn_blocking(move || {
-        let refs: Vec<&str> = chunk_strs.iter().map(|s| s.as_str()).collect();
-        let guard = embeddings_svc
-            .read()
-            .map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
-        guard.embed_texts(&refs)
-    })
-    .await
+    let embeddings = if state.settings.embeddings.ingestion_embedding
+        == crate::config::IngestionEmbedding::Eullm
     {
-        Ok(Ok(e)) => e,
-        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("embedding: {e}")),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("embed task: {e}")),
+        let refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
+        match state.eullm.embed_texts(crate::config::EULLM_EMBEDDING_MODEL, &refs, None).await {
+            Ok(e) => e,
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("eullm embedding: {e}")),
+        }
+    } else {
+        let embeddings_svc = state.embeddings.clone();
+        let chunk_strs: Vec<String> = chunks.clone();
+        match tokio::task::spawn_blocking(move || {
+            let refs: Vec<&str> = chunk_strs.iter().map(|s| s.as_str()).collect();
+            let guard = embeddings_svc
+                .read()
+                .map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+            guard.embed_texts(&refs)
+        })
+        .await
+        {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("embedding: {e}")),
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("embed task: {e}")),
+        }
     };
     let embed_time = embed_start.elapsed();
 

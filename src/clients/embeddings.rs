@@ -42,8 +42,9 @@ pub enum DeviceStatus {
     /// CUDA requested but failed after CUDA_LOAD_ATTEMPTS attempts — a real degradation.
     CpuFallback,
     /// Deliberately on CPU between ingestion windows
-    /// (EmbeddingsSettings::swap_during_ingestion=true). Not a degradation:
-    /// outside ingestion the VRAM is reserved for eullm by design.
+    /// (EmbeddingsSettings::ingestion_embedding=CandleGpu). Not a
+    /// degradation: outside ingestion the VRAM is reserved for eullm by
+    /// design.
     CpuParked,
 }
 
@@ -163,7 +164,7 @@ impl EmbeddingService {
     /// released the VRAM through /api/unload — see
     /// AppState::swap_embeddings_to_gpu. Requires the "cuda" feature to be
     /// compiled in, the same constraint as load(), which Settings::load()
-    /// guarantees by failing at startup when swap_during_ingestion is enabled
+    /// guarantees by failing at startup when ingestion_embedding=CandleGpu
     /// on a build without CUDA.
     pub fn load_gpu_for_ingestion(model_id: &str) -> Result<Self> {
         let device = Self::try_cuda_device(0)?;

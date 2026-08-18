@@ -247,17 +247,6 @@ impl EullmClient {
         Ok(parsed.embeddings)
     }
 
-    /// Single-text convenience wrapper over embed_texts — see its doc comment.
-    pub async fn embed_text(
-        &self,
-        model: &str,
-        text: &str,
-        keep_alive: Option<&str>,
-    ) -> Result<Vec<f32>> {
-        let mut v = self.embed_texts(model, &[text], keep_alive).await?;
-        Ok(v.remove(0))
-    }
-
     // ── Streaming ─────────────────────────────────────────────────────────────
 
     /// Streams tokens from eullm and sends each one to `tx`.

@@ -142,6 +142,54 @@ pub struct EullmSettings {
     pub n_cpu_moe: Option<u32>,
 }
 
+/// How the ingestion window (documents::upload) gets its embeddings —
+/// always bge-m3, but through a different device or process depending on
+/// this choice. Query-time embedding (api/query.rs, a single short text per
+/// request) is NEVER affected: it always goes through the resident Candle
+/// instance, regardless of this setting.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestionEmbedding {
+    /// bge-m3 (Candle) does not change device for ingestion — the
+    /// historical default. require_gpu governs the one, permanent, initial
+    /// load as usual.
+    #[default]
+    Off,
+    /// bge-m3 (Candle) moves from CPU to GPU ONLY for the ingestion window,
+    /// then back — see AppState::swap_embeddings_to_gpu/_to_cpu and
+    /// documents::upload(). Meant for hardware where bge-m3 and qwen do not
+    /// fit in VRAM together, e.g. a 12GB card: outside ingestion all the
+    /// VRAM stays with eullm, and bge-m3 runs on CPU for the single
+    /// embedding each query needs. With plenty of VRAM (16GB+) this is
+    /// unnecessary — leave it Off and bge-m3 stays resident on the GPU.
+    ///
+    /// Requires EULLM__UNLOAD_DURING_INGESTION=true — without evicting
+    /// eullm there is no free VRAM to move bge-m3 into — and a binary built
+    /// with --features cuda. Settings::load() fails at startup if either
+    /// condition is missing, rather than degrading silently.
+    CandleGpu,
+    /// bge-m3 (Candle) stays on CPU always, including during ingestion —
+    /// eullm's own "bge-m3" store entry (see manifest.toml, and
+    /// EULLM_MODELS_DIR in bootstrap::spawn_eullm) is asked for the
+    /// embedding instead, over POST /api/embed. eullm decides on its own
+    /// whether to evict the chat model to make room, the same VRAM
+    /// management it already does unprompted — no manual /api/unload from
+    /// this process. Needs no --features cuda: this binary never touches
+    /// CUDA itself for ingestion in this mode, eullm does. Chat queries are
+    /// still blocked for the whole ingestion window regardless of whether
+    /// eullm actually evicts anything — see AppState::ingestion_blocks_queries.
+    Eullm,
+}
+
+/// eullm's own name, in ITS store (EULLM_MODELS_DIR/bge-m3/*.gguf — see
+/// manifest.toml's bge-m3-gguf component and bootstrap::spawn_eullm), for
+/// the model IngestionEmbedding::Eullm asks it to embed with. Not a free
+/// filesystem path: eullm resolves "model" in a request against a store
+/// name, exactly like it already does for the chat model — a path eullm
+/// was not started with answers 404 regardless of /api/unload, confirmed
+/// against a real eullm 0.6.82 server, not assumed.
+pub const EULLM_EMBEDDING_MODEL: &str = "bge-m3";
+
 #[derive(Debug, Deserialize)]
 pub struct EmbeddingsSettings {
     #[serde(default = "default_embedding_model")]
@@ -153,27 +201,19 @@ pub struct EmbeddingsSettings {
     /// allowed, but logged at error level (not warn) and exposed via GET /info.
     /// Env: EMBEDDINGS__REQUIRE_GPU (the Settings field is named "embeddings").
     ///
-    /// With swap_during_ingestion=true it stops governing the initial load,
-    /// which always starts on CPU in that mode, and governs the swap to GPU on
-    /// each ingestion instead: true = fail that ingestion if the swap does not
-    /// succeed, false = carry on using CPU (slower but correct).
+    /// With ingestion_embedding=CandleGpu it stops governing the initial
+    /// load, which always starts on CPU in that mode, and governs the swap
+    /// to GPU on each ingestion instead: true = fail that ingestion if the
+    /// swap does not succeed, false = carry on using CPU (slower but
+    /// correct). With ingestion_embedding=Eullm this binary never asks
+    /// Candle for CUDA at all, so require_gpu is free to be false, and
+    /// should be — the GPU belongs to eullm in that mode.
     #[serde(default)]
     pub require_gpu: bool,
-    /// Move bge-m3 from CPU (at rest) to GPU ONLY for the ingestion window,
-    /// then back — see AppState::swap_embeddings_to_gpu/_to_cpu and
-    /// documents::upload(). Meant for hardware where bge-m3 and qwen do not
-    /// fit in VRAM together, e.g. a 12GB card: outside ingestion all the VRAM
-    /// stays with eullm, and bge-m3 runs on CPU for the single embedding each
-    /// query needs — a short text, so the cost is acceptable.
-    /// With plenty of VRAM (16GB+) this is unnecessary: leave it false and
-    /// bge-m3 stays resident on the GPU.
-    ///
-    /// Requires EULLM__UNLOAD_DURING_INGESTION=true — without evicting eullm
-    /// there is no free VRAM to move bge-m3 into — and a binary built with
-    /// --features cuda. Settings::load() fails at startup if either condition
-    /// is missing, rather than degrading silently.
+    /// See IngestionEmbedding. Env: EMBEDDINGS__INGESTION_EMBEDDING
+    /// ("off" | "candle_gpu" | "eullm").
     #[serde(default)]
-    pub swap_during_ingestion: bool,
+    pub ingestion_embedding: IngestionEmbedding,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,7 +282,7 @@ impl Default for EmbeddingsSettings {
         Self {
             model_id: default_embedding_model(),
             require_gpu: false,
-            swap_during_ingestion: false,
+            ingestion_embedding: IngestionEmbedding::default(),
         }
     }
 }
@@ -320,8 +360,8 @@ impl Settings {
             s.backup.dir = data.join("backups").display().to_string();
         }
 
-        validate_swap_during_ingestion(
-            s.embeddings.swap_during_ingestion,
+        validate_ingestion_embedding(
+            s.embeddings.ingestion_embedding,
             s.eullm.unload_during_ingestion,
             cfg!(feature = "cuda"),
         )?;
@@ -332,30 +372,42 @@ impl Settings {
 
 /// Extracted from Settings::load so it can be tested without touching real
 /// environment variables — the same reason ingestion_blocks in state.rs is a
-/// free function. Fails loudly instead of silently ignoring the inconsistent
-/// combination; see EmbeddingsSettings::swap_during_ingestion.
-fn validate_swap_during_ingestion(
-    swap_during_ingestion: bool,
+/// free function. Fails loudly instead of silently ignoring an inconsistent
+/// combination; see IngestionEmbedding.
+fn validate_ingestion_embedding(
+    ingestion_embedding: IngestionEmbedding,
     unload_during_ingestion: bool,
     cuda_feature: bool,
 ) -> Result<()> {
-    if !swap_during_ingestion {
-        return Ok(());
+    match ingestion_embedding {
+        IngestionEmbedding::Off => Ok(()),
+        IngestionEmbedding::CandleGpu => {
+            if !unload_during_ingestion {
+                anyhow::bail!(
+                    "EMBEDDINGS__INGESTION_EMBEDDING=candle_gpu requires \
+                     EULLM__UNLOAD_DURING_INGESTION=true — bge-m3 can only move into the VRAM \
+                     that eullm releases through /api/unload, and without that there is \
+                     nowhere to move it."
+                );
+            }
+            if !cuda_feature {
+                anyhow::bail!(
+                    "EMBEDDINGS__INGESTION_EMBEDDING=candle_gpu requires a binary built with \
+                     --features cuda (swapping to GPU is impossible without CUDA support)."
+                );
+            }
+            Ok(())
+        }
+        IngestionEmbedding::Eullm => {
+            // No requirement on unload_during_ingestion or the cuda feature:
+            // eullm owns both the GPU and the decision to evict its own chat
+            // model, unprompted — see IngestionEmbedding::Eullm's doc comment.
+            // unload_during_ingestion=true together with this IS allowed (it
+            // just adds a redundant, harmless manual unload before eullm's
+            // own automatic one), not worth rejecting.
+            Ok(())
+        }
     }
-    if !unload_during_ingestion {
-        anyhow::bail!(
-            "EMBEDDINGS__SWAP_DURING_INGESTION=true requires EULLM__UNLOAD_DURING_INGESTION=true \
-             — bge-m3 can only move into the VRAM that eullm releases through /api/unload, \
-             and without that there is nowhere to move it."
-        );
-    }
-    if !cuda_feature {
-        anyhow::bail!(
-            "EMBEDDINGS__SWAP_DURING_INGESTION=true requires a binary built with \
-             --features cuda (swapping to GPU is impossible without CUDA support)."
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -363,25 +415,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn swap_disabled_never_fails() {
-        assert!(validate_swap_during_ingestion(false, false, false).is_ok());
-        assert!(validate_swap_during_ingestion(false, true, true).is_ok());
+    fn ingestion_embedding_off_never_fails() {
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Off, false, false).is_ok());
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Off, true, true).is_ok());
     }
 
     #[test]
-    fn swap_without_unload_fails() {
-        let err = validate_swap_during_ingestion(true, false, true).unwrap_err();
+    fn candle_gpu_without_unload_fails() {
+        let err =
+            validate_ingestion_embedding(IngestionEmbedding::CandleGpu, false, true).unwrap_err();
         assert!(err.to_string().contains("UNLOAD_DURING_INGESTION"));
     }
 
     #[test]
-    fn swap_without_cuda_feature_fails() {
-        let err = validate_swap_during_ingestion(true, true, false).unwrap_err();
+    fn candle_gpu_without_cuda_feature_fails() {
+        let err =
+            validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, false).unwrap_err();
         assert!(err.to_string().contains("cuda"));
     }
 
     #[test]
-    fn swap_with_unload_and_cuda_ok() {
-        assert!(validate_swap_during_ingestion(true, true, true).is_ok());
+    fn candle_gpu_with_unload_and_cuda_ok() {
+        assert!(validate_ingestion_embedding(IngestionEmbedding::CandleGpu, true, true).is_ok());
+    }
+
+    #[test]
+    fn eullm_never_fails_regardless_of_unload_or_cuda() {
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, false, false).is_ok());
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, true, false).is_ok());
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, false, true).is_ok());
+        assert!(validate_ingestion_embedding(IngestionEmbedding::Eullm, true, true).is_ok());
     }
 }

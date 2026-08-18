@@ -781,7 +781,7 @@ pub async fn start_eullm(
         match (find_by_name(&manifest, "eullm", &data_dir), gguf) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
-                children.push(spawn_eullm(&bin, &gguf, &settings.eullm)?);
+                children.push(spawn_eullm(&bin, &gguf, &settings.eullm, &data_dir.join("models"))?);
                 tracing::info!("eullm started: {} {}", bin.display(), gguf.display());
                 eullm_model_path = Some(gguf);
             }
@@ -1742,9 +1742,21 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
     args
 }
 
-fn spawn_eullm(bin: &Path, model_path: &Path, cfg: &EullmSettings) -> Result<tokio::process::Child> {
+fn spawn_eullm(
+    bin: &Path,
+    model_path: &Path,
+    cfg: &EullmSettings,
+    models_dir: &Path,
+) -> Result<tokio::process::Child> {
     let mut cmd = Command::new(bin);
     cmd.arg("run").arg(model_path).args(eullm_args(cfg));
+
+    // Makes eullm's own model store (used by "model" in a request that is a
+    // bare name, e.g. "bge-m3" — see config::IngestionEmbedding::Eullm) the
+    // same directory the manifest already downloads into, instead of
+    // eullm's own default (~/.eullm/models). Harmless when nothing ever asks
+    // eullm for a store-resolved model: it only changes where it WOULD look.
+    cmd.env("EULLM_MODELS_DIR", models_dir);
 
     cmd.kill_on_drop(true)
         .stdin(std::process::Stdio::null())

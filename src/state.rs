@@ -16,12 +16,15 @@ pub struct AppState {
     pub settings: Arc<Settings>,
     pub db: SqlitePool,
     /// An RwLock, not merely an Arc: with
-    /// EmbeddingsSettings::swap_during_ingestion the instance is replaced at
-    /// runtime (CPU↔GPU, see swap_embeddings_to_gpu/_to_cpu), which a plain
-    /// Arc does not allow. Reads (embed_text/embed_texts) and writes (the
-    /// swap) always happen from synchronous contexts inside spawn_blocking,
-    /// never across an .await while holding the lock, so std::sync::RwLock is
-    /// the simplest choice and tokio's async variant is unnecessary.
+    /// EmbeddingsSettings::ingestion_embedding=CandleGpu the instance is
+    /// replaced at runtime (CPU↔GPU, see swap_embeddings_to_gpu/_to_cpu),
+    /// which a plain Arc does not allow. Reads (embed_text/embed_texts) and
+    /// writes (the swap) always happen from synchronous contexts inside
+    /// spawn_blocking, never across an .await while holding the lock, so
+    /// std::sync::RwLock is the simplest choice and tokio's async variant is
+    /// unnecessary. Untouched by ingestion_embedding=Eullm: that mode routes
+    /// ingestion embedding through AppState.eullm instead, this field stays
+    /// exactly as loaded at startup.
     pub embeddings: Arc<RwLock<EmbeddingService>>,
     pub qdrant: Arc<dyn VectorStore>,
     pub eullm: Arc<EullmClient>,
@@ -78,18 +81,25 @@ impl AppState {
         }
     }
 
-    /// True when an eullm query should be rejected right now: both
-    /// `unload_during_ingestion` is enabled AND at least one ingestion is in
-    /// flight, so eullm is evicted or about to be (see documents::upload).
-    /// Without this guard a concurrent query would load eullm again by itself,
-    /// through the same swap-on-request mechanism used for the reload, and
-    /// contend for VRAM with the embedding model mid-ingestion.
+    /// True when an eullm query should be rejected right now: at least one
+    /// ingestion is in flight AND eullm is evicted, about to be, or
+    /// otherwise contended for — either because `unload_during_ingestion`
+    /// evicts it ourselves (see documents::upload), or because
+    /// `ingestion_embedding=Eullm` is actively asking eullm for bge-m3
+    /// embeddings, which may make eullm evict its own chat model to make
+    /// room (its decision, not ours — see config::IngestionEmbedding::Eullm).
+    /// Without this guard a concurrent query would load/contend for eullm
+    /// again by itself, through the same swap-on-request mechanism used for
+    /// the reload, racing the ingestion's own use of it.
     pub fn ingestion_blocks_queries(&self) -> bool {
-        ingestion_blocks(self.settings.eullm.unload_during_ingestion, &self.active_ingestions)
+        let blocks_regardless = self.settings.eullm.unload_during_ingestion
+            || self.settings.embeddings.ingestion_embedding
+                == crate::config::IngestionEmbedding::Eullm;
+        ingestion_blocks(blocks_regardless, &self.active_ingestions)
     }
 
     /// Moves bge-m3 onto the GPU for the ingestion window — see
-    /// EmbeddingsSettings::swap_during_ingestion. Blocking (mmap plus weight
+    /// config::IngestionEmbedding::CandleGpu. Blocking (mmap plus weight
     /// copy): the caller must run it inside spawn_blocking, never directly on
     /// an async task.
     pub fn swap_embeddings_to_gpu(&self) -> anyhow::Result<()> {
