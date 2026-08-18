@@ -73,10 +73,10 @@ async fn prepare(
     use_history: bool,
     conversation_id: Option<&str>,
 ) -> anyhow::Result<(String, Vec<Source>, PrepareTimings)> {
-    // 1. Embed the query (CPU/GPU bound). With swap_during_ingestion=true
-    // bge-m3 runs on CPU here — a single short text, so the cost is
-    // acceptable — because the GPU is reserved for eullm outside the ingestion
-    // window.
+    // 1. Embed the query (CPU/GPU bound). With ingestion_embedding=CandleGpu
+    // (or =Eullm, where bge-m3 never touches the GPU at all) bge-m3 runs on
+    // CPU here — a single short text, so the cost is acceptable — because
+    // the GPU is reserved for eullm outside the ingestion window.
     let t = Instant::now();
     let svc = state.embeddings.clone();
     let q = question.to_owned();

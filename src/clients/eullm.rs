@@ -71,6 +71,28 @@ struct StreamChunk {
     done: bool,
 }
 
+/// `input` is a bare string for one text, or an array for a batch — eullm's
+/// /api/embed accepts both, matched by shape, not by a wrapper field.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum EmbedInput<'a> {
+    One(&'a str),
+    Many(&'a [&'a str]),
+}
+
+#[derive(Serialize)]
+struct EmbedRequest<'a> {
+    model: &'a str,
+    input: EmbedInput<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct EmbedResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
 // ── Client ────────────────────────────────────────────────────────────────────
 
 pub struct EullmClient {
@@ -177,6 +199,52 @@ impl EullmClient {
     pub async fn reload(&self) -> Result<()> {
         self.invoke("ok").await?;
         Ok(())
+    }
+
+    // ── Embeddings (eullm ≥ 0.6.82, POST /api/embed) ────────────────────────────
+
+    /// Embeds one or more texts through eullm's own /api/embed instead of the
+    /// in-process Candle path (EmbeddingService) — an alternative that routes
+    /// through whatever GPU eullm is already using, without this binary
+    /// needing CUDA compiled in for it. `model` is eullm's own reference to
+    /// the embedding GGUF (a file path, a directory, or a name registered
+    /// through `eullm import-ollama`) — NOT `self.model`, which is the chat
+    /// model. `keep_alive` follows eullm's duration syntax ("10m", "30s", or
+    /// a bare number of seconds as a string); None leaves the server's own
+    /// --keep-alive default in effect.
+    ///
+    /// Verified against a real eullm 0.6.82 server, not assumed from docs
+    /// alone: a model absent from the local store answers HTTP 404 with a
+    /// structured {"error": "Model '<name>' not found..."} body — handled
+    /// the same way as invoke()'s error path — and both a single string and
+    /// an array `input` are accepted without a parse error.
+    pub async fn embed_texts(
+        &self,
+        model: &str,
+        texts: &[&str],
+        keep_alive: Option<&str>,
+    ) -> Result<Vec<Vec<f32>>> {
+        let url = format!("{}/api/embed", self.base_url);
+        let input = match texts {
+            [one] => EmbedInput::One(one),
+            many => EmbedInput::Many(many),
+        };
+        let resp = self
+            .http
+            .post(&url)
+            .json(&EmbedRequest { model, input, keep_alive })
+            .send()
+            .await
+            .context("eullm embed POST")?;
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().await.context("eullm embed response JSON")?;
+        if !status.is_success() {
+            let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            anyhow::bail!("eullm embed HTTP {status}: {msg}");
+        }
+        let parsed: EmbedResponse =
+            serde_json::from_value(body).context("eullm embed response shape")?;
+        Ok(parsed.embeddings)
     }
 
     // ── Streaming ─────────────────────────────────────────────────────────────
@@ -331,6 +399,49 @@ mod tests {
         let prompt = c.build_prompt("Hello world");
         assert!(prompt.starts_with("<|im_start|>user\nHello world<|im_end|>"));
         assert!(prompt.ends_with(NO_THINK));
+    }
+
+    #[test]
+    fn embed_request_single_text_serializes_as_bare_string_not_array() {
+        let req = EmbedRequest { model: "bge-m3", input: EmbedInput::One("test"), keep_alive: None };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["input"], serde_json::json!("test"));
+        assert!(json.get("keep_alive").is_none(), "keep_alive must be omitted, not null, when absent");
+    }
+
+    #[test]
+    fn embed_request_batch_serializes_as_array_with_keep_alive() {
+        let texts = ["a", "b"];
+        let req =
+            EmbedRequest { model: "bge-m3", input: EmbedInput::Many(&texts), keep_alive: Some("10m") };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["input"], serde_json::json!(["a", "b"]));
+        assert_eq!(json["keep_alive"], "10m");
+    }
+
+    // Response shape per eullm's documented /api/embed contract
+    // ({"model": ..., "embeddings": [[...]]}) — the "model" field is present
+    // on the real server but unused here, so EmbedResponse does not declare
+    // it; serde ignores unknown fields on a non-deny_unknown_fields struct by
+    // default, which is exactly what is wanted.
+    #[test]
+    fn embed_response_parses_the_documented_success_shape() {
+        let body = serde_json::json!({"model": "bge-m3", "embeddings": [[0.013, -0.021]]});
+        let parsed: EmbedResponse = serde_json::from_value(body).unwrap();
+        assert_eq!(parsed.embeddings, vec![vec![0.013, -0.021]]);
+    }
+
+    // Captured verbatim from a real eullm 0.6.82 server (POST /api/embed with
+    // a model absent from the local store) — not invented from the docs.
+    #[test]
+    fn embed_missing_model_error_matches_the_real_server_response() {
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"error":"Model 'bge-m3' not found. Accepted formats:\n  - GGUF file path: /models/model.gguf\n  - Directory with GGUF: /models/mymodel/\n  - Registered name: eullm import-ollama bge-m3"}"#,
+        )
+        .unwrap();
+        let msg = body.get("error").and_then(|v| v.as_str()).unwrap();
+        assert!(msg.contains("not found"));
+        assert!(serde_json::from_value::<EmbedResponse>(body).is_err(), "an error body must not parse as a success response");
     }
 
     #[test]
