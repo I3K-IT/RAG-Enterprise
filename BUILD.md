@@ -3,10 +3,11 @@
 How to build `i3k-rag-engine` from source.
 
 Most users do not need this: the [releases](../../releases)
-ship self-contained tarballs for Linux x86_64 and arm64, with and without CUDA,
-each bundling the compiled frontend and everything the binary needs at runtime.
-Build from source if you want to modify the engine or target a platform we do
-not publish.
+ship self-contained tarballs for Linux x86_64, Linux arm64 and Windows
+x86_64, each bundling the compiled frontend and everything the binary needs
+at runtime. Build from source if you want to modify the engine, add back
+Candle's CUDA support (§2c — source-available, not published), or target a
+platform we do not publish.
 
 ---
 
@@ -44,8 +45,7 @@ Unlike pdfium (§2b), Tesseract has no upstream prebuilt-binaries repo, so
 there is nowhere to point a manifest.toml entry at — `bootstrap.rs` never
 downloads it. Instead `ci.yml` builds both from source in every release job
 (Tesseract 5.5.0 + Leptonica 1.85.0) and bundles the result directly into the
-tarball, the same way the CUDA runtime libraries already are for the `-cuda`
-variants: a distro's Tesseract links `libcurl` and `libarchive` and pulls in
+tarball: a distro's Tesseract links `libcurl` and `libarchive` and pulls in
 roughly fifty shared libraries transitively, for URL-fetching and multi-page
 TIFF support this engine never uses, since it only ever feeds Tesseract raw
 pixels straight from pdfium. Built with `-DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON`
