@@ -2,31 +2,32 @@ name: CI
 
 # Job "rust"/"frontend": build+test ad ogni push su main (invariati).
 #
-# Job "release-*": SOLO sui tag v*, producono i 4 binari scaricabili allegati
-# alla GitHub Release (release-linux-{x86_64,arm64}{,-cuda}). Nessun binario
-# "universale": --features cuda RICHIEDE il driver NVIDIA (libcuda.so.1)
-# presente per AVVIARSI, non solo per usare la GPU — non è il fallback
-# graceful CPU/GPU già gestito dentro il processo da EmbeddingService::load
-# (quello copre "il driver c'è ma CUDA fallisce", non "il driver non c'è
-# affatto"). Verificato con una build reale in locale (nessuna GPU, stesso
-# profilo di un runner GitHub):
-#   - candle-kernels rileva la compute cap via nvidia-smi, assente sui
-#     runner → fallisce con ComputeCapDetectionFailed senza
-#     CUDA_COMPUTE_CAP impostata esplicitamente. 80 (Ampere) è il target PTX:
-#     compatibile via JIT sia con la RTX 3060 (Orion, sm_86) sia con la RTX
-#     5070 Ti (sm_120, vedi BUILD.md) — non serve un valore per GPU.
-#   - Pacchetti CUDA minimi necessari per compilare (nvcc + link):
-#     cuda-nvcc, cuda-cudart-dev, libcublas-dev, cuda-nvrtc-dev,
-#     libcurand-dev (tutti -12-8). La metapackage cuda-toolkit-12-8 intera
-#     è molto più pesante (6-8GB) e include roba mai usata qui (driver,
-#     nsight, samples, docs) — sui runner c'è solo 14GB di disco.
-#   - arm64: repo apt "sbsa" (server arm64 + GPU discreta, es. Orion+RTX
-#     3060), NON il repo "arm64" (quello è per libnvidia-container/Jetson,
-#     pacchetti completamente diversi — verificato confrontando gli indici).
-# ARM64 gira su runner nativi ubuntu-24.04-arm (disponibili anche su repo
-# privati da inizio 2026, minuti standard) — niente cross-compilation, niente
-# toolchain gcc-aarch64/PKG_CONFIG_ALLOW_CROSS. Tutte e 4 le varianti (incluso
-# arm64+cuda, mai testato prima) verificate con successo sul tag v0.1.0.
+# Job "release-*": SOLO sui tag v*, producono i 3 binari scaricabili allegati
+# alla GitHub Release (release-linux-x86_64, release-linux-arm64,
+# release-windows-x86_64) — tutti CPU-only per l'embedding Candle/bge-m3
+# interno a questo binario. ARM64 gira su runner nativi ubuntu-24.04-arm
+# (niente cross-compilation, niente toolchain gcc-aarch64/
+# PKG_CONFIG_ALLOW_CROSS).
+#
+# Candle-CUDA (--features cuda, ex release-linux-{x86_64,arm64}-cuda) NON è
+# più compilato né pubblicato da questo workflow: eullm sa già fare
+# l'embedding bge-m3 con la propria CUDA bundlata (/api/embed dalla 0.6.82,
+# --embedding-model dalla 0.6.90 — vedi config::IngestionEmbedding::Eullm),
+# quindi una seconda toolchain CUDA dentro il binario RAG per lo stesso scopo
+# è solo peso morto. Il feature flag e il codice device (clients/
+# embeddings.rs, IngestionEmbedding::CandleGpu) restano nel sorgente —
+# compilabili a mano con `cargo build --features cuda`, vedi BUILD.md — ma
+# non testati né rilasciati: passo intermedio prima della rimozione
+# completa, non una scelta lasciata a marcire indefinitamente. I job rimossi
+# (release-linux-*-cuda, warm-cache-*-cuda) restano nella storia git di
+# questo file come riferimento.
+#
+# Non riguarda eullm: la sua variante CUDA resta scaricata automaticamente
+# su tutte e 3 le piattaforme quando c'è una GPU NVIDIA con driver
+# funzionante — bootstrap::current_targets() la rileva a runtime
+# (nvidia-smi), indipendentemente da come è compilato QUESTO binario. È lo
+# stesso meccanismo già in produzione su Windows, da sempre CPU-only per
+# Candle pur scaricando eullm-cuda quando la GPU c'è (vedi più sotto).
 #
 # qdrant su arm64 (entrambi i job): NON è l'ufficiale, è una build custom
 # scaricata da i3k.dev e bundlata in bin/qdrant nel tarball — vedi commento
@@ -42,15 +43,6 @@ name: CI
 #     stessa convenzione "portable app dir" di config::default_data_dir),
 #     non CWD-relative: funziona da qualunque cartella si lanci il binario,
 #     basta che "frontend/dist" stia accanto ad esso.
-#   - Per le varianti -cuda: lib/libcublas.so.12 + libcublasLt.so.12 +
-#     libcudart.so.12 + libnvrtc.so.12 + libcurand.so.10, copiate via ldd dopo
-#     la build. Il binario è compilato con RUSTFLAGS
-#     "-Wl,-rpath,$ORIGIN/lib -Wl,-z,origin": cerca lì PRIMA delle lib di
-#     sistema, quindi funziona anche su una macchina col solo driver NVIDIA
-#     installato (non il CUDA toolkit completo). libcuda.so.1 (il driver vero)
-#     resta l'unica eccezione non bundlabile — deve venire dal sistema target.
-#     Le varianti CPU non hanno bisogno di questo RUSTFLAGS: non linkano più
-#     niente che vada cercato a runtime in ./lib.
 #   - lib/libtesseract.so.5 + lib/libleptonica.so.6: costruite da sorgente in
 #     ogni job (Tesseract 5.5.0 + Leptonica 1.85.0, DISABLE_CURL/ARCHIVE +
 #     codec immagine OFF — Tesseract riceve solo pixel già decodificati da
@@ -101,17 +93,14 @@ name: CI
 # manifest.
 #
 # Cache: Swatinem/rust-cache su tutti i job che compilano (chiave distinta
-# per config: debug / release-x86_64(-cuda) / release-arm64(-cuda) — il
-# default dell'action non distingue per --features, quindi senza chiave
-# esplicita una build CPU e una CUDA potrebbero condividere cache in modo
+# per job: debug / release-x86_64 / release-arm64 / release-windows-x86_64 —
+# il default dell'action non distingue per target/job, quindi senza chiave
+# esplicita job diversi potrebbero condividere cache di target/ in modo
 # scorretto). Non actions/cache "a mano" su target/: quel path aveva
 # riempito i 14GB del runner fino a far crashare il job "rust" (non un
 # warning innocuo — il runner è morto, log del job mai arrivati su GitHub).
 # rust-cache pota da sé gli artefatti obsoleti prima di salvare invece di
-# comprimere target/ indiscriminatamente, ed è anche il motivo per cui prima
-# i job CUDA (che non avevano NESSUNA cache) erano la parte più lenta del
-# workflow (~20+ min a ricompilare candle/cudarc/candle-kernels da zero ad
-# ogni run) — non il tag/release in sé.
+# comprimere target/ indiscriminatamente.
 #
 # Cache tra release diverse (job "detect-deps-change" + "warm-cache-*"):
 # verificato nella documentazione ufficiale GitHub (non un'ipotesi) —
@@ -120,7 +109,7 @@ name: CI
 # MAI condiviso con un altro tag. L'UNICO fallback disponibile per un tag è
 # la cache del branch di default (main) — ma i job release-* girano SOLO
 # sui tag (if: startsWith(github.ref, 'refs/tags/v')), quindi main non ha
-# MAI popolato le 4 chiavi release-*. Risultato: ogni tag con un nome MAI
+# MAI popolato le chiavi release-*. Risultato: ogni tag con un nome MAI
 # usato prima parte obbligatoriamente a freddo (13-17 min), a prescindere
 # da quanto spazio di cache resta — non eviction, è lo scoping stesso di
 # GitHub. I job warm-cache-* replicano SOLO la compilazione (stessa chiave
@@ -264,49 +253,6 @@ jobs:
       - name: cargo build --release --locked
         run: cargo build --release --locked --verbose
 
-  warm-cache-x86_64-cuda:
-    name: Riscalda cache — linux x86_64 (CUDA)
-    needs: detect-deps-change
-    if: needs.detect-deps-change.outputs.changed == 'true'
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Libera spazio disco
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo apt-get clean
-
-      - name: "Installa CUDA Toolkit 12.8 (minimo: nvcc, cudart, cublas, nvrtc, curand)"
-        run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          # liblzma-dev: non c'entra con CUDA, ma qualcosa in questo runner
-          # (probabilmente l'apt-get update di cuda-keyring qui sopra) lascia
-          # il sistema senza liblzma.so — il link di i3k-rag-engine fallisce
-          # con "cannot find -llzma" (zip/docx-rs la richiedono). I job
-          # CPU-only vanno bene: non fanno questo apt-get update. Innocuo
-          # installarla sempre qui.
-          sudo apt-get install -y --no-install-recommends \
-            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
-
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-x86_64-cuda
-
-      - name: cargo build --release --features cuda --locked
-        env:
-          CUDA_COMPUTE_CAP: "80"
-          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: |
-          export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features cuda --locked --verbose
-
   warm-cache-windows-x86_64:
     name: Riscalda cache — windows x86_64 (CPU, cross da Linux)
     needs: detect-deps-change
@@ -346,48 +292,9 @@ jobs:
       - name: cargo build --release --locked
         run: cargo build --release --locked --verbose
 
-  warm-cache-arm64-cuda:
-    name: Riscalda cache — linux arm64 (CUDA)
-    needs: detect-deps-change
-    if: needs.detect-deps-change.outputs.changed == 'true'
-    continue-on-error: true
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Libera spazio disco
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo apt-get clean
-
-      - name: "Installa CUDA Toolkit 12.8 SBSA (minimo: nvcc, cudart, cublas, nvrtc, curand)"
-        run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          # liblzma-dev: vedi commento nel job x86_64 (CUDA) — stesso apt-get
-          # update, stesso sintomo ("cannot find -llzma" in link).
-          sudo apt-get install -y --no-install-recommends \
-            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
-
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-arm64-cuda
-
-      - name: cargo build --release --features cuda --locked
-        env:
-          CUDA_COMPUTE_CAP: "80"
-          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: |
-          export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features cuda --locked --verbose
-
   # ─────────────────────────────────────────────────────────────────────────
   # Release (solo tag v*) — vedi commento in cima al file per il perché delle
-  # 4 varianti separate e dei parametri CUDA.
+  # 3 varianti separate.
   #
   # Ogni job pubblica il proprio tarball DIRETTAMENTE come asset della
   # GitHub Release (softprops/action-gh-release), non più via
@@ -403,7 +310,7 @@ jobs:
   # release è idempotente sul tag: la prima chiamata crea la Release, le
   # successive (dai job paralleli) aggiungono solo il proprio asset a quella
   # già esistente — pattern comune per release multi-piattaforma, non serve
-  # serializzare i 4 job con `needs`.
+  # serializzare i job con `needs`.
   # ─────────────────────────────────────────────────────────────────────────
 
   release-linux-x86_64:
@@ -480,135 +387,6 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz.sha256"
-
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
-          fail_on_unmatched_files: true
-
-  release-linux-x86_64-cuda:
-    name: Release — linux x86_64 (CUDA)
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      # Il runner ha solo 14GB di disco — il toolkit CUDA (anche minimo) ne
-      # occupa alcuni GB, meglio liberare spazio non necessario a noi prima.
-      - name: Libera spazio disco
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo apt-get clean
-
-      - name: "Installa CUDA Toolkit 12.8 (minimo: nvcc, cudart, cublas, nvrtc, curand)"
-        run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          # liblzma-dev: non c'entra con CUDA, ma qualcosa in questo runner
-          # (probabilmente l'apt-get update di cuda-keyring qui sopra) lascia
-          # il sistema senza liblzma.so — il link di i3k-rag-engine fallisce
-          # con "cannot find -llzma" (zip/docx-rs la richiedono). I job
-          # CPU-only vanno bene: non fanno questo apt-get update. Innocuo
-          # installarla sempre qui.
-          sudo apt-get install -y --no-install-recommends \
-            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
-
-      # Prima non c'era NESSUNA cache qui — ogni run ricompilava candle/
-      # cudarc/candle-kernels da zero (~20+ min), il vero grosso dei 35 min
-      # totali del workflow, non il tag/release. rust-cache pota da sé,
-      # sicura anche con lo spazio già eroso dal toolkit CUDA installato sopra.
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-x86_64-cuda
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
-
-      # RPATH $ORIGIN/lib: vedi commento nel job x86_64 CPU. Qui in più
-      # servono le lib CUDA runtime (cublas/cudart/nvrtc/curand) — una
-      # macchina col solo driver NVIDIA installato (non il CUDA toolkit
-      # completo) altrimenti non le avrebbe. libcuda.so.1 (il driver vero)
-      # NON è bundlabile: deve venire dal sistema target, non c'è modo di
-      # aggirarlo (vedi commento in cima al file).
-      - name: cargo build --release --features cuda --locked
-        env:
-          # Niente GPU fisica sul runner → candle-kernels non riesce a
-          # rilevare la compute cap da nvidia-smi (ComputeCapDetectionFailed).
-          # 80 = target PTX Ampere, JIT-compatibile con GPU più recenti
-          # (Blackwell sm_120) e leggermente più vecchie (Ampere sm_86).
-          CUDA_COMPUTE_CAP: "80"
-          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: |
-          export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features cuda --locked --verbose
-
-      - name: Installa patchelf (per il RPATH di libtesseract)
-        run: sudo apt-get install -y --no-install-recommends patchelf
-
-      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
-        run: |
-          set -e
-          W=$(mktemp -d)
-          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
-          tar xzf "$W/leptonica.tar.gz" -C "$W"
-          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
-
-          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
-            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF -DENABLE_ZLIB=ON \
-            -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF \
-            -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
-          cmake --build "$W/build-lept" -j"$(nproc)"
-          cmake --install "$W/build-lept"
-
-          PKG_CONFIG_PATH="$W/out/lib/pkgconfig" cmake -S "$W/tesseract" -B "$W/build-tess" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
-            -DCMAKE_PREFIX_PATH="$W/out" -DBUILD_SHARED_LIBS=ON \
-            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
-            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF
-          cmake --build "$W/build-tess" -j"$(nproc)"
-
-          mkdir -p stage/lib
-          cp -L "$W/build-tess"/libtesseract.so.5.5.0 stage/lib/libtesseract.so.5
-          cp -L "$W/build-lept/src"/libleptonica.so.6.0.0 stage/lib/libleptonica.so.6
-          patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
-          patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
-
-      - name: Impacchetta binario + lib bundlate + frontend + checksum
-        run: |
-          sudo ldconfig
-          mkdir -p dist stage/lib stage/frontend
-          cp target/release/i3k-rag-engine stage/
-          cp -r frontend/dist stage/frontend/dist
-          for lib in libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
-            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
-            if [ -z "$path" ]; then
-              path=$(find /usr/local/cuda-12.8 -name "$lib" 2>/dev/null | head -1)
-            fi
-            if [ -z "$path" ]; then
-              echo "ERRORE: $lib non trovata (né via ldd né via find)" >&2
-              exit 1
-            fi
-            cp -L "$path" "stage/lib/$lib"
-          done
-          VERSION="${GITHUB_REF#refs/tags/}"
-          tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz" -C stage .
-          sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64-cuda.tar.gz.sha256"
 
       - uses: softprops/action-gh-release@v3
         with:
@@ -698,128 +476,6 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz.sha256"
-
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
-          fail_on_unmatched_files: true
-
-  release-linux-arm64-cuda:
-    name: Release — linux arm64 (CUDA)
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Libera spazio disco
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo apt-get clean
-
-      # Repo "sbsa" = server arm64 con GPU discreta (Orion+RTX3060). Il repo
-      # "arm64" di NVIDIA è tutt'altra cosa (libnvidia-container/Jetson) —
-      # verificato confrontando i due indici pacchetti, non usarlo qui.
-      - name: "Installa CUDA Toolkit 12.8 SBSA (minimo: nvcc, cudart, cublas, nvrtc, curand)"
-        run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          # liblzma-dev: vedi commento nel job x86_64 (CUDA) — stesso apt-get
-          # update, stesso sintomo ("cannot find -llzma" in link).
-          sudo apt-get install -y --no-install-recommends \
-            cuda-nvcc-12-8 cuda-cudart-dev-12-8 libcublas-dev-12-8 \
-            cuda-nvrtc-dev-12-8 libcurand-dev-12-8 liblzma-dev
-
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-arm64-cuda
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
-
-      - name: cargo build --release --features cuda --locked
-        env:
-          CUDA_COMPUTE_CAP: "80"
-          LIBRARY_PATH: /usr/local/cuda-12.8/lib64/stubs
-          RUSTFLAGS: "-C link-args=-Wl,-rpath,$ORIGIN/lib -C link-args=-Wl,-z,origin"
-        run: |
-          export PATH=/usr/local/cuda-12.8/bin:$PATH
-          cargo build --release --features cuda --locked --verbose
-
-      # Vedi commento sopra la entry qdrant/linux-aarch64 in manifest.toml e
-      # nel job arm64 CPU: build custom col fix jemalloc page-size, bundlata
-      # non scaricata al bootstrap.
-      - name: Scarica qdrant (build custom, fix jemalloc page-size) e bundlalo
-        run: |
-          mkdir -p stage/bin
-          curl -fsSL -o stage/bin/qdrant "https://www.i3k.dev/bin/qdrant-1.18.2-aarch64-linux-gnu-64kpage"
-          echo "61c98880fd44d915ae20192a0c3e8554cdbd5f40562d67eeff86e60c3e04f375  stage/bin/qdrant" | sha256sum -c -
-          chmod +x stage/bin/qdrant
-
-      - name: Installa patchelf (per il RPATH di libtesseract)
-        run: sudo apt-get install -y --no-install-recommends patchelf
-
-      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
-        run: |
-          set -e
-          W=$(mktemp -d)
-          curl -fsSL -o "$W/leptonica.tar.gz" "https://github.com/DanBloomberg/leptonica/releases/download/1.85.0/leptonica-1.85.0.tar.gz"
-          tar xzf "$W/leptonica.tar.gz" -C "$W"
-          git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
-
-          cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
-            -DBUILD_SHARED_LIBS=ON -DSW_BUILD=OFF -DENABLE_ZLIB=ON \
-            -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF \
-            -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
-          cmake --build "$W/build-lept" -j"$(nproc)"
-          cmake --install "$W/build-lept"
-
-          PKG_CONFIG_PATH="$W/out/lib/pkgconfig" cmake -S "$W/tesseract" -B "$W/build-tess" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
-            -DCMAKE_PREFIX_PATH="$W/out" -DBUILD_SHARED_LIBS=ON \
-            -DDISABLE_CURL=ON -DDISABLE_ARCHIVE=ON -DBUILD_TRAINING_TOOLS=OFF \
-            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF
-          cmake --build "$W/build-tess" -j"$(nproc)"
-
-          mkdir -p stage/lib
-          cp -L "$W/build-tess"/libtesseract.so.5.5.0 stage/lib/libtesseract.so.5
-          cp -L "$W/build-lept/src"/libleptonica.so.6.0.0 stage/lib/libleptonica.so.6
-          patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
-          patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
-
-      - name: Impacchetta binario + lib bundlate + frontend + qdrant + checksum
-        run: |
-          sudo ldconfig
-          mkdir -p dist stage/lib stage/frontend
-          cp target/release/i3k-rag-engine stage/
-          cp -r frontend/dist stage/frontend/dist
-          for lib in libcublas.so.12 libcublasLt.so.12 libcudart.so.12 libnvrtc.so.12 libcurand.so.10; do
-            path=$(ldd stage/i3k-rag-engine | awk -v l="$lib" '$1==l {print $3}')
-            if [ -z "$path" ]; then
-              path=$(find /usr/local/cuda-12.8 -name "$lib" 2>/dev/null | head -1)
-            fi
-            if [ -z "$path" ]; then
-              echo "ERRORE: $lib non trovata (né via ldd né via find)" >&2
-              exit 1
-            fi
-            cp -L "$path" "stage/lib/$lib"
-          done
-          VERSION="${GITHUB_REF#refs/tags/}"
-          tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" -C stage .
-          sha256sum "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-arm64-cuda.tar.gz.sha256"
 
       - uses: softprops/action-gh-release@v3
         with:

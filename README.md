@@ -45,22 +45,20 @@ Download the tarball for your platform from the [releases](../../releases) page
 
 | File | For |
 |---|---|
-| `linux-x86_64-cuda` | PC or server with an NVIDIA GPU |
-| `linux-x86_64` | PC or server, CPU only |
-| `linux-arm64-cuda` | ARM64 board with an NVIDIA GPU |
-| `linux-arm64` | ARM64 board, CPU only |
-| `windows-x86_64` | Windows PC, CPU embeddings — eullm still uses the GPU if present |
+| `linux-x86_64` | Linux PC or server (x86_64) |
+| `linux-arm64` | ARM64 board |
+| `windows-x86_64` | Windows PC |
 
-The `-cuda` builds require the NVIDIA driver to be installed: they will not
-start without it. If you have no GPU, take the CPU build. The Windows build
-runs the embedding model on CPU regardless — Candle's CUDA support is not
-cross-compiled for Windows (§2c of [BUILD.md](BUILD.md)) — but the language
-model (eullm) is a separate process and still uses the GPU on Windows when
-one is available.
+Every tarball runs the embedding step (bge-m3, via Candle, inside this
+binary) on CPU. That does not mean no GPU is used: eullm — a separate
+process, started and kept up to date automatically — detects an NVIDIA GPU
+at startup and uses it, on every platform, for the chat model and, since
+eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
+No separate GPU build or download is needed on any platform.
 
 ```sh
-tar -xzf i3k-rag-engine-v0.1.30-linux-x86_64-cuda.tar.gz
-cd i3k-rag-engine-v0.1.30-linux-x86_64-cuda
+tar -xzf i3k-rag-engine-v0.1.30-linux-x86_64.tar.gz
+cd i3k-rag-engine-v0.1.30-linux-x86_64
 
 cat > .env <<'EOF'
 AUTH__JWT_SECRET=change-this-to-a-long-random-string
