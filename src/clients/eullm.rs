@@ -307,7 +307,7 @@ impl EullmClient {
 
                     // Repetition guard.
                     if token_count >= REP_CHECK_AFTER
-                        && token_count % REP_CHECK_EVERY == 0
+                        && token_count.is_multiple_of(REP_CHECK_EVERY)
                     {
                         let tail = tail_slice(&accumulated, REP_TAIL);
                         if is_repeating(tail) {

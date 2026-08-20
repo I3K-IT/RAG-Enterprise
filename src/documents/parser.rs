@@ -3,7 +3,7 @@
 //! Extraction chain, following ocr_service.py:
 //! 1. .txt/.md/.csv  → read directly as UTF-8
 //! 2. PDF            → pdf_oxide (text_ratio > 0.5 AND len > 500)
-//!                     → OCR fallback below that ratio (see ocr.rs)
+//!    → OCR fallback below that ratio (see ocr.rs)
 //! 3. DOCX           → docx-rs
 //! 4. XLSX/XLS       → calamine
 //! 5. HTML           → scraper

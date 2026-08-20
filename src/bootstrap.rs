@@ -1618,7 +1618,7 @@ fn free_space_bytes_at(p: &Path) -> u64 {
     };
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) } == 0 {
-        (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
+        stat.f_bavail.saturating_mul(stat.f_frsize)
     } else {
         u64::MAX
     }
@@ -1844,7 +1844,7 @@ async fn wait_for_url(url: &str, timeout_secs: u64, label: &str) -> Result<()> {
         if Instant::now() >= deadline {
             bail!("{label} is not responding after {timeout_secs}s — URL: {url}");
         }
-        if tick > 0 && tick % 15 == 0 {
+        if tick > 0 && tick.is_multiple_of(15) {
             tracing::info!(elapsed_s = tick * 2, "still waiting for {label}…");
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
@@ -1989,6 +1989,7 @@ async fn parallel_download(url: &str, dest: &Path, display_name: &str, n: usize)
         let f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(false)
             .open(dest)
             .with_context(|| format!("open {}", dest.display()))?;
         f.set_len(total)?;
