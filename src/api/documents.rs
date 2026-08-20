@@ -236,8 +236,9 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         .iter()
         .enumerate()
         .map(|(i, chunk)| {
-            let (page_start, page_end) = parser::pages_for_range(&pages, chunk.start, chunk.end)
-                .map_or((None, None), |(s, e)| (Some(s), Some(e)));
+            let (page_start, page_end) =
+                parser::pages_for_range(&pages, chunk.start_byte, chunk.end_byte)
+                    .map_or((None, None), |(s, e)| (Some(s), Some(e)));
             ChunkPayload {
                 document_id: document_id.clone(),
                 chunk_index: i,
@@ -247,11 +248,15 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                 chunk_size: chunk.text.len(),
                 document_type: ext.clone(),
                 structured_fields: None,
-                source_start: Some(chunk.start),
-                source_end: Some(chunk.end),
+                source_start_byte: Some(chunk.start_byte),
+                source_end_byte: Some(chunk.end_byte),
                 page_start,
                 page_end,
-                provenance_id: Some(chunker::provenance_id(&content_sha256, i)),
+                provenance_id: Some(chunker::provenance_id(
+                    &content_sha256,
+                    i,
+                    parser::EXTRACTION_CONFIG_VERSION,
+                )),
             }
         })
         .collect();

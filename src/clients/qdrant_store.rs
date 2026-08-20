@@ -6,8 +6,8 @@
 //! - Payload: document_id, chunk_index, filename, upload_date, text, chunk_size,
 //!   document_type, structured_fields (optional), plus the Source Provenance
 //!   Foundation fields (all optional — absent on points written before they
-//!   existed): source_start, source_end, page_start, page_end, provenance_id
-//!   — see ChunkPayload.
+//!   existed): source_start_byte, source_end_byte, page_start, page_end,
+//!   provenance_id — see ChunkPayload.
 //! - search: optional score_threshold; returns {id, similarity, payload}
 //! - delete_document: filters by document_id
 
@@ -90,11 +90,11 @@ impl VectorStore for QdrantStore {
                     if let Some(sf) = &p.structured_fields {
                         obj["structured_fields"] = sf.clone();
                     }
-                    if let Some(v) = p.source_start {
-                        obj["source_start"] = serde_json::json!(v as i64);
+                    if let Some(v) = p.source_start_byte {
+                        obj["source_start_byte"] = serde_json::json!(v as i64);
                     }
-                    if let Some(v) = p.source_end {
-                        obj["source_end"] = serde_json::json!(v as i64);
+                    if let Some(v) = p.source_end_byte {
+                        obj["source_end_byte"] = serde_json::json!(v as i64);
                     }
                     if let Some(v) = p.page_start {
                         obj["page_start"] = serde_json::json!(v);

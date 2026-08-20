@@ -14,22 +14,36 @@
 use std::path::Path;
 use anyhow::{Context, Result};
 
-/// One page's byte-offset span `[start, end)` within `ExtractedText::text`.
-/// `page` is 1-based. PDF-only (native or OCR) — every other format leaves
-/// `ExtractedText::pages` empty, since none of txt/md/csv/docx/xlsx/html has
-/// a page concept that survives extraction into flat text today.
+/// Bumped whenever extraction logic changes in a way that could alter the
+/// resulting text or page spans for an unchanged input file — e.g. the
+/// native/OCR acceptance threshold below, the OCR rasterisation DPI, or a
+/// fix to how page spans are computed. Baked into every
+/// `rag::chunker::provenance_id` (as `pv{VERSION}`), independently of
+/// `rag::chunker::CHUNKING_CONFIG_VERSION`: an extraction change and a
+/// chunking change are different pipeline stages with different change
+/// cadences, so conflating them into one counter would make old ids less
+/// diagnostic when something changes.
+pub const EXTRACTION_CONFIG_VERSION: u32 = 1;
+
+/// One page's byte-offset span `[start_byte, end_byte)` within
+/// `ExtractedText::text`. `page` is 1-based. PDF-only (native or OCR) —
+/// every other format leaves `ExtractedText::pages` empty, since none of
+/// txt/md/csv/docx/xlsx/html has a page concept that survives extraction
+/// into flat text today. BYTE offsets, not char offsets — see
+/// rag::chunker::Chunk for why that's named explicitly rather than left
+/// implicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageSpan {
     pub page: u32,
-    pub start: usize,
-    pub end: usize,
+    pub start_byte: usize,
+    pub end_byte: usize,
 }
 
 /// Result of extracting a document: the flat text chunker::split_text
 /// operates on, the page count (None when the format has no pages), and —
 /// PDF only — the byte-offset span of each page within `text`, so a later
-/// chunk's `[start, end)` (see rag::chunker::Chunk) can be mapped back to
-/// the page(s) it came from via `pages_for_range`.
+/// chunk's `[start_byte, end_byte)` (see rag::chunker::Chunk) can be mapped
+/// back to the page(s) it came from via `pages_for_range`.
 #[derive(Debug, Clone, Default)]
 pub struct ExtractedText {
     pub text: String,
@@ -63,18 +77,19 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
     }
 }
 
-/// Given a chunk's byte-offset span `[start, end)` in the extracted text and
-/// the page spans produced alongside it, returns the inclusive `(first,
-/// last)` 1-based page range the chunk overlaps — `None` when `pages` is
-/// empty (non-PDF, or a PDF whose extraction produced no page spans). A
-/// chunk can legitimately straddle more than one page (CHUNK_OVERLAP can
-/// bridge a page boundary), hence a range rather than a single page.
-pub fn pages_for_range(pages: &[PageSpan], start: usize, end: usize) -> Option<(u32, u32)> {
+/// Given a chunk's byte-offset span `[start_byte, end_byte)` in the
+/// extracted text and the page spans produced alongside it, returns the
+/// inclusive `(first, last)` 1-based page range the chunk overlaps —
+/// `None` when `pages` is empty (non-PDF, or a PDF whose extraction
+/// produced no page spans). A chunk can legitimately straddle more than
+/// one page (CHUNK_OVERLAP can bridge a page boundary), hence a range
+/// rather than a single page.
+pub fn pages_for_range(pages: &[PageSpan], start_byte: usize, end_byte: usize) -> Option<(u32, u32)> {
     let mut first: Option<u32> = None;
     let mut last: Option<u32> = None;
     for p in pages {
-        // Half-open range overlap test: [p.start, p.end) intersects [start, end).
-        if p.start < end && p.end > start {
+        // Half-open range overlap test: [p.start_byte, p.end_byte) intersects [start_byte, end_byte).
+        if p.start_byte < end_byte && p.end_byte > start_byte {
             first = Some(first.map_or(p.page, |f| f.min(p.page)));
             last = Some(last.map_or(p.page, |l| l.max(p.page)));
         }
@@ -107,7 +122,7 @@ fn extract_pdf(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
             let start = full_text.len();
             full_text.push_str(&page_text);
             full_text.push('\n');
-            pages.push(PageSpan { page: (i + 1) as u32, start, end: full_text.len() });
+            pages.push(PageSpan { page: (i + 1) as u32, start_byte: start, end_byte: full_text.len() });
         }
     }
 
@@ -228,7 +243,7 @@ mod tests {
     use super::*;
 
     fn span(page: u32, start: usize, end: usize) -> PageSpan {
-        PageSpan { page, start, end }
+        PageSpan { page, start_byte: start, end_byte: end }
     }
 
     #[test]
@@ -348,16 +363,16 @@ mod tests {
         assert_eq!(extracted.pages[0].page, 1);
         assert_eq!(extracted.pages[1].page, 2);
         // Spans are contiguous: every byte of `text` belongs to exactly one page.
-        assert_eq!(extracted.pages[0].start, 0);
-        assert_eq!(extracted.pages[0].end, extracted.pages[1].start);
-        assert_eq!(extracted.pages[1].end, extracted.text.len());
+        assert_eq!(extracted.pages[0].start_byte, 0);
+        assert_eq!(extracted.pages[0].end_byte, extracted.pages[1].start_byte);
+        assert_eq!(extracted.pages[1].end_byte, extracted.text.len());
 
         // A chunk squarely inside page 1 maps to page 1 only.
-        let inside_p1 = extracted.pages[0].start + 5..extracted.pages[0].end - 5;
+        let inside_p1 = extracted.pages[0].start_byte + 5..extracted.pages[0].end_byte - 5;
         assert_eq!(pages_for_range(&extracted.pages, inside_p1.start, inside_p1.end), Some((1, 1)));
 
         // A chunk straddling the page boundary (as CHUNK_OVERLAP can produce) maps to (1, 2).
-        let boundary = extracted.pages[0].end;
+        let boundary = extracted.pages[0].end_byte;
         assert_eq!(pages_for_range(&extracted.pages, boundary - 5, boundary + 5), Some((1, 2)));
     }
 }

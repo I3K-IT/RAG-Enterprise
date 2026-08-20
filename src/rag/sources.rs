@@ -13,10 +13,11 @@ pub struct Source {
     // Source Provenance Foundation — infrastructural locator only, see
     // rag::vector_store::ChunkPayload for what each field means and why
     // they're all optional (absent on sources predating this feature).
+    // source_start_byte/source_end_byte are BYTE offsets, not char offsets.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_start: Option<usize>,
+    pub source_start_byte: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_end: Option<usize>,
+    pub source_end_byte: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_start: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]

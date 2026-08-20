@@ -280,7 +280,11 @@ pub fn ocr_pdf(
         let start = full_text.len();
         full_text.push_str(&page_text);
         full_text.push('\n');
-        pages.push(super::parser::PageSpan { page: (i + 1) as u32, start, end: full_text.len() });
+        pages.push(super::parser::PageSpan {
+            page: (i + 1) as u32,
+            start_byte: start,
+            end_byte: full_text.len(),
+        });
     }
 
     tracing::info!(
@@ -421,7 +425,7 @@ mod smoke_test {
         // The page span must cover the whole (single-page) text, 1-based.
         assert_eq!(extracted.pages.len(), 1, "expected exactly one page span");
         assert_eq!(extracted.pages[0].page, 1);
-        assert_eq!(extracted.pages[0].start, 0);
-        assert_eq!(extracted.pages[0].end, extracted.text.len());
+        assert_eq!(extracted.pages[0].start_byte, 0);
+        assert_eq!(extracted.pages[0].end_byte, extracted.text.len());
     }
 }

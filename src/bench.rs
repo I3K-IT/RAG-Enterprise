@@ -327,7 +327,7 @@ async fn run_ingestion(
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let (page_start, page_end) = parser::pages_for_range(&pages, c.start, c.end)
+            let (page_start, page_end) = parser::pages_for_range(&pages, c.start_byte, c.end_byte)
                 .map_or((None, None), |(s, e)| (Some(s), Some(e)));
             ChunkPayload {
                 document_id: document_id.clone(),
@@ -338,11 +338,15 @@ async fn run_ingestion(
                 chunk_size: c.text.len(),
                 document_type: ext.clone(),
                 structured_fields: None,
-                source_start: Some(c.start),
-                source_end: Some(c.end),
+                source_start_byte: Some(c.start_byte),
+                source_end_byte: Some(c.end_byte),
                 page_start,
                 page_end,
-                provenance_id: Some(chunker::provenance_id(&content_sha256, i)),
+                provenance_id: Some(chunker::provenance_id(
+                    &content_sha256,
+                    i,
+                    parser::EXTRACTION_CONFIG_VERSION,
+                )),
             }
         })
         .collect();

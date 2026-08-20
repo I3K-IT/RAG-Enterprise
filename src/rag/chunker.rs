@@ -22,29 +22,43 @@ const SEPARATORS: &[&str] = &["\n\n", "\n", " ", ""];
 pub const CHUNKING_CONFIG_VERSION: u32 = 1;
 
 /// Deterministic, versioned identifier for one chunk — stable across
-/// re-ingesting the SAME file content under the SAME chunking
-/// configuration. Deliberately NOT derived from `document_id`: that is a
-/// fresh UUID minted on every upload (see api/documents.rs), so re-ingesting
-/// an unchanged file would otherwise mint an unrelated id for what is, for
-/// citation purposes, "the same" chunk. `content_sha256` anchors identity to
-/// the file's own bytes instead — the hex sha256 digest of the raw uploaded
-/// content, computed once at upload time.
-pub fn provenance_id(content_sha256: &str, chunk_index: usize) -> String {
-    format!("{content_sha256}:{chunk_index}:cv{CHUNKING_CONFIG_VERSION}")
+/// re-ingesting the SAME file content under the SAME extraction AND
+/// chunking configuration. Deliberately NOT derived from `document_id`:
+/// that is a fresh UUID minted on every upload (see api/documents.rs), so
+/// re-ingesting an unchanged file would otherwise mint an unrelated id for
+/// what is, for citation purposes, "the same" chunk. `content_sha256`
+/// anchors identity to the file's own bytes instead — the hex sha256
+/// digest of the raw uploaded content, computed once at upload time.
+///
+/// `extraction_config_version` is the caller's
+/// `documents::parser::EXTRACTION_CONFIG_VERSION`, passed in rather than
+/// read directly from the parser module so this module — generic text
+/// chunking — stays free of a dependency on document-format extraction.
+/// Bumping EITHER that or `CHUNKING_CONFIG_VERSION` changes every id it
+/// touches, independently of the other: an extraction fix (e.g. the
+/// native/OCR threshold, or how page spans are computed) and a chunking
+/// change (CHUNK_SIZE/OVERLAP/SEPARATORS) are different pipeline stages
+/// with different change cadences, and conflating them into one counter
+/// would make old ids less diagnostic when something changes.
+pub fn provenance_id(content_sha256: &str, chunk_index: usize, extraction_config_version: u32) -> String {
+    format!("{content_sha256}:{chunk_index}:pv{extraction_config_version}:cv{CHUNKING_CONFIG_VERSION}")
 }
 
-/// One chunk of text plus its byte-offset span `[start, end)` within the
-/// source text passed to `split_text` — the universal locator (§ design
-/// note in api/documents.rs): available for every format, since every
-/// parser already produces a single flat extracted-text string before this
-/// module ever sees it. Byte offsets, not char offsets: O(1) to compute via
-/// pointer arithmetic on the original allocation (see `offset_of`), where a
-/// char-index scheme would need an O(n) count per chunk.
+/// One chunk of text plus its byte-offset span `[start_byte, end_byte)`
+/// within the source text passed to `split_text` — the universal locator
+/// (§ design note in api/documents.rs): available for every format, since
+/// every parser already produces a single flat extracted-text string
+/// before this module ever sees it. BYTE offsets, not char offsets —
+/// named accordingly rather than left implicit, since this codebase
+/// already has a documented history of char-vs-byte mixups (see `clen`
+/// below): O(1) to compute via pointer arithmetic on the original
+/// allocation (see `offset_of`), where a char-index scheme would need an
+/// O(n) count per chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
     pub text: String,
-    pub start: usize,
-    pub end: usize,
+    pub start_byte: usize,
+    pub end_byte: usize,
 }
 
 /// Split `text` into overlapping chunks of at most `CHUNK_SIZE` characters,
@@ -112,7 +126,11 @@ fn split_recursive(root: &str, text: &str, separators: &[&str]) -> Vec<Chunk> {
             // Recursively break the oversized piece, or emit as-is.
             if tail_seps.is_empty() {
                 let start = offset_of(root, piece);
-                result.push(Chunk { text: piece.to_owned(), start, end: start + piece.len() });
+                result.push(Chunk {
+                    text: piece.to_owned(),
+                    start_byte: start,
+                    end_byte: start + piece.len(),
+                });
             } else {
                 result.extend(split_recursive(root, piece, tail_seps));
             }
@@ -142,7 +160,7 @@ fn merge_small(root: &str, pieces: &[&str], sep: &str) -> Vec<Chunk> {
         let start = offset_of(root, window[0]);
         let last = window[window.len() - 1];
         let end = offset_of(root, last) + last.len();
-        Chunk { text, start, end }
+        Chunk { text, start_byte: start, end_byte: end }
     };
 
     for &piece in pieces {
@@ -206,7 +224,11 @@ fn char_chunks(root: &str, text: &str) -> Vec<Chunk> {
     while start < chars.len() {
         let end = (start + CHUNK_SIZE).min(chars.len());
         let s: String = chars[start..end].iter().collect();
-        chunks.push(Chunk { text: s, start: base + byte_at[start], end: base + byte_at[end] });
+        chunks.push(Chunk {
+            text: s,
+            start_byte: base + byte_at[start],
+            end_byte: base + byte_at[end],
+        });
         if end == chars.len() {
             break;
         }
@@ -219,16 +241,16 @@ fn char_chunks(root: &str, text: &str) -> Vec<Chunk> {
 mod tests {
     use super::*;
 
-    /// Every chunk's [start, end) must slice out of `text` to exactly its
-    /// own `text` field — the property the whole pointer-arithmetic scheme
-    /// exists to guarantee. Checked once, generically, instead of repeating
-    /// it by hand in every test below.
+    /// Every chunk's [start_byte, end_byte) must slice out of `text` to
+    /// exactly its own `text` field — the property the whole
+    /// pointer-arithmetic scheme exists to guarantee. Checked once,
+    /// generically, instead of repeating it by hand in every test below.
     fn assert_spans_correct(source: &str, chunks: &[Chunk]) {
         for (i, c) in chunks.iter().enumerate() {
-            assert!(c.start <= c.end, "chunk {i}: start > end");
-            assert!(c.end <= source.len(), "chunk {i}: end past source length");
+            assert!(c.start_byte <= c.end_byte, "chunk {i}: start_byte > end_byte");
+            assert!(c.end_byte <= source.len(), "chunk {i}: end_byte past source length");
             assert_eq!(
-                &source[c.start..c.end],
+                &source[c.start_byte..c.end_byte],
                 c.text.as_str(),
                 "chunk {i}: span does not slice back to its own text"
             );
@@ -356,16 +378,25 @@ mod tests {
 
     #[test]
     fn provenance_id_is_deterministic_and_config_aware() {
-        let a = provenance_id("abc123", 5);
-        let b = provenance_id("abc123", 5);
-        assert_eq!(a, b, "same content hash + chunk_index must yield the same provenance_id");
+        let a = provenance_id("abc123", 5, 1);
+        let b = provenance_id("abc123", 5, 1);
+        assert_eq!(a, b, "same content hash + chunk_index + versions must yield the same provenance_id");
 
-        let different_chunk = provenance_id("abc123", 6);
+        let different_chunk = provenance_id("abc123", 6, 1);
         assert_ne!(a, different_chunk, "different chunk_index must yield a different provenance_id");
 
-        let different_content = provenance_id("def456", 5);
+        let different_content = provenance_id("def456", 5, 1);
         assert_ne!(a, different_content, "different content hash must yield a different provenance_id");
 
+        let different_extraction_version = provenance_id("abc123", 5, 2);
+        assert_ne!(
+            a, different_extraction_version,
+            "different extraction_config_version must yield a different provenance_id, \
+             independently of CHUNKING_CONFIG_VERSION"
+        );
+
         assert!(a.contains(&format!("cv{CHUNKING_CONFIG_VERSION}")));
+        assert!(a.contains("pv1"));
+        assert!(different_extraction_version.contains("pv2"));
     }
 }
