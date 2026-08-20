@@ -6,7 +6,7 @@
 //! - keep_alive: -1 (top-level, not in options)
 //! - Prompt: ChatML wrap + <think>\n</think>\n prefill  (strips any residual
 //!   ChatML special tokens from the user text before wrapping).
-//! - options: temperature 0.0, num_ctx, num_predict, repeat_penalty, repeat_last_n 256
+//! - options: temperature 0.0, num_ctx, num_predict, repeat_penalty, repeat_last_n
 //! - NO "stop" field anywhere in the payload.
 //! - Strip <think>...</think> blocks from non-streaming response.
 
@@ -102,6 +102,7 @@ pub struct EullmClient {
     num_ctx: u32,
     num_predict: u32,
     repeat_penalty: f32,
+    repeat_last_n: u32,
     keep_alive: i32,
 }
 
@@ -112,13 +113,14 @@ impl EullmClient {
         num_ctx: u32,
         num_predict: u32,
         repeat_penalty: f32,
+        repeat_last_n: u32,
         keep_alive: i32,
     ) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
             .expect("reqwest Client build");
-        Self { http, base_url, model, num_ctx, num_predict, repeat_penalty, keep_alive }
+        Self { http, base_url, model, num_ctx, num_predict, repeat_penalty, repeat_last_n, keep_alive }
     }
 
     fn build_prompt(&self, user_text: &str) -> String {
@@ -133,7 +135,7 @@ impl EullmClient {
             num_ctx: self.num_ctx,
             num_predict: self.num_predict,
             repeat_penalty: self.repeat_penalty,
-            repeat_last_n: 256,
+            repeat_last_n: self.repeat_last_n,
         }
     }
 
@@ -379,7 +381,7 @@ mod tests {
         EullmClient::new(
             "http://localhost:11434".into(),
             "qwen3:14b".into(),
-            16384, 4096, 1.3, -1,
+            16384, 4096, 1.3, 256, -1,
         )
     }
 

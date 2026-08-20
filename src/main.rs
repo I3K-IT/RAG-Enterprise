@@ -273,6 +273,7 @@ async fn build_eullm_client(
         settings.eullm.num_ctx,
         settings.eullm.num_predict,
         settings.eullm.repeat_penalty,
+        settings.eullm.repeat_last_n,
         settings.eullm.keep_alive,
     )
 }
