@@ -200,6 +200,58 @@ size    = 902154208
 dest    = "{data}/bin/eullm"
 exec    = true
 
+# x86_64 CPU-only, SENZA CUDA — mancava del tutto, stesso bug già corretto
+# più sotto per ARM64 (vedi il commento su quella entry): prima di questa,
+# su un Linux x86_64 SENZA GPU NVIDIA rilevata select_components() non
+# trovava NESSUN target eullm utilizzabile — l'unico pin x86_64 esistente
+# richiedeva CUDA — e bootstrap ricadeva silenziosamente sul ramo "eullm o
+# modello non trovati, RAG senza LLM" (main.rs). Scoperto durante un audit
+# tecnico Community-vs-Pro, sha256/size verificati scaricando davvero
+# l'asset (non dai soli metadati della release).
+[[component]]
+name    = "eullm"
+version = "0.6.90"
+kind    = "binary"
+target  = "linux-x86_64"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-linux-x64"
+sha256  = "fdb7b81f78ee5e108ee5d0d8690589e98fee48c2bce6b684bcf60f19875aaea5"
+size    = 15907984
+dest    = "{data}/bin/eullm"
+exec    = true
+
+# Vulkan (GPU AMD/Intel, o NVIDIA via Vulkan invece di CUDA). Asset REALE
+# nella release 0.6.90 (visto nello screenshot utente della pagina release,
+# poi riverificato qui scaricando davvero il binario — non fidandosi del
+# prefisso hash troncato mostrato dalla UI GitHub): ELF 64-bit LSB pie,
+# dinamicamente linkato, sha256/size ricalcolati a mano sul file scaricato,
+# combaciano esattamente.
+#
+# A differenza delle due entry -cpu (x86_64 sopra e arm64 più sotto, che
+# QUELLE risolvono un gap reale già selezionabile), questa è pinnata ma OGGI
+# INERTE: current_targets() (bootstrap.rs) non produce, e non ha mai
+# prodotto, la stringa "linux-x86_64-vulkan" — verificato con grep -ri
+# vulkan su tutto src/, zero risultati al di fuori di questo file — quindi
+# select_components() non la selezionerà mai finché non esiste una detection
+# dedicata. Non è un getauxval come per has_cix_p1_isa() (CIX P1 qui sotto):
+# serve un probe di un ICD Vulkan funzionante sulla macchina (es. enumerare
+# i device via libvulkan, tipo `vulkaninfo`), lavoro non ancora scritto.
+#
+# A runtime il binario linka dinamicamente libvulkan.so.1 (loader ICD,
+# verificato con ldd) — stessa categoria di dipendenza host del driver
+# NVIDIA per le varianti -cuda, ma per GPU AMD/Intel/altro Vulkan-capable:
+# senza un loader Vulkan installato sull'host il binario non parte, anche se
+# in futuro venisse selezionato.
+[[component]]
+name    = "eullm"
+version = "0.6.90"
+kind    = "binary"
+target  = "linux-x86_64-vulkan"
+url     = "https://github.com/eullm/eullm/releases/download/EuLLM-v0.6.90/eullm-linux-x64-vulkan"
+sha256  = "601bbfad05beb35f96d29795e79673565208e7b978c5f881f7d6c07818a83168"
+size    = 52343952
+dest    = "{data}/bin/eullm"
+exec    = true
+
 # ARM64+CUDA (es. Radxa Orion O6 con GPU NVIDIA esterna via PCIe).
 [[component]]
 name    = "eullm"

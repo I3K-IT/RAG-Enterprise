@@ -224,7 +224,11 @@ impl Drop for TessSession<'_> {
 /// `data_dir` is the same data root resolved by `Settings.data.data_path()`;
 /// the bootstrap and manifest download the tessdata into
 /// `{data_dir}/tessdata/`.
-pub fn ocr_pdf(path: &std::path::Path, page_count: u32, data_dir: &std::path::Path) -> Result<String> {
+pub fn ocr_pdf(
+    path: &std::path::Path,
+    page_count: u32,
+    data_dir: &std::path::Path,
+) -> Result<super::parser::ExtractedText> {
     use pdfium_render::prelude::*;
 
     let pdfium = Pdfium::new(
@@ -248,6 +252,7 @@ pub fn ocr_pdf(path: &std::path::Path, page_count: u32, data_dir: &std::path::Pa
         .map(|p| p.display().to_string());
 
     let mut full_text = String::new();
+    let mut pages: Vec<super::parser::PageSpan> = Vec::new();
 
     for i in 0..(page_count as usize) {
         let page = doc
@@ -272,8 +277,14 @@ pub fn ocr_pdf(path: &std::path::Path, page_count: u32, data_dir: &std::path::Pa
         let page_text = session.get_text().with_context(|| format!("OCR page {i}"))?;
 
         tracing::debug!(page = i, chars = page_text.len(), "OCR page");
+        let start = full_text.len();
         full_text.push_str(&page_text);
         full_text.push('\n');
+        pages.push(super::parser::PageSpan {
+            page: (i + 1) as u32,
+            start_byte: start,
+            end_byte: full_text.len(),
+        });
     }
 
     tracing::info!(
@@ -282,7 +293,7 @@ pub fn ocr_pdf(path: &std::path::Path, page_count: u32, data_dir: &std::path::Pa
         chars = full_text.len(),
         "OCR complete"
     );
-    Ok(full_text)
+    Ok(super::parser::ExtractedText { text: full_text, page_count: Some(page_count), pages })
 }
 
 #[cfg(test)]
@@ -403,10 +414,18 @@ mod smoke_test {
         }
         let _ = std::fs::remove_file(&tmp_pdf);
 
-        let text = result.expect("ocr_pdf must succeed with both libraries bundled next to the executable");
+        let extracted = result.expect("ocr_pdf must succeed with both libraries bundled next to the executable");
         assert!(
-            text.to_lowercase().contains("bundling") || text.to_lowercase().contains("smoke"),
-            "unexpected OCR text: {text:?}"
+            extracted.text.to_lowercase().contains("bundling")
+                || extracted.text.to_lowercase().contains("smoke"),
+            "unexpected OCR text: {:?}",
+            extracted.text
         );
+
+        // The page span must cover the whole (single-page) text, 1-based.
+        assert_eq!(extracted.pages.len(), 1, "expected exactly one page span");
+        assert_eq!(extracted.pages[0].page, 1);
+        assert_eq!(extracted.pages[0].start_byte, 0);
+        assert_eq!(extracted.pages[0].end_byte, extracted.text.len());
     }
 }

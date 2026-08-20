@@ -277,11 +277,11 @@ impl EmbeddingService {
         for enc in &encodings {
             let pad = max_len - enc.get_ids().len();
             ids.extend_from_slice(enc.get_ids());
-            ids.extend(std::iter::repeat(0).take(pad));
+            ids.extend(std::iter::repeat_n(0, pad));
             type_ids.extend_from_slice(enc.get_type_ids());
-            type_ids.extend(std::iter::repeat(0).take(pad));
+            type_ids.extend(std::iter::repeat_n(0, pad));
             masks.extend_from_slice(enc.get_attention_mask());
-            masks.extend(std::iter::repeat(0).take(pad));
+            masks.extend(std::iter::repeat_n(0, pad));
         }
 
         let input_ids = Tensor::from_vec(ids, (n, max_len), device)?;
@@ -307,7 +307,7 @@ impl EmbeddingService {
 
 /// L2-normalizza un vettore di embedding in place.
 #[allow(dead_code)]
-pub fn l2_normalize(v: &mut Vec<f32>) {
+pub fn l2_normalize(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-12 {
         v.iter_mut().for_each(|x| *x /= norm);

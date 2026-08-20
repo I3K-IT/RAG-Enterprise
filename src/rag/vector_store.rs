@@ -27,6 +27,38 @@ pub struct ChunkPayload {
     /// producers that do populate it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_fields: Option<serde_json::Value>,
+
+    // ── Source Provenance Foundation ────────────────────────────────────
+    // Infrastructural provenance only (locator + stable id) — NOT claim-level
+    // attribution, evidence IDs, sentence citations, highlighting or NLI
+    // verification: those stay Pro-roadmap items, deliberately out of scope
+    // here. All Option so points written before these fields existed still
+    // deserialize (see clients/qdrant_store.rs::search) without forcing a
+    // re-ingestion.
+    /// BYTE-offset span `[source_start_byte, source_end_byte)` of this
+    /// chunk within the extracted source text (before chunking) — the
+    /// universal locator, available for every format. Named `_byte`
+    /// deliberately, not left implicit — see rag::chunker::Chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_start_byte: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_end_byte: Option<usize>,
+    /// 1-based page NUMBER range this chunk overlaps — PDF only (native or
+    /// OCR via documents::ocr::ocr_pdf), via documents::parser::
+    /// pages_for_range. None for every other format. Not a byte offset —
+    /// no `_byte` suffix here on purpose, to keep the two units visually
+    /// distinct.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_end: Option<u32>,
+    /// Deterministic, versioned citation identifier — see
+    /// rag::chunker::provenance_id. Anchored to the uploaded file's own
+    /// sha256, not to `document_id` (a fresh UUID per upload): stays stable
+    /// across re-ingesting the same file content under the same extraction
+    /// and chunking configuration, and visibly changes if either changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance_id: Option<String>,
 }
 
 /// The result of a vector similarity search.

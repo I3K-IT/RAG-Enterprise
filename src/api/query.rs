@@ -105,6 +105,11 @@ async fn prepare(
             chunk_index: h.payload.chunk_index,
             similarity: h.similarity,
             text: h.payload.text.clone(),
+            source_start_byte: h.payload.source_start_byte,
+            source_end_byte: h.payload.source_end_byte,
+            page_start: h.payload.page_start,
+            page_end: h.payload.page_end,
+            provenance_id: h.payload.provenance_id.clone(),
         })
         .collect();
 

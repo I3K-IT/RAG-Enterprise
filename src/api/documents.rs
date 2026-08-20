@@ -12,6 +12,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::auth::jwt::Claims;
 use crate::bench;
@@ -140,6 +141,17 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         return err(StatusCode::BAD_REQUEST, "no file in multipart request (field name: \"file\")");
     }
 
+    // Content identity for provenance_id (see rag::chunker::provenance_id):
+    // anchored to the uploaded bytes, NOT to document_id below (a fresh UUID
+    // every upload) — re-ingesting this same file must yield the same hash,
+    // and therefore the same provenance_id per chunk, given an unchanged
+    // chunking configuration.
+    let content_sha256 = {
+        let mut hasher = Sha256::new();
+        hasher.update(&file_bytes);
+        format!("{:x}", hasher.finalize())
+    };
+
     // 2. Write to a named temp file preserving the extension (parser dispatches by ext)
     let ext = std::path::Path::new(&filename)
         .extension()
@@ -157,7 +169,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     // Timed even when --bench-live is off: an Instant::now() costs nothing
     // worth conditionalising.
     let extract_start = std::time::Instant::now();
-    let (text, page_count) = match tokio::task::spawn_blocking({
+    let extracted = match tokio::task::spawn_blocking({
         let tmp = tmp_path.clone();
         let data_dir = state.settings.data.data_path();
         move || {
@@ -173,6 +185,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("parse task: {e}")),
     };
     let extract_time = extract_start.elapsed();
+    let parser::ExtractedText { text, page_count, pages } = extracted;
 
     // 4. Chunk
     let chunk_start = std::time::Instant::now();
@@ -191,14 +204,14 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     let embeddings = if state.settings.embeddings.ingestion_embedding
         == crate::config::IngestionEmbedding::Eullm
     {
-        let refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
+        let refs: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         match state.eullm.embed_texts(crate::config::EULLM_EMBEDDING_MODEL, &refs, None).await {
             Ok(e) => e,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("eullm embedding: {e}")),
         }
     } else {
         let embeddings_svc = state.embeddings.clone();
-        let chunk_strs: Vec<String> = chunks.clone();
+        let chunk_strs: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         match tokio::task::spawn_blocking(move || {
             let refs: Vec<&str> = chunk_strs.iter().map(|s| s.as_str()).collect();
             let guard = embeddings_svc
@@ -222,15 +235,29 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
     let payloads: Vec<ChunkPayload> = chunks
         .iter()
         .enumerate()
-        .map(|(i, chunk)| ChunkPayload {
-            document_id: document_id.clone(),
-            chunk_index: i,
-            filename: filename.clone(),
-            upload_date: upload_date.clone(),
-            text: chunk.clone(),
-            chunk_size: chunk.len(),
-            document_type: ext.clone(),
-            structured_fields: None,
+        .map(|(i, chunk)| {
+            let (page_start, page_end) =
+                parser::pages_for_range(&pages, chunk.start_byte, chunk.end_byte)
+                    .map_or((None, None), |(s, e)| (Some(s), Some(e)));
+            ChunkPayload {
+                document_id: document_id.clone(),
+                chunk_index: i,
+                filename: filename.clone(),
+                upload_date: upload_date.clone(),
+                text: chunk.text.clone(),
+                chunk_size: chunk.text.len(),
+                document_type: ext.clone(),
+                structured_fields: None,
+                source_start_byte: Some(chunk.start_byte),
+                source_end_byte: Some(chunk.end_byte),
+                page_start,
+                page_end,
+                provenance_id: Some(chunker::provenance_id(
+                    &content_sha256,
+                    i,
+                    parser::EXTRACTION_CONFIG_VERSION,
+                )),
+            }
         })
         .collect();
 
