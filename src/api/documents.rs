@@ -210,7 +210,15 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("eullm embedding: {e}")),
         }
     } else {
-        let embeddings_svc = state.embeddings.clone();
+        let embeddings_svc = match state.embeddings.clone() {
+            Some(svc) => svc,
+            None => {
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Candle embeddings not loaded (ingestion_embedding=eullm?)",
+                )
+            }
+        };
         let chunk_strs: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         match tokio::task::spawn_blocking(move || {
             let refs: Vec<&str> = chunk_strs.iter().map(|s| s.as_str()).collect();

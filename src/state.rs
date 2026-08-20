@@ -15,17 +15,25 @@ use crate::rag::vector_store::VectorStore;
 pub struct AppState {
     pub settings: Arc<Settings>,
     pub db: SqlitePool,
-    /// An RwLock, not merely an Arc: with
+    /// None exactly when ingestion_embedding=Eullm: in that mode BOTH
+    /// ingestion and query embedding route through AppState.eullm instead
+    /// (see api/documents.rs and api/query.rs::prepare), so Candle is never
+    /// loaded at all — not even on CPU — and the ~3.2GB of bge-m3 weights
+    /// (Candle .safetensors) never needs downloading either, see
+    /// bootstrap::select_components. Every other call site that reaches into
+    /// this field is already behind an `ingestion_embedding != Eullm` check
+    /// (or, for the CandleGpu swap functions below, only reachable when
+    /// ingestion_embedding=CandleGpu specifically) and may assume Some.
+    ///
+    /// An RwLock, not merely an Arc, inside the Some: with
     /// EmbeddingsSettings::ingestion_embedding=CandleGpu the instance is
     /// replaced at runtime (CPU↔GPU, see swap_embeddings_to_gpu/_to_cpu),
     /// which a plain Arc does not allow. Reads (embed_text/embed_texts) and
     /// writes (the swap) always happen from synchronous contexts inside
     /// spawn_blocking, never across an .await while holding the lock, so
     /// std::sync::RwLock is the simplest choice and tokio's async variant is
-    /// unnecessary. Untouched by ingestion_embedding=Eullm: that mode routes
-    /// ingestion embedding through AppState.eullm instead, this field stays
-    /// exactly as loaded at startup.
-    pub embeddings: Arc<RwLock<EmbeddingService>>,
+    /// unnecessary.
+    pub embeddings: Option<Arc<RwLock<EmbeddingService>>>,
     pub qdrant: Arc<dyn VectorStore>,
     pub eullm: Arc<EullmClient>,
     pub storage: Arc<FileStorage>,
@@ -63,7 +71,7 @@ impl AppState {
     pub fn new(
         settings: Settings,
         db: SqlitePool,
-        embeddings: EmbeddingService,
+        embeddings: Option<EmbeddingService>,
         qdrant: Arc<dyn VectorStore>,
         eullm: EullmClient,
         live_bench: Option<Arc<LiveRecorder>>,
@@ -72,7 +80,7 @@ impl AppState {
         Self {
             settings: Arc::new(settings),
             db,
-            embeddings: Arc::new(RwLock::new(embeddings)),
+            embeddings: embeddings.map(|e| Arc::new(RwLock::new(e))),
             qdrant,
             eullm: Arc::new(eullm),
             storage: Arc::new(storage),
@@ -121,12 +129,22 @@ impl AppState {
         &self,
         loader: fn(&str) -> anyhow::Result<EmbeddingService>,
     ) -> anyhow::Result<()> {
+        // Only reachable when ingestion_embedding=CandleGpu (see
+        // api/documents.rs's candle_gpu gate), and Candle is always loaded
+        // in that mode — see the doc comment on `embeddings`. A Result, not
+        // an expect(): this runs inside a live ingestion request, and a
+        // config/code mismatch should surface as a normal error, not panic
+        // the request task.
+        let embeddings = self
+            .embeddings
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("swap_embeddings called without ingestion_embedding=CandleGpu"))?;
         let model_id = {
-            let guard = self.embeddings.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+            let guard = embeddings.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
             guard.model_id().to_owned()
         };
         let fresh = loader(&model_id).context("reload embedding su nuovo device")?;
-        let mut guard = self.embeddings.write().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+        let mut guard = embeddings.write().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
         *guard = fresh;
         Ok(())
     }

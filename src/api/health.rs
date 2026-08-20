@@ -23,16 +23,21 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
 /// configuration — embedding_device in particular, so a silent CPU fallback
 /// stays visible long after the boot log has scrolled out of the terminal.
 /// With ingestion_embedding=CandleGpu it reflects the CURRENT state (CPU at
-/// rest, GPU during an ingestion), not a fixed boot-time value. Says nothing
-/// about ingestion_embedding=Eullm ingestion activity — bge-m3 (Candle)
-/// never moves in that mode, only eullm does, invisibly to this endpoint.
+/// rest, GPU during an ingestion), not a fixed boot-time value. With
+/// ingestion_embedding=Eullm, Candle is not loaded at all — both ingestion
+/// and query embedding go through eullm instead (api/documents.rs,
+/// api/query.rs) — so this reports "eullm" rather than reading a service
+/// that does not exist.
 pub async fn info(State(state): State<AppState>) -> impl IntoResponse {
-    let (device_label, device_ok) = match state.embeddings.read() {
-        Ok(guard) => (
-            guard.device_label(),
-            guard.device_status() != crate::clients::embeddings::DeviceStatus::CpuFallback,
-        ),
-        Err(_) => ("cpu (lock poisoned — stato sconosciuto)", false),
+    let (device_label, device_ok) = match &state.embeddings {
+        Some(embeddings) => match embeddings.read() {
+            Ok(guard) => (
+                guard.device_label(),
+                guard.device_status() != crate::clients::embeddings::DeviceStatus::CpuFallback,
+            ),
+            Err(_) => ("cpu (lock poisoned — stato sconosciuto)", false),
+        },
+        None => ("eullm", true),
     };
     Json(json!({
         "service": "i3k-rag-engine",
