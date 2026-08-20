@@ -11,7 +11,8 @@ pub struct Settings {
     pub auth: AuthSettings,          // jwt_secret required — no default
     #[serde(default)]
     pub qdrant: QdrantSettings,
-    pub eullm: EullmSettings,        // model required — no default
+    #[serde(default)]
+    pub eullm: EullmSettings,
     #[serde(default)]
     pub embeddings: EmbeddingsSettings,
     #[serde(default)]
@@ -303,6 +304,26 @@ impl Default for ServerSettings {
 }
 impl Default for DatabaseSettings {
     fn default() -> Self { Self { url: default_db_url() } }
+}
+impl Default for EullmSettings {
+    fn default() -> Self {
+        Self {
+            url: default_eullm_url(),
+            model: default_eullm_model(),
+            num_ctx: default_num_ctx(),
+            num_predict: default_num_predict(),
+            repeat_penalty: default_repeat_penalty(),
+            repeat_last_n: default_repeat_last_n(),
+            keep_alive: default_keep_alive(),
+            batch_size: default_eullm_batch_size(),
+            cache_type_k: None,
+            cache_type_v: None,
+            unload_during_ingestion: false,
+            model_override: None,
+            n_cpu_moe: None,
+            reserve_embedding_model: false,
+        }
+    }
 }
 impl Default for QdrantSettings {
     fn default() -> Self {

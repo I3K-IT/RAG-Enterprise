@@ -17,6 +17,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.32] - 2026-08-20
+
+### Fixed
+
+- **`Settings::load()` rejected the minimal `.env` README.md has
+  documented since 0.1.28.** Every field of `EullmSettings` already
+  had its own default, but the `Settings.eullm` field itself had no
+  `#[serde(default)]` and `EullmSettings` had no `Default` impl — with
+  zero `EULLM__*` variables set, config loading failed outright with
+  "missing field `eullm`" before ever reaching the individual fields'
+  defaults. Verified against the actual compiled binary, not just the
+  struct definitions: running it with only `AUTH__JWT_SECRET` set
+  reproduced the failure before the fix, and reached the real
+  bootstrap/download flow after it. Every other documented `.env`
+  example (`BUILD.md`) happened to already set `EULLM__URL`/
+  `EULLM__MODEL` explicitly, which is why this went unnoticed.
+
+### Added
+
+- `EULLM__REPEAT_LAST_N` — how many recent tokens `repeat_penalty`
+  looks back over, previously hardcoded to 256 with no way to change
+  it short of a rebuild. Default unchanged (256).
+- `.env.example` at the repo root, documenting every `SECTION__FIELD`
+  variable `Settings::load()` reads.
+
 ## [0.1.31] - 2026-08-20
 
 ### Added
