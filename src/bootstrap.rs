@@ -212,6 +212,15 @@ mod eullm_args_tests {
             );
         }
         assert_eq!(eullm_asset_hint(Some("linux-aarch64-cix")), Some("eullm-linux-arm64-cix-p1"));
+
+        // Same dangerous shape on x86_64: "eullm-linux-x64" is a literal
+        // prefix of "eullm-linux-x64-cuda-12.8" AND of "eullm-linux-x64-vulkan".
+        let generic_x86 = eullm_asset_hint(Some("linux-x86_64")).unwrap();
+        for other in ["eullm-linux-x64-cuda-12.8", "eullm-linux-x64-vulkan"] {
+            assert_ne!(generic_x86, other);
+            assert!(other.starts_with(generic_x86));
+        }
+        assert_eq!(eullm_asset_hint(Some("linux-x86_64-vulkan")), Some("eullm-linux-x64-vulkan"));
     }
 
     #[test]
@@ -1240,6 +1249,8 @@ const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
 fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
     match target {
         Some("linux-x86_64-cuda") => Some("eullm-linux-x64-cuda-12.8"),
+        Some("linux-x86_64-vulkan") => Some("eullm-linux-x64-vulkan"),
+        Some("linux-x86_64") => Some("eullm-linux-x64"),
         Some("linux-aarch64-cuda") => Some("eullm-linux-arm64-cuda-12.8"),
         Some("linux-aarch64-cix") => Some("eullm-linux-arm64-cix-p1"),
         Some("linux-aarch64") => Some("eullm-linux-arm64"),
