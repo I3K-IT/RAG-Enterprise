@@ -80,6 +80,15 @@ pub struct EullmSettings {
     pub num_predict: u32,
     #[serde(default = "default_repeat_penalty")]
     pub repeat_penalty: f32,
+    /// How many recent tokens repeat_penalty looks back over (llama.cpp
+    /// `repeat_last_n`). Was hardcoded to 256 with no way to override it —
+    /// Ollama's own default is 64 (repeat_penalty 1.1, vs our 1.3): a
+    /// smaller window and a lighter penalty. Default here stays 256 to keep
+    /// existing deployments byte-for-byte unchanged; lower it (e.g. 64) to
+    /// match Ollama's proven-working combination if generation quality
+    /// regresses relative to the python-legacy stack.
+    #[serde(default = "default_repeat_last_n")]
+    pub repeat_last_n: u32,
     #[serde(default = "default_keep_alive")]
     pub keep_alive: i32,
     /// Concurrent connections handled by eullm. KV cache VRAM scales linearly
@@ -340,6 +349,7 @@ fn default_num_ctx() -> u32 { 16384 }
 fn default_eullm_batch_size() -> u32 { 1 }
 fn default_num_predict() -> u32 { 4096 }
 fn default_repeat_penalty() -> f32 { 1.3 }
+fn default_repeat_last_n() -> u32 { 256 }
 fn default_keep_alive() -> i32 { -1 }
 fn default_embedding_model() -> String { "BAAI/bge-m3".into() }
 fn default_backup_dir() -> String { "./backups".into() }

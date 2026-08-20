@@ -128,6 +128,7 @@ mod eullm_args_tests {
             num_ctx: 16384,
             num_predict: 4096,
             repeat_penalty: 1.3,
+            repeat_last_n: 256,
             keep_alive: -1,
             batch_size: 1,
             cache_type_k: None,
