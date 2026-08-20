@@ -274,11 +274,12 @@ async fn run_ingestion(
     let doc_path_owned = doc_path.to_path_buf();
 
     let t = Instant::now();
-    let (text, page_count) = tokio::task::spawn_blocking(move || parser::extract_text(&doc_path_owned, &data_dir))
+    let extracted = tokio::task::spawn_blocking(move || parser::extract_text(&doc_path_owned, &data_dir))
         .await
         .context("join text extraction")?
         .with_context(|| format!("text extraction from {}", doc_path.display()))?;
     let extract_time = t.elapsed();
+    let parser::ExtractedText { text, page_count, pages } = extracted;
     tracing::info!(
         pages = ?page_count, chars = text.chars().count(), ms = extract_time.as_millis(),
         "extraction complete"
@@ -302,10 +303,21 @@ async fn run_ingestion(
     );
 
     let t = Instant::now();
-    let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
+    let chunk_refs: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
     let embedding_vecs = embeddings.embed_texts(&chunk_refs).context("embedding chunk")?;
     let embed_time = t.elapsed();
     tracing::info!(ms = embed_time.as_millis(), "embedding done, starting the Qdrant upsert");
+
+    // Same content-hash anchor as api/documents.rs::process_upload, so a
+    // --bench run of the same file produces the same provenance_ids too.
+    let content_sha256 = {
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(doc_path)
+            .with_context(|| format!("reading {} for content hash", doc_path.display()))?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        format!("{:x}", hasher.finalize())
+    };
 
     let document_id = uuid::Uuid::new_v4().to_string();
     let filename = doc_path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
@@ -314,15 +326,24 @@ async fn run_ingestion(
     let payloads: Vec<ChunkPayload> = chunks
         .iter()
         .enumerate()
-        .map(|(i, c)| ChunkPayload {
-            document_id: document_id.clone(),
-            chunk_index: i,
-            filename: filename.clone(),
-            upload_date: upload_date.clone(),
-            text: c.clone(),
-            chunk_size: c.len(),
-            document_type: ext.clone(),
-            structured_fields: None,
+        .map(|(i, c)| {
+            let (page_start, page_end) = parser::pages_for_range(&pages, c.start, c.end)
+                .map_or((None, None), |(s, e)| (Some(s), Some(e)));
+            ChunkPayload {
+                document_id: document_id.clone(),
+                chunk_index: i,
+                filename: filename.clone(),
+                upload_date: upload_date.clone(),
+                text: c.text.clone(),
+                chunk_size: c.text.len(),
+                document_type: ext.clone(),
+                structured_fields: None,
+                source_start: Some(c.start),
+                source_end: Some(c.end),
+                page_start,
+                page_end,
+                provenance_id: Some(chunker::provenance_id(&content_sha256, i)),
+            }
         })
         .collect();
 
