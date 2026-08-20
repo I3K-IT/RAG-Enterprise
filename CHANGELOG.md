@@ -17,6 +17,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.31] - 2026-08-20
+
+### Added
+
+- **Source Provenance Foundation.** Every retrieved chunk now carries a
+  byte-offset span (`source_start`/`source_end`) into its source
+  document, a PDF page span (`page_start`/`page_end`, for both the
+  native `pdf_oxide` path and the OCR fallback), and a deterministic
+  `provenance_id` anchored to the uploaded file's own sha256 — stable
+  across re-ingestion of an unchanged file, and versioned so a later
+  chunking/extraction config change produces visibly distinct ids
+  instead of silent collisions. Infrastructural only: this is not
+  claim-level (sentence) attribution, source highlighting, or
+  NLI-based verification — those stay roadmap items. All new fields
+  are optional; points written before this change deserialize them as
+  absent, no re-ingestion required. See `rag::chunker::provenance_id`
+  and `documents::parser::PageSpan`.
+
+### Fixed
+
+- **eullm never started on a GPU-less Linux x86_64 host.** The
+  manifest's only `linux-x86_64` eullm pin required CUDA; a machine
+  without an NVIDIA GPU found no usable target and bootstrap silently
+  fell back to no LLM. Added the missing CPU-only entry (mirrors the
+  ARM64 fix from 0.1.28).
+- `--embedding-model` is now gated behind a separate
+  `EullmSettings::reserve_embedding_model` flag (default off) instead
+  of firing automatically whenever ingestion embedding runs through
+  eullm — on a tight-VRAM card it was reserving space for bge-m3
+  before `--fit` sized the chat model, starving it. Deployments with
+  headroom for both can opt in explicitly.
+
+### Changed
+
+- CI no longer builds or publishes the Candle-CUDA Linux release
+  variants (`release-linux-{x86_64,arm64}-cuda`): eullm's own bundled
+  CUDA already covers GPU-accelerated embedding
+  (`/api/embed` since 0.6.82, `--embedding-model` since 0.6.90), making
+  a second CUDA toolchain compiled into this binary redundant. The
+  source (`--features cuda`) stays buildable by hand; this only stops
+  CI from shipping it. Every platform now ships one CPU-only tarball,
+  matching how Windows was already described — a GPU is still used
+  automatically wherever eullm detects one at runtime, regardless of
+  how this binary itself was compiled.
+- `manifest.toml` also pins the `eullm-linux-x64-vulkan` asset
+  (sha256/size verified against the real downloaded binary). Not yet
+  selectable — no Vulkan-GPU detection exists in `current_targets()`
+  — pinned in advance so the entry is ready once that detection is
+  written.
+
 ## [0.1.30] - 2026-08-18
 
 ### Added
