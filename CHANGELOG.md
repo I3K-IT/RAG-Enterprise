@@ -78,6 +78,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   section 14, and section 18 on why this core change comes from
   Community first. 121 tests pass (five new), clippy stays clean.
 
+- **New `EullmClient::model_id() -> &str`.** The configured model name
+  was write-only (set in the constructor, never read back). Needed so
+  `rag-enterprise-pro`'s Contextual Retrieval cache key — which must
+  include `model_id` per the architecture document's section 15 — can
+  read it from the same client instance doing the generation, instead
+  of duplicating the configured model name as a second source of truth.
+
 ---
 
 ## [0.1.36] - 2026-08-21

@@ -123,6 +123,13 @@ impl EullmClient {
         Self { http, base_url, model, num_ctx, num_predict, repeat_penalty, repeat_last_n, keep_alive }
     }
 
+    /// The configured model name — e.g. for a cache key that must miss
+    /// when the model changes (rag-enterprise-pro's Contextual Retrieval
+    /// cache, `I3K_RAG_Pro_Open_Core_Architecture.md` section 15).
+    pub fn model_id(&self) -> &str {
+        &self.model
+    }
+
     fn build_prompt(&self, user_text: &str) -> String {
         // Strip any ChatML tokens the caller may have included, then wrap.
         let clean = special_token_re().replace_all(user_text, "");
