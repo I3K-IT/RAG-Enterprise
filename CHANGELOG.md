@@ -15,6 +15,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Sources card now shows the page number(s) a chunk came from.** The
+  API response has carried `page_start`/`page_end` since the Source
+  Provenance Foundation work, but the frontend never rendered them —
+  the sources list under an answer only showed filename + similarity
+  %. `frontend/src/App.jsx` now adds a "pag. N" (or "pag. N–M" when a
+  chunk spans multiple pages) badge next to each source, when the
+  document has page info (non-PDF formats and documents ingested
+  before this feature existed still have none, so the badge is
+  omitted for those, not shown as blank/zero).
+
 ---
 
 ## [0.1.33] - 2026-08-20
