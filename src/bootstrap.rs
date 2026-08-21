@@ -116,12 +116,16 @@ mod manifest_tests {
         }
     }
 
-    /// Exactly one of the two bge-m3 representations is dropped, never both,
-    /// never neither — a real regression here means either a wasted
-    /// multi-GB download or (far worse) main::load_embedding starting up
-    /// with the representation that was just deleted from disk.
+    /// The manifest must never re-grow a bootstrap-downloaded bge-m3 GGUF —
+    /// eullm's own model resolution never downloads anything at request
+    /// time, provisioning it is a deliberate out-of-band step (BUILD.md),
+    /// not something drop_unused_embedding_model or select_components
+    /// should ever hand back. And Eullm mode must drop the Candle trio,
+    /// never both, never neither — a real regression here means either a
+    /// wasted ~2.1GB download or (far worse) main::load_embedding starting
+    /// up with a representation that was just deleted from disk.
     #[test]
-    fn drop_unused_embedding_model_keeps_exactly_the_needed_representation() {
+    fn drop_unused_embedding_model_drops_candle_only_in_eullm_mode() {
         let manifest = load_manifest().expect("manifest.toml must parse");
         let targets = ["linux-x86_64"]; // platform choice is irrelevant to this filter
         let selected = select_components(&manifest, &targets);
@@ -131,17 +135,19 @@ mod manifest_tests {
             sel.iter().map(|c| c.name.as_str()).collect()
         }
 
-        let eullm = drop_unused_embedding_model(selected.clone(), IngestionEmbedding::Eullm);
-        let eullm_names = names_of(&eullm);
+        assert!(
+            !names_of(&selected).contains(&"bge-m3-gguf"),
+            "bge-m3-gguf must not be a manifest component at all — eullm provisions it \
+             out-of-band, this binary must never download it"
+        );
+
+        let eullm_names = names_of(&drop_unused_embedding_model(selected.clone(), IngestionEmbedding::Eullm));
         for n in candle_names {
             assert!(!eullm_names.contains(&n), "Eullm mode must drop {n}");
         }
-        assert!(eullm_names.contains(&"bge-m3-gguf"), "Eullm mode must keep bge-m3-gguf");
 
         for mode in [IngestionEmbedding::Off, IngestionEmbedding::CandleGpu] {
-            let kept = drop_unused_embedding_model(selected.clone(), mode);
-            let kept_names = names_of(&kept);
-            assert!(!kept_names.contains(&"bge-m3-gguf"), "{mode:?} mode must drop bge-m3-gguf");
+            let kept_names = names_of(&drop_unused_embedding_model(selected.clone(), mode));
             for n in candle_names {
                 assert!(kept_names.contains(&n), "{mode:?} mode must keep {n}");
             }
@@ -149,16 +155,32 @@ mod manifest_tests {
 
         // Every other component (qdrant, eullm, pdfium, tessdata) is
         // untouched by this filter regardless of mode.
-        let non_embedding_names: Vec<&str> = names_of(&selected)
-            .into_iter()
-            .filter(|n| *n != "bge-m3-gguf" && !candle_names.contains(n))
-            .collect();
+        let non_candle_names: Vec<&str> =
+            names_of(&selected).into_iter().filter(|n| !candle_names.contains(n)).collect();
         for mode in [IngestionEmbedding::Off, IngestionEmbedding::CandleGpu, IngestionEmbedding::Eullm] {
             let kept_names = names_of(&drop_unused_embedding_model(selected.clone(), mode));
-            for n in &non_embedding_names {
+            for n in &non_candle_names {
                 assert!(kept_names.contains(n), "{mode:?} mode must not touch unrelated component {n}");
             }
         }
+    }
+
+    /// Locks in the exact path a real `eullm pull` was observed to produce
+    /// (0.6.90, run directly, not assumed) — config::EULLM_EMBEDDING_MODEL
+    /// must keep matching whatever this returns, or every /api/embed call
+    /// 404s. A change here without also checking against a real pull is
+    /// exactly the mistake this test exists to catch early.
+    #[test]
+    fn eullm_bge_m3_gguf_path_matches_a_real_pull() {
+        let data_dir = Path::new("/data");
+        let path = eullm_bge_m3_gguf_path(data_dir);
+        assert_eq!(path, Path::new("/data/models/bge-m3-f16/bge-m3-f16.gguf"));
+        assert_eq!(
+            path.file_stem().and_then(|s| s.to_str()),
+            Some(crate::config::EULLM_EMBEDDING_MODEL),
+            "the file's own stem must match EULLM_EMBEDDING_MODEL — that's the invariant eullm's \
+             own URL-pull naming convention gives us"
+        );
     }
 }
 
@@ -672,18 +694,20 @@ fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Co
 }
 
 /// select_components() is purely platform-based (OS/arch/GPU-presence) — it
-/// has no Settings to consult, by design (see its own doc comment). The two
-/// bge-m3 embedding representations are the one place that is not enough:
-/// which one actually gets LOADED (main::load_embedding) is a Settings
-/// choice, not a platform one, and today's select_components() would always
-/// pick BOTH — the Candle trio (bge-m3-weights/-tokenizer/-config, ~2.1GB)
-/// AND the GGUF (bge-m3-gguf, ~1.1GB) — even though at most one is ever
-/// actually read at runtime:
-///   - ingestion_embedding=Eullm: BOTH ingestion and query embedding go
-///     through eullm's own /api/embed (api/documents.rs, api/query.rs) —
-///     Candle is never loaded at all, so its trio is pure waste.
-///   - Off / CandleGpu: Candle handles every embedding, always — the GGUF
-///     is never read by anything.
+/// has no Settings to consult, by design (see its own doc comment). The
+/// Candle bge-m3 trio (bge-m3-weights/-tokenizer/-config, ~2.1GB) is the one
+/// place that is not enough: whether it is ever LOADED (main::load_embedding)
+/// is a Settings choice, not a platform one. With
+/// ingestion_embedding=Eullm, BOTH ingestion and query embedding go through
+/// eullm's own /api/embed (api/documents.rs, api/query.rs) — Candle is never
+/// loaded at all, so downloading its trio would be pure waste.
+///
+/// The other bge-m3 representation, the GGUF eullm itself reads, is
+/// deliberately NOT a component this function (or the manifest) ever
+/// mentions — see the comment where "bge-m3-gguf" used to live in
+/// manifest.toml. eullm's own model resolution never downloads anything at
+/// request time; provisioning that file is a one-time, out-of-band step
+/// (BUILD.md), not something this binary's bootstrap does for you.
 ///
 /// Applied as a filter AFTER select_components(), rather than folded into
 /// it, to keep that function's own contract (purely platform-based) intact.
@@ -691,12 +715,11 @@ fn drop_unused_embedding_model(
     selected: Vec<&Component>,
     ingestion_embedding: IngestionEmbedding,
 ) -> Vec<&Component> {
-    let drop_names: &[&str] = if ingestion_embedding == IngestionEmbedding::Eullm {
-        &["bge-m3-weights", "bge-m3-tokenizer", "bge-m3-config"]
-    } else {
-        &["bge-m3-gguf"]
-    };
-    selected.into_iter().filter(|c| !drop_names.contains(&c.name.as_str())).collect()
+    if ingestion_embedding != IngestionEmbedding::Eullm {
+        return selected;
+    }
+    const CANDLE_TRIO: [&str; 3] = ["bge-m3-weights", "bge-m3-tokenizer", "bge-m3-config"];
+    selected.into_iter().filter(|c| !CANDLE_TRIO.contains(&c.name.as_str())).collect()
 }
 
 // ── Path resolution ───────────────────────────────────────────────────────────
@@ -837,6 +860,92 @@ pub async fn provision_and_start_qdrant(
     Ok((Phase1 { manifest, data_dir }, children))
 }
 
+// bge-m3 as eullm sees it: F16, llama.cpp conversion from BAAI/bge-m3,
+// mirrored on i3k.dev — the exact same file previously pinned directly in
+// manifest.toml as "bge-m3-gguf" (see the comment where that entry used to
+// live). Provisioned via `eullm pull <url>` now instead of a direct
+// download by this binary, per eullm's own model-resolution contract (see
+// BUILD.md's "Embedding via eullm").
+const EULLM_BGE_M3_GGUF_URL: &str = "https://www.i3k.dev/models/bge-m3-gguf/bge-m3-f16.gguf";
+const EULLM_BGE_M3_GGUF_SHA256: &str =
+    "970365953c8d47b07751a37d3333f641d2287495bea27111b1b955aa0ea20dca";
+
+/// Where `eullm pull EULLM_BGE_M3_GGUF_URL` lands the file, with
+/// EULLM_MODELS_DIR set to `{data_dir}/models` (see spawn_eullm). Verified
+/// against a real eullm 0.6.90 pull, not assumed: a URL pull derives the
+/// stored model name from the filename minus its extension
+/// (bge-m3-f16.gguf → "bge-m3-f16"), one directory per model containing a
+/// same-named .gguf, and eullm's own "Run with: eullm run bge-m3-f16"
+/// output confirms it. config::EULLM_EMBEDDING_MODEL must match this exact
+/// name — a pull from a differently-named URL would silently register
+/// under a different name and every /api/embed call would 404.
+fn eullm_bge_m3_gguf_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("models").join("bge-m3-f16").join("bge-m3-f16.gguf")
+}
+
+/// Provisions eullm's own bge-m3 embedding model, the one time it is
+/// needed — ingestion_embedding=Eullm — via eullm's OWN `pull`, not a
+/// direct download by this binary: eullm's model resolution never fetches
+/// anything at request time (see BUILD.md), so without this step every
+/// /api/embed call would 404 forever, not just on a cold start.
+///
+/// Idempotent and offline-safe: does nothing, touches no network, if the
+/// expected file is already there (see eullm_bge_m3_gguf_path) — this
+/// project's own promise is "no network needed after the first run", and
+/// re-pulling on every start would quietly break that for this one model.
+///
+/// Failure here is logged, not propagated as a hard startup error — same
+/// posture as "eullm or model not found" just below in start_eullm: the
+/// rest of the RAG still starts, this one capability just will not work
+/// until whatever blocked the pull (usually: no network on first run) is
+/// resolved and the binary is restarted.
+async fn ensure_eullm_embedding_model(eullm_bin: &Path, data_dir: &Path) -> Result<()> {
+    let dest = eullm_bge_m3_gguf_path(data_dir);
+    if dest.exists() {
+        tracing::info!("bge-m3 (eullm gguf): present from a previous run");
+        return Ok(());
+    }
+
+    tracing::info!(url = EULLM_BGE_M3_GGUF_URL, "bge-m3 (eullm gguf): not found, pulling via eullm...");
+    let status = Command::new(eullm_bin)
+        .arg("pull")
+        .arg(EULLM_BGE_M3_GGUF_URL)
+        .env("EULLM_MODELS_DIR", data_dir.join("models"))
+        .stdin(std::process::Stdio::null())
+        .status()
+        .await
+        .with_context(|| format!("spawning {} pull", eullm_bin.display()))?;
+    if !status.success() {
+        anyhow::bail!("eullm pull {EULLM_BGE_M3_GGUF_URL} failed: {status}");
+    }
+    if !dest.exists() {
+        anyhow::bail!(
+            "eullm pull succeeded but {} was not created — eullm's URL-pull naming \
+             convention may have changed (see eullm_bge_m3_gguf_path's doc comment)",
+            dest.display()
+        );
+    }
+
+    // `eullm pull <url>` does NOT sha256-verify a URL pull itself —
+    // confirmed against a real 0.6.90 run, which logs its own warning for
+    // exactly this path: "downloaded without SHA-256 verification". Every
+    // other download in this project is sha256-pinned; do the same here
+    // instead of silently dropping that guarantee for this one model.
+    let dest_check = dest.clone();
+    let hash = tokio::task::spawn_blocking(move || sha256_file(&dest_check))
+        .await
+        .context("join sha256 task")??;
+    if hash != EULLM_BGE_M3_GGUF_SHA256 {
+        tokio::fs::remove_file(&dest).await.ok();
+        anyhow::bail!(
+            "bge-m3 gguf sha256 mismatch: expected {EULLM_BGE_M3_GGUF_SHA256}, got {hash} — \
+             deleted, will retry on next start"
+        );
+    }
+    tracing::info!("bge-m3 (eullm gguf): pulled and verified");
+    Ok(())
+}
+
 /// Phase 2: start eullm (when manage_subprocesses=true) and wait for
 /// /api/tags. `children` holds the processes already started in phase 1
 /// (qdrant); they are combined with eullm's in the final ProcessGuard, which
@@ -865,6 +974,26 @@ pub async fn start_eullm(
             .as_ref()
             .map(std::path::PathBuf::from)
             .or_else(|| find_by_name(&manifest, "qwen3-14b", &data_dir));
+
+        let eullm_bin = find_by_name(&manifest, "eullm", &data_dir);
+
+        // bge-m3's gguf is not a manifest component — see
+        // ensure_eullm_embedding_model's doc comment — so it is provisioned
+        // here, once, whenever this process will actually ask eullm to
+        // embed with it, independent of reserve_embedding_model below
+        // (which only controls whether it is ALSO passed as --embedding-model
+        // at startup, not whether the file needs to exist at all).
+        if settings.embeddings.ingestion_embedding == crate::config::IngestionEmbedding::Eullm {
+            if let Some(bin) = &eullm_bin {
+                if let Err(e) = ensure_eullm_embedding_model(bin, &data_dir).await {
+                    tracing::error!(
+                        error = ?e,
+                        "bge-m3 (eullm gguf) provisioning failed — ingestion/query embedding will 404 until this is resolved"
+                    );
+                }
+            }
+        }
+
         // Reserved as a companion at eullm's own startup — see spawn_eullm's
         // --embedding-model comment — only when BOTH this process will
         // actually ask eullm to embed with it (IngestionEmbedding::Eullm)
@@ -878,9 +1007,9 @@ pub async fn start_eullm(
         let embedding_gguf = (settings.embeddings.ingestion_embedding
             == crate::config::IngestionEmbedding::Eullm
             && settings.eullm.reserve_embedding_model)
-            .then(|| find_by_name(&manifest, "bge-m3-gguf", &data_dir))
-            .flatten();
-        match (find_by_name(&manifest, "eullm", &data_dir), gguf) {
+            .then(|| eullm_bge_m3_gguf_path(&data_dir))
+            .filter(|p| p.exists());
+        match (eullm_bin, gguf) {
             (Some(bin), Some(gguf)) => {
                 kill_stale_process(&bin).await;
                 children.push(spawn_eullm(

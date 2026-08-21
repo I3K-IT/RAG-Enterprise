@@ -229,14 +229,22 @@ pub enum IngestionEmbedding {
     Eullm,
 }
 
-/// eullm's own name, in ITS store (EULLM_MODELS_DIR/bge-m3/*.gguf — see
-/// manifest.toml's bge-m3-gguf component and bootstrap::spawn_eullm), for
+/// eullm's own name, in ITS store (EULLM_MODELS_DIR/bge-m3-f16/*.gguf — see
+/// bootstrap::spawn_eullm and bootstrap::ensure_eullm_embedding_model), for
 /// the model IngestionEmbedding::Eullm asks it to embed with. Not a free
 /// filesystem path: eullm resolves "model" in a request against a store
 /// name, exactly like it already does for the chat model — a path eullm
 /// was not started with answers 404 regardless of /api/unload, confirmed
 /// against a real eullm 0.6.82 server, not assumed.
-pub const EULLM_EMBEDDING_MODEL: &str = "bge-m3";
+///
+/// "bge-m3-f16", not "bge-m3": eullm derives a URL-pulled model's stored
+/// name from the filename minus its extension, and the file this project
+/// pulls is bge-m3-f16.gguf — confirmed by actually running the pull
+/// against a real eullm 0.6.90 and reading its own "Storing as: bge-m3-f16"
+/// / "Run with: eullm run bge-m3-f16" output, not assumed from the URL.
+/// This string MUST match bootstrap::ensure_eullm_embedding_model's pull
+/// exactly, or every /api/embed call 404s.
+pub const EULLM_EMBEDDING_MODEL: &str = "bge-m3-f16";
 
 #[derive(Debug, Deserialize)]
 pub struct EmbeddingsSettings {

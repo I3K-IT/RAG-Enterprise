@@ -19,6 +19,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.33] - 2026-08-20
 
+### Fixed (again)
+
+- **bge-m3's GGUF was never going to resolve for eullm.** The manifest
+  used to pin it as a component this binary downloaded directly via
+  HTTP into eullm's model-store directory — but eullm's own model
+  resolution (`resolve_model`) never downloads anything at request
+  time; it only reads its store, mount points, or an explicit path
+  (opt-in only). Removed `bge-m3-gguf` from manifest.toml entirely.
+  It is now provisioned the correct way: `bootstrap::start_eullm`
+  calls `eullm pull <url>` itself, once, the first time
+  `ingestion_embedding=eullm` runs and the file isn't already
+  present — idempotent and offline-safe like every other component,
+  sha256-verified independently since a URL pull doesn't verify
+  itself. Also fixes `config::EULLM_EMBEDDING_MODEL`, which was
+  `"bge-m3"`: running a real pull against a real eullm 0.6.90 showed
+  it actually registers as `"bge-m3-f16"` (derived from the pulled
+  file's own name) — every `/api/embed` call under the old constant
+  would have 404'd.
+
 ### Security
 
 - **Qdrant no longer listens on all network interfaces.** The bundled
