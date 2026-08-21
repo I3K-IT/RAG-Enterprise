@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         let (phase1, qdrant_children) = bootstrap::provision_and_start_qdrant(&settings).await?;
         let embeddings = load_embedding(&settings).await?;
         tracing::info!(
-            device = embeddings.device_label(),
+            device = embeddings.as_ref().map_or("eullm", |e| e.device_label()),
             "embedding service ready (before eullm, so its sizing sees the already-reduced VRAM)"
         );
         let guard = bootstrap::start_eullm(&settings, phase1, qdrant_children).await?;
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
     // are still shut down properly once the benchmark ends.
     if let Some(bench_args) = bench::parse_args(&args) {
         tracing::info!(doc = %bench_args.doc_path.display(), "benchmark mode");
-        return bench::run(&settings, &bench_args, &mut embeddings, Arc::new(eullm)).await;
+        return bench::run(&settings, &bench_args, embeddings.as_mut(), Arc::new(eullm)).await;
     }
 
     // --bench-live: the server and frontend start normally, but every real
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
         tracing::info!(
             "--bench-live enabled: recording timings and hardware for every real ingestion and query in this session; the report is written on shutdown"
         );
-        Some(Arc::new(bench::LiveRecorder::new(&embeddings, &settings.eullm.model)))
+        Some(Arc::new(bench::LiveRecorder::new(embeddings.as_ref(), &settings.eullm.model)))
     } else {
         None
     };
@@ -214,7 +214,18 @@ fn spawn_open_url(url: &str) -> std::io::Result<std::process::Child> {
     std::process::Command::new("xdg-open").arg(url).spawn()
 }
 
-async fn load_embedding(settings: &config::Settings) -> Result<clients::embeddings::EmbeddingService> {
+async fn load_embedding(
+    settings: &config::Settings,
+) -> Result<Option<clients::embeddings::EmbeddingService>> {
+    if settings.embeddings.ingestion_embedding == config::IngestionEmbedding::Eullm {
+        // Both ingestion AND query embedding go through eullm's own
+        // /api/embed in this mode (api/documents.rs, api/query.rs::prepare)
+        // — Candle is never called, so it is not worth loading at all, not
+        // even on CPU: no mmap, no weight copy, no VRAM claimed regardless
+        // of require_gpu, and bootstrap does not download the ~3.2GB of
+        // Candle bge-m3 weights either (see bootstrap::select_components).
+        return Ok(None);
+    }
     let model_id = settings.embeddings.model_id.clone();
     let require_gpu = settings.embeddings.require_gpu;
     let ingestion_embedding = settings.embeddings.ingestion_embedding;
@@ -227,16 +238,14 @@ async fn load_embedding(settings: &config::Settings) -> Result<clients::embeddin
             clients::embeddings::EmbeddingService::load_cpu_parked(&model_id)
         } else {
             // Off: candle is never swapped, require_gpu governs this one
-            // permanent load as always. Eullm: candle never touches the GPU
-            // at all in this mode (eullm does, on demand, for ingestion) —
-            // this is therefore also the right load for it, and in practice
-            // require_gpu should be false alongside it.
+            // permanent load as always.
             clients::embeddings::EmbeddingService::load(&model_id, require_gpu)
         }
     })
     .await
     .context("join embedding load")?
     .context("embedding service load")
+    .map(Some)
 }
 
 /// If the bootstrap started eullm with a local GGUF path (from the manifest,

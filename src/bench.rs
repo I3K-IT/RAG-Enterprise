@@ -190,7 +190,7 @@ fn gpu_info() -> (Option<String>, Option<u64>, Option<u64>) {
     }
 }
 
-pub fn collect_hardware_info(embeddings: &EmbeddingService, eullm_model: &str) -> HardwareInfo {
+pub fn collect_hardware_info(embeddings: Option<&EmbeddingService>, eullm_model: &str) -> HardwareInfo {
     let (gpu_name, gpu_vram_total_mb, gpu_vram_free_mb) = gpu_info();
     HardwareInfo {
         cpu_model: cpu_model(),
@@ -200,7 +200,10 @@ pub fn collect_hardware_info(embeddings: &EmbeddingService, eullm_model: &str) -
         gpu_vram_total_mb,
         gpu_vram_free_mb,
         os: os_info(),
-        embedding_device: embeddings.device_label().to_owned(),
+        // Not loaded at all with ingestion_embedding=eullm (see
+        // main::load_embedding) — both ingestion and query embedding go
+        // through eullm in that mode, same as eullm_model right below.
+        embedding_device: embeddings.map_or("eullm", |e| e.device_label()).to_owned(),
         eullm_model: eullm_model.to_owned(),
     }
 }
@@ -651,7 +654,7 @@ struct LiveInference {
 }
 
 impl LiveRecorder {
-    pub fn new(embeddings: &EmbeddingService, eullm_model: &str) -> Self {
+    pub fn new(embeddings: Option<&EmbeddingService>, eullm_model: &str) -> Self {
         Self {
             hardware: collect_hardware_info(embeddings, eullm_model),
             started_at: now_string(),
@@ -892,12 +895,21 @@ fn write_live_report(
 pub async fn run(
     settings: &Settings,
     args: &BenchArgs,
-    embeddings: &mut EmbeddingService,
+    embeddings: Option<&mut EmbeddingService>,
     eullm: std::sync::Arc<EullmClient>,
 ) -> Result<()> {
     if !args.doc_path.is_file() {
         anyhow::bail!("file not found: {}", args.doc_path.display());
     }
+    // Same limitation as --bench-live's ingestion path (see the
+    // ingestion_embedding=eullm comment further down): --bench measures the
+    // Candle path specifically, and needs it loaded to do so.
+    let Some(embeddings) = embeddings else {
+        anyhow::bail!(
+            "--bench requires ingestion_embedding != eullm (Candle is not loaded in that mode) \
+             — this tool measures the Candle path specifically"
+        );
+    };
 
     let bench_collection = format!("{}_benchmark", settings.qdrant.collection);
     tracing::info!(collection = %bench_collection, "azzero la collection di benchmark");
@@ -946,7 +958,7 @@ pub async fn run(
         inferences.push(run_inference(q, &ingestion.document_id, embeddings, &qdrant, &eullm).await?);
     }
 
-    let hw = collect_hardware_info(embeddings, &settings.eullm.model);
+    let hw = collect_hardware_info(Some(&*embeddings), &settings.eullm.model);
     print_summary(&hw, &ingestion, &inferences);
     let report_path = write_markdown_report(&hw, &args.doc_path, &ingestion, &inferences)?;
     println!("Report completo: {}", report_path.display());

@@ -1,6 +1,6 @@
 [package]
 name = "i3k-rag-engine"
-version = "0.1.32"
+version = "0.1.33"
 edition = "2021"
 description = "i3k RAG Engine — self-hosted document intelligence, fully local"
 license = "Apache-2.0"

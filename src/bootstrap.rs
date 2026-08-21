@@ -34,7 +34,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 
-use crate::config::{EullmSettings, Settings};
+use crate::config::{EullmSettings, IngestionEmbedding, Settings};
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
@@ -113,6 +113,51 @@ mod manifest_tests {
                 .unwrap_or_else(|| panic!("component {name} missing from the manifest"));
             assert!(comp.target.is_none(), "{name}: must be universal (no target)");
             assert!(comp.dest.ends_with(".traineddata"));
+        }
+    }
+
+    /// Exactly one of the two bge-m3 representations is dropped, never both,
+    /// never neither — a real regression here means either a wasted
+    /// multi-GB download or (far worse) main::load_embedding starting up
+    /// with the representation that was just deleted from disk.
+    #[test]
+    fn drop_unused_embedding_model_keeps_exactly_the_needed_representation() {
+        let manifest = load_manifest().expect("manifest.toml must parse");
+        let targets = ["linux-x86_64"]; // platform choice is irrelevant to this filter
+        let selected = select_components(&manifest, &targets);
+
+        let candle_names = ["bge-m3-weights", "bge-m3-tokenizer", "bge-m3-config"];
+        fn names_of<'a>(sel: &[&'a Component]) -> Vec<&'a str> {
+            sel.iter().map(|c| c.name.as_str()).collect()
+        }
+
+        let eullm = drop_unused_embedding_model(selected.clone(), IngestionEmbedding::Eullm);
+        let eullm_names = names_of(&eullm);
+        for n in candle_names {
+            assert!(!eullm_names.contains(&n), "Eullm mode must drop {n}");
+        }
+        assert!(eullm_names.contains(&"bge-m3-gguf"), "Eullm mode must keep bge-m3-gguf");
+
+        for mode in [IngestionEmbedding::Off, IngestionEmbedding::CandleGpu] {
+            let kept = drop_unused_embedding_model(selected.clone(), mode);
+            let kept_names = names_of(&kept);
+            assert!(!kept_names.contains(&"bge-m3-gguf"), "{mode:?} mode must drop bge-m3-gguf");
+            for n in candle_names {
+                assert!(kept_names.contains(&n), "{mode:?} mode must keep {n}");
+            }
+        }
+
+        // Every other component (qdrant, eullm, pdfium, tessdata) is
+        // untouched by this filter regardless of mode.
+        let non_embedding_names: Vec<&str> = names_of(&selected)
+            .into_iter()
+            .filter(|n| *n != "bge-m3-gguf" && !candle_names.contains(n))
+            .collect();
+        for mode in [IngestionEmbedding::Off, IngestionEmbedding::CandleGpu, IngestionEmbedding::Eullm] {
+            let kept_names = names_of(&drop_unused_embedding_model(selected.clone(), mode));
+            for n in &non_embedding_names {
+                assert!(kept_names.contains(n), "{mode:?} mode must not touch unrelated component {n}");
+            }
         }
     }
 }
@@ -626,6 +671,34 @@ fn select_components<'a>(manifest: &'a Manifest, targets: &[&str]) -> Vec<&'a Co
     selected
 }
 
+/// select_components() is purely platform-based (OS/arch/GPU-presence) — it
+/// has no Settings to consult, by design (see its own doc comment). The two
+/// bge-m3 embedding representations are the one place that is not enough:
+/// which one actually gets LOADED (main::load_embedding) is a Settings
+/// choice, not a platform one, and today's select_components() would always
+/// pick BOTH — the Candle trio (bge-m3-weights/-tokenizer/-config, ~2.1GB)
+/// AND the GGUF (bge-m3-gguf, ~1.1GB) — even though at most one is ever
+/// actually read at runtime:
+///   - ingestion_embedding=Eullm: BOTH ingestion and query embedding go
+///     through eullm's own /api/embed (api/documents.rs, api/query.rs) —
+///     Candle is never loaded at all, so its trio is pure waste.
+///   - Off / CandleGpu: Candle handles every embedding, always — the GGUF
+///     is never read by anything.
+///
+/// Applied as a filter AFTER select_components(), rather than folded into
+/// it, to keep that function's own contract (purely platform-based) intact.
+fn drop_unused_embedding_model(
+    selected: Vec<&Component>,
+    ingestion_embedding: IngestionEmbedding,
+) -> Vec<&Component> {
+    let drop_names: &[&str] = if ingestion_embedding == IngestionEmbedding::Eullm {
+        &["bge-m3-weights", "bge-m3-tokenizer", "bge-m3-config"]
+    } else {
+        &["bge-m3-gguf"]
+    };
+    selected.into_iter().filter(|c| !drop_names.contains(&c.name.as_str())).collect()
+}
+
 // ── Path resolution ───────────────────────────────────────────────────────────
 
 fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
@@ -705,7 +778,10 @@ pub async fn provision_and_start_qdrant(
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
     let targets = current_targets();
-    let selected = select_components(&manifest, &targets);
+    let selected = drop_unused_embedding_model(
+        select_components(&manifest, &targets),
+        settings.embeddings.ingestion_embedding,
+    );
 
     // Directory layout
     for subdir in &["bin", "models", "storage/qdrant", "db", "uploads", "backups"] {

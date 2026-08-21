@@ -73,18 +73,44 @@ async fn prepare(
     use_history: bool,
     conversation_id: Option<&str>,
 ) -> anyhow::Result<(String, Vec<Source>, PrepareTimings)> {
-    // 1. Embed the query (CPU/GPU bound). With ingestion_embedding=CandleGpu
-    // (or =Eullm, where bge-m3 never touches the GPU at all) bge-m3 runs on
-    // CPU here — a single short text, so the cost is acceptable — because
-    // the GPU is reserved for eullm outside the ingestion window.
+    // 1. Embed the query. With ingestion_embedding=Eullm this now goes
+    // through eullm's own POST /api/embed (an HTTP call, .await directly) —
+    // the same on-demand coexist-or-evict eullm already does for ingestion
+    // (config::IngestionEmbedding::Eullm), extended to query time too.
+    // Otherwise Candle, CPU/GPU-bound via spawn_blocking; with
+    // ingestion_embedding=CandleGpu bge-m3 runs on CPU here regardless (a
+    // single short text, so the cost is acceptable) because the GPU is
+    // reserved for eullm outside the ingestion window.
+    //
+    // Caveat worth knowing before relying on this on a tight-VRAM card: if
+    // bge-m3 and the chat model do not both fit, every query now pays a
+    // potential double swap — eullm may evict the chat model to embed the
+    // question, then evict bge-m3 right back out to answer it. Harmless
+    // when both fit together (the common case eullm's coexist logic is
+    // built for); adds real per-query latency when they do not.
     let t = Instant::now();
-    let svc = state.embeddings.clone();
-    let q = question.to_owned();
-    let query_vec = tokio::task::spawn_blocking(move || {
-        let guard = svc.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
-        guard.embed_text(&q)
-    })
-    .await??;
+    let query_vec = if state.settings.embeddings.ingestion_embedding
+        == crate::config::IngestionEmbedding::Eullm
+    {
+        state
+            .eullm
+            .embed_texts(crate::config::EULLM_EMBEDDING_MODEL, &[question], None)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("eullm embed: empty response for a single-text request"))?
+    } else {
+        let svc = state
+            .embeddings
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Candle embeddings not loaded (ingestion_embedding=eullm?)"))?;
+        let q = question.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let guard = svc.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
+            guard.embed_text(&q)
+        })
+        .await??
+    };
     let embed_query = t.elapsed();
 
     // 2. Vector search (top_k=15, threshold=0.30 — MAPPA §5)

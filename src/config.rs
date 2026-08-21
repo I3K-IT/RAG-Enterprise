@@ -179,11 +179,13 @@ pub struct EullmSettings {
     pub reserve_embedding_model: bool,
 }
 
-/// How the ingestion window (documents::upload) gets its embeddings —
-/// always bge-m3, but through a different device or process depending on
-/// this choice. Query-time embedding (api/query.rs, a single short text per
-/// request) is NEVER affected: it always goes through the resident Candle
-/// instance, regardless of this setting.
+/// How bge-m3 embedding happens — always bge-m3, but through a different
+/// device or process depending on this choice. Off and CandleGpu affect
+/// ONLY the ingestion window (documents::upload); query-time embedding
+/// (api/query.rs::prepare, a single short text per request) always goes
+/// through the resident Candle instance for those two. Eullm is the
+/// exception: it routes BOTH ingestion and query embedding through eullm,
+/// and Candle is not loaded at all in that mode — see the Eullm variant.
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum IngestionEmbedding {
@@ -205,16 +207,25 @@ pub enum IngestionEmbedding {
     /// with --features cuda. Settings::load() fails at startup if either
     /// condition is missing, rather than degrading silently.
     CandleGpu,
-    /// bge-m3 (Candle) stays on CPU always, including during ingestion —
-    /// eullm's own "bge-m3" store entry (see manifest.toml, and
-    /// EULLM_MODELS_DIR in bootstrap::spawn_eullm) is asked for the
-    /// embedding instead, over POST /api/embed. eullm decides on its own
-    /// whether to evict the chat model to make room, the same VRAM
+    /// Candle is not loaded at startup at all — not even on CPU (see
+    /// main::load_embedding) — and bootstrap does not download its ~2.1GB
+    /// of bge-m3 weights either (see bootstrap::drop_unused_embedding_model).
+    /// BOTH ingestion (api/documents.rs) and query embedding
+    /// (api/query.rs::prepare) go through eullm's own "bge-m3" store entry
+    /// instead (see manifest.toml, and EULLM_MODELS_DIR in
+    /// bootstrap::spawn_eullm), over POST /api/embed. eullm decides on its
+    /// own whether to evict the chat model to make room, the same VRAM
     /// management it already does unprompted — no manual /api/unload from
     /// this process. Needs no --features cuda: this binary never touches
-    /// CUDA itself for ingestion in this mode, eullm does. Chat queries are
-    /// still blocked for the whole ingestion window regardless of whether
-    /// eullm actually evicts anything — see AppState::ingestion_blocks_queries.
+    /// CUDA itself in this mode, eullm does.
+    ///
+    /// Two consequences worth knowing before enabling this: (1) chat queries
+    /// are blocked for the whole ingestion window regardless of whether
+    /// eullm actually evicts anything — see AppState::ingestion_blocks_queries
+    /// — and (2) on a card where bge-m3 and the chat model do not both fit,
+    /// EVERY query now pays a potential double swap (evict chat to embed the
+    /// question, evict bge-m3 back out to answer it) — harmless when both
+    /// fit together, real added latency per query when they do not.
     Eullm,
 }
 
