@@ -17,6 +17,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.33] - 2026-08-20
+
+### Changed
+
+- **`EMBEDDINGS__INGESTION_EMBEDDING=eullm` now also covers query-time
+  embedding, not just ingestion.** Previously this mode only routed
+  document-ingestion embedding through eullm's `POST /api/embed`;
+  every question was still embedded through the in-process Candle
+  instance regardless. Now both go through eullm, and Candle is not
+  loaded at startup at all in this mode — not even on CPU — so
+  bootstrap no longer downloads its ~2.1GB of bge-m3 weights either
+  (only the ~1.1GB GGUF eullm itself uses). `Off` and `CandleGpu` are
+  unaffected: query embedding still always uses Candle for those two,
+  same as before. Worth knowing before enabling: on a card where
+  bge-m3 and the chat model do not both fit in VRAM, every query now
+  pays a potential model-swap round trip (evict chat to embed the
+  question, evict bge-m3 back out to answer it) — see the doc comment
+  on `config::IngestionEmbedding::Eullm`.
+
 ## [0.1.32] - 2026-08-20
 
 ### Fixed
@@ -41,23 +60,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   it short of a rebuild. Default unchanged (256).
 - `.env.example` at the repo root, documenting every `SECTION__FIELD`
   variable `Settings::load()` reads.
-
-### Changed
-
-- **`EMBEDDINGS__INGESTION_EMBEDDING=eullm` now also covers query-time
-  embedding, not just ingestion.** Previously this mode only routed
-  document-ingestion embedding through eullm's `POST /api/embed`;
-  every question was still embedded through the in-process Candle
-  instance regardless. Now both go through eullm, and Candle is not
-  loaded at startup at all in this mode — not even on CPU — so
-  bootstrap no longer downloads its ~2.1GB of bge-m3 weights either
-  (only the ~1.1GB GGUF eullm itself uses). `Off` and `CandleGpu` are
-  unaffected: query embedding still always uses Candle for those two,
-  same as before. Worth knowing before enabling: on a card where
-  bge-m3 and the chat model do not both fit in VRAM, every query now
-  pays a potential model-swap round trip (evict chat to embed the
-  question, evict bge-m3 back out to answer it) — see the doc comment
-  on `config::IngestionEmbedding::Eullm`.
 
 ## [0.1.31] - 2026-08-20
 
