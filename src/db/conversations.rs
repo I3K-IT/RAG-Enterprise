@@ -77,21 +77,34 @@ pub async fn rename_conversation(
 
 /// Deletes the conversation and all of its messages (manual cascade).
 ///
-/// SECURITY (IDOR): ownership is verified BEFORE touching any message. An
-/// earlier version deleted `chat_messages` by conv_id with no user filter and
-/// only filtered by user_id on the conversation itself, so a user could delete
-/// someone else's messages by passing a conv_id that was not theirs.
+/// Children before parent: `chat_messages.conversation_id` has a (non-
+/// cascading) `FOREIGN KEY ... REFERENCES conversations(id)`
+/// (migrations/0002_conversations.sql) and sqlx enables `PRAGMA
+/// foreign_keys = ON` by default — deleting the conversation row first, as
+/// an earlier version of this function did, unconditionally fails with
+/// SQLite error 787 the moment the conversation has any message at all
+/// (i.e. every real conversation a user would actually want to delete).
 ///
-/// Now: an atomic transaction where the conversation, filtered by user_id, is
-/// removed first. If it does not belong to the user then `rows_affected == 0`,
-/// the transaction rolls back and no message is touched. The messages are
-/// filtered by user_id as well, as defence in depth.
+/// SECURITY (IDOR): both statements independently filter by `user_id`, not
+/// just `conv_id` — so this user's DELETE can only ever touch THIS user's
+/// own rows in either table, regardless of which order they run in. (An
+/// even earlier version deleted `chat_messages` by conv_id alone, with no
+/// user filter there, relying solely on checking the conversation's
+/// ownership first — that is what made the delete order load-bearing for
+/// security. It no longer is, now that both statements carry their own
+/// filter, but the double-check stays as defence in depth.)
 pub async fn delete_conversation(
     pool: &SqlitePool,
     conv_id: &str,
     user_id: i64,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM chat_messages WHERE conversation_id = ? AND user_id = ?")
+        .bind(conv_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
 
     let affected = sqlx::query(
         "DELETE FROM conversations WHERE id = ? AND user_id = ?"
@@ -102,20 +115,8 @@ pub async fn delete_conversation(
     .await?
     .rows_affected();
 
-    if affected == 0 {
-        // Not the user's, or does not exist: touch no messages.
-        tx.rollback().await?;
-        return Ok(false);
-    }
-
-    sqlx::query("DELETE FROM chat_messages WHERE conversation_id = ? AND user_id = ?")
-        .bind(conv_id)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-
     tx.commit().await?;
-    Ok(true)
+    Ok(affected > 0)
 }
 
 /// Updates the conversation's updated_at (called after inserting a message).
