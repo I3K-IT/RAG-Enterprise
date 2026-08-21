@@ -72,35 +72,26 @@ size   = 9001753984
 dest   = "{data}/models/qwen3-14b/Qwen3-14B-Q4_K_M.gguf"
 exec   = false
 
-# bge-m3 per eullm (>= 0.6.82, POST /api/embed) invece che per Candle — path
-# alternativo a bge-m3-weights/-tokenizer/-config qui sopra, non un
-# sostituto: quello resta il modello per il binario compilato --features
-# cuda, questo per chi passa dall'embedding via eullm. F16 (non quantizzato),
-# conversione llama.cpp da BAAI/bge-m3 (pqnet/bge-m3-gguf su HF, poi
-# rimirrorata su i3k.dev).
+# bge-m3 per eullm (>= 0.6.82, POST /api/embed) — DELIBERATAMENTE NON qui.
+# Non è un componente scaricato via HTTP diretto da questo binario, a
+# differenza di ogni altro modello in questo file: eullm::resolve_model()
+# non scarica mai nulla al volo, cerca solo nel proprio store (default
+# ~/.eullm/models, o $EULLM_MODELS_DIR — bootstrap::spawn_eullm punta
+# questa a {data}/models) o in mount point riconosciuti — mai un path
+# libero, che darebbe 404 sempre a meno di EULLM_ALLOW_MODEL_PATHS=1 sul
+# processo eullm (sconsigliato con l'API esposta).
 #
-# dest nella STESSA cartella {data}/models/bge-m3/ della terna Candle qui
-# sopra — file diversi (.gguf contro .safetensors/.json), nessuna
-# collisione — non a caso: eullm risolve "model" in una richiesta contro il
-# nome della cartella nel suo store (default ~/.eullm/models, o
-# $EULLM_MODELS_DIR), non contro un path libero — un path arbitrario dà 404
-# sempre, indipendentemente da /api/unload, a meno di
-# EULLM_ALLOW_MODEL_PATHS=1 sul processo eullm, sconsigliato con l'API
-# esposta. Bootstrap deve quindi puntare EULLM_MODELS_DIR su {data}/models
-# quando avvia eullm perché "bge-m3" nella richiesta risolva qui. Non è
-# un'ipotesi: verificato con un vero eullm 0.6.82, store popolato così,
-# POST /api/embed {"model": "bge-m3", ...} — risposta reale, 1024
-# dimensioni, similarità coseno 0.89 tra "il gatto è sul tavolo" e "a cat
-# is on the table" (atteso da un embedder multilingue, non solo un vettore
-# ben formato).
-[[component]]
-name   = "bge-m3-gguf"
-kind   = "model"
-url    = "https://www.i3k.dev/models/bge-m3-gguf/bge-m3-f16.gguf"
-sha256 = "970365953c8d47b07751a37d3333f641d2287495bea27111b1b955aa0ea20dca"
-size   = 1157671168
-dest   = "{data}/models/bge-m3/bge-m3-f16.gguf"
-exec   = false
+# Provisionato comunque in automatico al primo avvio — dando per scontato
+# che NON ci sia già — ma tramite `eullm pull <url>`, non un secondo
+# meccanismo di download parallelo a questo file: vedi
+# bootstrap::ensure_eullm_embedding_model, chiamata da start_eullm quando
+# ingestion_embedding=Eullm, prima di avviare eullm stesso. Idempotente e
+# offline-safe come ogni altro componente qui: controlla prima se il file
+# è già al suo posto e tocca la rete solo se manca. Un secondo componente
+# manifest, scaricato con la pipeline HTTP generica di questo file, avrebbe
+# bypassato lo store di eullm e reintrodotto esattamente il download
+# parallelo che questo commento spiega essere sbagliato — per questo resta
+# fuori da questo file nonostante sia comunque automatico.
 
 # OCR (leptess/Tesseract, lang="ita+eng"). Source: tessdata_best
 # (LSTM, highest accuracy — github.com/tesseract-ocr/tessdata_best).

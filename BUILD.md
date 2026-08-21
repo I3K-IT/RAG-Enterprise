@@ -312,3 +312,45 @@ RUST_LOG=info
 
 `AUTH__JWT_SECRET` and `AUTH__ADMIN_DEFAULT_PASSWORD` have no safe defaults:
 set them before exposing the service.
+
+### Embedding via eullm
+
+`EMBEDDINGS__INGESTION_EMBEDDING=eullm` routes both document-ingestion and
+query embedding through eullm's own `POST /api/embed` instead of the
+in-process Candle path (see `config::IngestionEmbedding` and
+`CHANGELOG.md`'s 0.1.33 entry). eullm needs bge-m3 as its own GGUF for
+this — not the Candle `.safetensors`/HuggingFace format this binary uses
+for `Off`/`CandleGpu`.
+
+eullm's own model resolution never downloads anything at request time: it
+only looks in its model store, in a recognized mount point, or at an
+explicit path if `EULLM_ALLOW_MODEL_PATHS=1` is set on the eullm process
+(not recommended with the API exposed). So this binary provisions the GGUF
+itself, once, via eullm's own `pull` — not a direct HTTP download of its
+own — before eullm is ever started with `manage_subprocesses=true` (the
+default): see `bootstrap::ensure_eullm_embedding_model`. Idempotent and
+offline-safe, same as every other component: it checks whether the file is
+already at `{data}/models/bge-m3-f16/bge-m3-f16.gguf` first and only
+touches the network if it is missing, so a machine that already has it
+(including from a previous run) never re-pulls it. sha256-verified after
+the pull — `eullm pull <url>` does not verify a URL pull itself, this
+project does it independently.
+
+With `manage_subprocesses=false` (eullm run externally — Docker Compose,
+systemd, whatever the deployment uses), this binary never touches eullm's
+process or files at all, provisioning included: run the same pull
+yourself before starting eullm, pointed at whatever `EULLM_MODELS_DIR`
+(or store default, `~/.eullm/models`) that eullm instance actually reads:
+```sh
+EULLM_MODELS_DIR=/path/eullm/will/read eullm pull https://www.i3k.dev/models/bge-m3-gguf/bge-m3-f16.gguf
+```
+
+Either way, once provisioned, nothing else changes: ingestion and query
+calls already reference the model by name
+(`config::EULLM_EMBEDDING_MODEL = "bge-m3-f16"` — the name eullm itself
+derives from that URL's filename, confirmed by actually running the pull,
+not assumed), exactly like the chat model. No
+`EULLM__RESERVE_EMBEDDING_MODEL` (`--embedding-model`) needed for this —
+see that setting's own doc comment for why it is usually the wrong choice
+on a VRAM-constrained card; plain on-demand `/api/embed` already does its
+own coexist-or-evict.
