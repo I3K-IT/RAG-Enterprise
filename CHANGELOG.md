@@ -15,6 +15,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **This crate is now also a library, not just a binary.** New
+  `src/lib.rs` holds every module (now `pub mod`) and a new
+  `pub async fn run()` containing the full startup sequence that used
+  to live in `main()`. `src/main.rs` is now a thin launcher:
+  `i3k_rag_engine::run().await`. Zero behavior change — same 113 tests
+  pass, clippy stays clean, `--version` verified end-to-end through the
+  new wiring. This is Phase 1 of the open-core migration: it makes this
+  crate a reusable dependency for `I3K-IT/rag-enterprise-pro`, pinned to
+  an exact commit, per that repository's
+  `I3K_RAG_Pro_Open_Core_Architecture.md` (private — not this repo).
+
 ---
 
 ## [0.1.36] - 2026-08-21
