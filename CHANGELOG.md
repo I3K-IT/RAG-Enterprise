@@ -47,6 +47,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   new), clippy stays clean. This is Phase 2 of the open-core migration;
   see Phase 1's changelog entry above for context.
 
+- **New `build_info() -> (&str, &str)`, exposing the version/commit
+  `--version` already printed.** No behavior change for this binary —
+  it's the same two values, now also reachable as a function. Added so
+  `rag-enterprise-pro`'s Pro launcher, which statically links this crate
+  via a pinned Git dependency (Phase 4 of the open-core migration), can
+  read Community's own version/commit at runtime for its own
+  `--version` output, without re-deriving it. 116 tests pass (one new),
+  clippy stays clean.
+
 ---
 
 ## [0.1.36] - 2026-08-21

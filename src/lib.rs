@@ -33,6 +33,19 @@ pub fn is_version_flag(args: &[String]) -> bool {
     args.iter().any(|a| a == "-V" || a == "--version")
 }
 
+/// This crate's own `(CARGO_PKG_VERSION, BUILD_GIT_HASH)`, the same values
+/// `-V`/`--version` prints. A function, not just a side-effecting print, so
+/// a Pro launcher statically linking this crate via the pinned Git
+/// dependency (`I3K_RAG_Pro_Open_Core_Architecture.md`, rag-enterprise-pro
+/// private repo, section 9) can read Community's own version/commit at
+/// runtime and fold it into its own `--version` output (that document's
+/// section 19). Because Pro compiles this crate from its own pinned git
+/// checkout, `BUILD_GIT_HASH` here resolves to Community's real pinned
+/// commit — not Pro's — with no extra plumbing needed.
+pub fn build_info() -> (&'static str, &'static str) {
+    (env!("CARGO_PKG_VERSION"), env!("BUILD_GIT_HASH"))
+}
+
 /// Runs the full i3k-rag-engine server with Community's own defaults — no
 /// extensions, no extra API routes. The Community binary's `main()` is just
 /// `i3k_rag_engine::run().await`.
@@ -53,7 +66,8 @@ pub async fn run_with_extensions(
     let args: Vec<String> = std::env::args().collect();
 
     if is_version_flag(&args) {
-        println!("i3k-rag-engine {} ({})", env!("CARGO_PKG_VERSION"), env!("BUILD_GIT_HASH"));
+        let (version, hash) = build_info();
+        println!("i3k-rag-engine {version} ({hash})");
         return Ok(());
     }
 
@@ -347,6 +361,14 @@ mod tests {
     fn version_flag_absent_on_normal_startup() {
         assert!(!is_version_flag(&args(&["i3k-rag-engine"])));
         assert!(!is_version_flag(&args(&[])));
+    }
+
+    #[test]
+    fn build_info_matches_what_the_version_flag_prints() {
+        let (version, hash) = build_info();
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(hash, env!("BUILD_GIT_HASH"));
+        assert!(!hash.is_empty(), "build.rs must always set BUILD_GIT_HASH, even to \"unknown\"");
     }
 
     #[test]
