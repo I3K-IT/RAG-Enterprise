@@ -1295,6 +1295,17 @@ function App() {
                                 >
                                   {source.filename || source.document_id}
                                 </a>
+                                {source.page_start != null && (
+                                  <span
+                                    className="bg-slate-500 text-slate-100 px-2 py-1 rounded text-xs font-semibold flex-shrink-0"
+                                    title="Pagina nel documento originale"
+                                  >
+                                    pag. {source.page_start}
+                                    {source.page_end != null && source.page_end !== source.page_start
+                                      ? `–${source.page_end}`
+                                      : ''}
+                                  </span>
+                                )}
                                 <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold flex-shrink-0">
                                   {source.similarity != null ? (source.similarity * 100).toFixed(1) : 'N/A'}%
                                 </span>

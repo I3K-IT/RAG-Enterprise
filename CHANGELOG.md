@@ -17,6 +17,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.34] - 2026-08-21
+
+### Added
+
+- **Sources card now shows the page number(s) a chunk came from.** The
+  API response has carried `page_start`/`page_end` since the Source
+  Provenance Foundation work, but the frontend never rendered them —
+  the sources list under an answer only showed filename + similarity
+  %. `frontend/src/App.jsx` now adds a "pag. N" (or "pag. N–M" when a
+  chunk spans multiple pages) badge next to each source, when the
+  document has page info (non-PDF formats and documents ingested
+  before this feature existed still have none, so the badge is
+  omitted for those, not shown as blank/zero).
+
+- **Chunks now carry the nearest preceding structural heading** ("Article
+  99", "Chapter XII", "Section 4", ...) when they don't already contain
+  it themselves. Root cause: chunk boundaries are byte-count-driven and
+  know nothing about document structure, so a chunk can land entirely
+  inside e.g. Article 100's body without the "Article 100" heading —
+  which landed a chunk or two earlier. Retrieval then hands the LLM a
+  fragment like "...administrative fines of up to EUR 1 500 000" with no
+  indication of which article it belongs to. This is confirmed as the
+  actual cause of two independently-built RAG stacks (this one and the
+  old Python one) both misattributing the AI Act's Article 99/100/101
+  penalty clauses to the wrong article on the same questions — verified
+  against the real Official Journal PDF text, not assumed. New
+  `chunker::detect_headings`/`inject_heading_context`: only touches the
+  text that gets embedded/stored, not `Chunk.start_byte`/`end_byte` —
+  page numbers and citation spans are unaffected. `CHUNKING_CONFIG_VERSION`
+  bumped 1 → 2 (same chunk_index now stores different text than before,
+  so re-ingesting must not collide with old provenance_ids).
+
+---
+
 ## [0.1.33] - 2026-08-20
 
 ### Fixed (yet again)

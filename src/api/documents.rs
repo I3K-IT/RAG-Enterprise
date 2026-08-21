@@ -198,13 +198,21 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         );
     }
 
+    // 4b. Prepend the nearest preceding structural heading ("Article 99",
+    // "Chapter XII", ...) to any chunk that doesn't already start with it —
+    // see chunker::inject_heading_context. This is what actually gets
+    // embedded and stored; `chunks[i].start_byte`/`end_byte` (used below for
+    // page lookups and citation spans) still point at the real source
+    // location, untouched by the injected label.
+    let chunk_texts = chunker::inject_heading_context(&text, &chunks);
+
     // 5. Embed. Candle is CPU/GPU-bound (spawn_blocking); eullm is an HTTP
     // call (.await directly) — see config::IngestionEmbedding::Eullm.
     let embed_start = std::time::Instant::now();
     let embeddings = if state.settings.embeddings.ingestion_embedding
         == crate::config::IngestionEmbedding::Eullm
     {
-        let refs: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        let refs: Vec<&str> = chunk_texts.iter().map(|s| s.as_str()).collect();
         match state.eullm.embed_texts(crate::config::EULLM_EMBEDDING_MODEL, &refs, None).await {
             Ok(e) => e,
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("eullm embedding: {e}")),
@@ -219,7 +227,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                 )
             }
         };
-        let chunk_strs: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+        let chunk_strs = chunk_texts.clone();
         match tokio::task::spawn_blocking(move || {
             let refs: Vec<&str> = chunk_strs.iter().map(|s| s.as_str()).collect();
             let guard = embeddings_svc
@@ -252,8 +260,8 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                 chunk_index: i,
                 filename: filename.clone(),
                 upload_date: upload_date.clone(),
-                text: chunk.text.clone(),
-                chunk_size: chunk.text.len(),
+                text: chunk_texts[i].clone(),
+                chunk_size: chunk_texts[i].len(),
                 document_type: ext.clone(),
                 structured_fields: None,
                 source_start_byte: Some(chunk.start_byte),
