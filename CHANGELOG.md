@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.1.34] - 2026-08-21
+
 ### Added
 
 - **Sources card now shows the page number(s) a chunk came from.** The
