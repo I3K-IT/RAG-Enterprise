@@ -1252,7 +1252,8 @@ function App() {
             </button>
           )}
 
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-5xl mx-auto w-full space-y-4">
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-slate-400">
@@ -1263,7 +1264,7 @@ function App() {
             ) : (
               messages.map((msg, idx) => (
                 <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-3xl rounded-lg p-4 ${
+                  <div className={`max-w-[85%] rounded-lg p-4 ${
                     msg.role === 'user'
                       ? 'bg-blue-600 text-white'
                       : msg.error
@@ -1343,6 +1344,7 @@ function App() {
             )}
 
             <div ref={messagesEndRef} />
+            </div>
           </div>
 
           {ingestionInProgress && (
@@ -1353,7 +1355,7 @@ function App() {
           )}
 
           <div className="border-t border-slate-700 p-4 bg-slate-800">
-            <form onSubmit={handleQuery} className="flex gap-2">
+            <form onSubmit={handleQuery} className="max-w-5xl mx-auto w-full flex gap-2">
               <input
                 type="text"
                 value={query}

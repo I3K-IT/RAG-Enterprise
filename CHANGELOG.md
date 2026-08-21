@@ -15,6 +15,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Chat column is now centered and wider.** The messages area and input
+  bar had no max-width/centering wrapper of their own — only individual
+  message bubbles capped at `max-w-3xl` — so on a wide screen bubbles sat
+  flush against the far left/right edges of the whole `<main>` panel
+  instead of reading as one centered column. Answers on documents like
+  the EU AI Act run long, and the narrow 3xl cap meant a lot of line
+  wrapping — i.e. more vertical scrolling than the actual text length
+  warranted. Both the messages list and the input form are now wrapped in
+  a centered `max-w-5xl` column, and bubbles widened from `max-w-3xl` to
+  `max-w-[85%]` of that column.
+
 ---
 
 ## [0.1.35] - 2026-08-21
