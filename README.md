@@ -57,8 +57,9 @@ eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
 No separate GPU build or download is needed on any platform.
 
 ```sh
-tar -xzf i3k-rag-engine-v0.1.34-linux-x86_64.tar.gz
-cd i3k-rag-engine-v0.1.34-linux-x86_64
+mkdir i3k-rag-engine-v0.1.35-linux-x86_64
+tar -xzf i3k-rag-engine-v0.1.35-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.35-linux-x86_64
+cd i3k-rag-engine-v0.1.35-linux-x86_64
 
 cat > .env <<'EOF'
 AUTH__JWT_SECRET=change-this-to-a-long-random-string
@@ -66,6 +67,10 @@ EOF
 
 ./i3k-rag-engine
 ```
+
+(the tarball's own contents are flat — binary, `.env.example`, `frontend/dist/` — with
+no wrapping folder inside it, so `mkdir` first, or extract straight into wherever
+you want the install to live.)
 
 On first run it downloads roughly **12 GB** of components and verifies each one
 against a pinned sha256 — mostly the language and embedding models. Allow time
@@ -80,6 +85,20 @@ SAVE THIS PASSWORD — it will not be shown again!
 
 Set `AUTH__ADMIN_DEFAULT_PASSWORD` in `.env` beforehand if you would rather
 choose it yourself.
+
+## Upgrading
+
+`DATA__DIR` defaults to the directory holding the executable (see
+[Configuration](#configuration) below), and every component — qdrant, eullm, the
+chat and embedding models — is fetched into it only if missing or failing its
+pinned sha256 (`bootstrap::ensure_component`). So extracting a new release's
+tarball **over an existing install** (same directory, overwriting the binary,
+`.env.example`, `frontend/dist/`) reuses everything already downloaded there —
+nothing is re-fetched unless that release actually pins a different version of
+it. Your own `.env` is never touched (the tarball only ever ships
+`.env.example`). Extracting into a fresh, empty directory instead — the Quick
+start default — starts every component's download over from scratch, since
+nothing at that new path exists yet.
 
 ## What it does
 

@@ -17,6 +17,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.35] - 2026-08-21
+
+### Fixed
+
+- **Ingestion crashed on real-world PDFs containing curly quotes, accents
+  or em dashes.** `chunker::is_heading_line` (new in the heading-context
+  feature above) sliced `line[..prefix.len()]` — a raw BYTE offset —
+  which panics the instant a multi-byte character straddles that offset,
+  taking the whole ingestion request down with it
+  (`thread 'tokio-rt-worker' panicked ... is not a char boundary`).
+  Reproduced on the real EU AI Act PDF within hours of shipping the
+  heading-context feature. Rewritten to compare characters one at a time
+  instead of byte-slicing — panic-free by construction regardless of
+  content. New exhaustive test sweeps every prefix length × lead-in
+  length combination with a multi-byte character landing at each
+  possible offset, not just the one that happened to crash first.
+
+- **Deleting a conversation with any messages in it always failed** with
+  `FOREIGN KEY constraint failed (code 787)`. `chat_messages.conversation_id`
+  has a (non-cascading) FK on `conversations(id)`
+  (migrations/0002_conversations.sql) and sqlx enables
+  `PRAGMA foreign_keys = ON` by default; `delete_conversation` deleted the
+  parent row before its messages, which SQLite has always correctly
+  refused. Fixed by deleting children before parent, within the same
+  transaction. Both statements already filtered by `user_id` independently
+  (not just `conv_id`), so reordering doesn't weaken the existing IDOR
+  protection — see the updated doc comment on `delete_conversation`.
+
+- **README quick-start couldn't actually be followed as written.** The
+  release tarball is built as `tar czf ... -C stage .` — flat, no
+  wrapping version-named folder inside it — but the quick-start snippet
+  told users to `cd i3k-rag-engine-vX.Y.Z-linux-x86_64` right after
+  `tar -xzf`, a directory that plain extraction never creates. Fixed to
+  `mkdir` first. Also documented (new "Upgrading" section) that
+  extracting a new release's tarball *over* an existing install reuses
+  every already-downloaded component — `bootstrap::ensure_component`
+  only fetches what's missing or sha256-mismatched, and `DATA__DIR`
+  defaults to the binary's own directory — so this isn't a special
+  workflow, just how the existing idempotent provisioning already
+  behaves when pointed at a non-empty directory.
+
+---
+
 ## [0.1.34] - 2026-08-21
 
 ### Added

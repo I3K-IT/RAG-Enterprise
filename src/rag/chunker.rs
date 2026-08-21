@@ -295,17 +295,23 @@ const MAX_HEADING_LINE_CHARS: usize = 60;
 /// start of actual body text as its "title".
 const MAX_TITLE_LINE_CHARS: usize = 120;
 
+/// Char-by-char, never byte-slicing: `line[..prefix.len()]` looked
+/// equivalent and passed every test written against ASCII input, but a
+/// prefix's BYTE length only lines up with a char boundary in `line` when
+/// everything preceding it happens to be single-byte ASCII too. Real
+/// document text routinely is not — curly quotes, accents, em dashes — so
+/// that version panicked ("byte index N is not a char boundary") on real
+/// PDFs the moment one landed inside a prefix's byte span, taking down the
+/// whole ingestion request. Comparing characters one at a time is
+/// panic-free by construction regardless of what `line` contains.
 fn is_heading_line(line: &str) -> bool {
     if line.is_empty() || line.chars().count() > MAX_HEADING_LINE_CHARS {
         return false;
     }
     HEADING_PREFIXES.iter().any(|&prefix| {
-        line.len() >= prefix.len()
-            && line[..prefix.len()].eq_ignore_ascii_case(prefix)
-            && line[prefix.len()..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+        let mut rest = line.chars();
+        let matched = prefix.chars().all(|pc| rest.next().is_some_and(|lc| lc.eq_ignore_ascii_case(&pc)));
+        matched && rest.next().is_some_and(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
     })
 }
 
@@ -557,6 +563,30 @@ mod tests {
         assert_eq!(headings.len(), 2, "expected CHAPTER XII and Articolo 99, got {headings:?}",);
         assert_eq!(headings[0].label, "CHAPTER XII — PENALTIES");
         assert_eq!(headings[1].label, "Articolo 99 — Sanzioni");
+    }
+
+    /// Regression: `is_heading_line` used to slice `line[..prefix.len()]` —
+    /// a raw BYTE offset — which panics ("byte index N is not a char
+    /// boundary") the instant a multi-byte character (curly quote, accent,
+    /// em dash) straddles that offset. This crashed real ingestion on the
+    /// actual EU AI Act PDF: 5 ASCII bytes then a 3-byte '‘' (U+2018)
+    /// landing across the "annex " (6-byte) prefix's boundary. Swept
+    /// exhaustively across every prefix length and lead-in length, not
+    /// just the one offset that happened to crash first — this must never
+    /// panic regardless of what precedes a multi-byte character.
+    #[test]
+    fn is_heading_line_never_panics_on_multibyte_chars_near_prefix_boundary() {
+        let real_shape = "Annex‘s scope is defined elsewhere in this Regulation, not here at all.";
+        let _ = is_heading_line(real_shape);
+        let _ = detect_headings(real_shape);
+
+        for &prefix in HEADING_PREFIXES {
+            for lead in 0..=prefix.chars().count() + 2 {
+                let s = format!("{}‘multibyte right after {lead} ascii bytes", "x".repeat(lead));
+                let _ = is_heading_line(&s);
+                let _ = detect_headings(&s);
+            }
+        }
     }
 
     #[test]
