@@ -346,8 +346,11 @@ async fn run_ingestion(
                 chunk_index: i,
                 filename: filename.clone(),
                 upload_date: upload_date.clone(),
-                text: chunk_texts[i].clone(),
-                chunk_size: chunk_texts[i].len(),
+                // Same split as api/documents.rs: text is always the real
+                // chunk (citations/highlighting never show enricher output),
+                // the embedding above still comes from chunk_texts.
+                text: c.text.clone(),
+                chunk_size: c.text.len(),
                 document_type: ext.clone(),
                 structured_fields: None,
                 source_start_byte: Some(c.start_byte),
@@ -359,6 +362,7 @@ async fn run_ingestion(
                     i,
                     parser::EXTRACTION_CONFIG_VERSION,
                 )),
+                retrieval_text: (chunk_texts[i] != c.text).then(|| chunk_texts[i].clone()),
             }
         })
         .collect();

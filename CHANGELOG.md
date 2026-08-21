@@ -56,6 +56,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--version` output, without re-deriving it. 116 tests pass (one new),
   clippy stays clean.
 
+- **New `ChunkPayload.retrieval_text`, and a real (if small) citation
+  behavior change: stored/cited chunk text is now always the original,
+  un-enriched text, never whatever a `ChunkEnricher` produced.** Until
+  now, `text` (used both for citations shown to the user and for the
+  context fed to the answering LLM) was whatever the enricher returned —
+  for Community's own heading-injection, a real but easy-to-miss
+  side-effect: a citation could show an injected `[Article 42 — Title]`
+  prefix that isn't verbatim what's at that exact position in the
+  source. `text` is now always the chunk's real content; the enricher's
+  output, when it differs, is stored separately as `retrieval_text` and
+  used only to build the LLM's context (`api/query.rs`) — never shown to
+  a user as if it were the source. `chunk_size` now matches `text`'s own
+  length accordingly. `retrieval_text` is optional and
+  `skip_serializing_if`, so points written before this field existed
+  keep deserializing unchanged. Required core change for
+  `rag-enterprise-pro`'s upcoming Contextual Retrieval (Phase 6): an
+  LLM-generated context blurb is not "real document content" the way an
+  injected heading is, so this distinction matters far more there — see
+  that repository's `I3K_RAG_Pro_Open_Core_Architecture.md` (private)
+  section 14, and section 18 on why this core change comes from
+  Community first. 121 tests pass (five new), clippy stays clean.
+
 ---
 
 ## [0.1.36] - 2026-08-21

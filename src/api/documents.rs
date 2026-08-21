@@ -267,8 +267,12 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                 chunk_index: i,
                 filename: filename.clone(),
                 upload_date: upload_date.clone(),
-                text: chunk_texts[i].clone(),
-                chunk_size: chunk_texts[i].len(),
+                // text is ALWAYS the real, unmodified chunk — citations and
+                // source highlighting must never show enricher output (see
+                // ChunkPayload::retrieval_text's doc comment). The embedding
+                // vector above is still computed from chunk_texts (enriched).
+                text: chunk.text.clone(),
+                chunk_size: chunk.text.len(),
                 document_type: ext.clone(),
                 structured_fields: None,
                 source_start_byte: Some(chunk.start_byte),
@@ -280,6 +284,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                     i,
                     parser::EXTRACTION_CONFIG_VERSION,
                 )),
+                retrieval_text: (chunk_texts[i] != chunk.text).then(|| chunk_texts[i].clone()),
             }
         })
         .collect();
