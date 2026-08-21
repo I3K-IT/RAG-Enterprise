@@ -13,13 +13,18 @@ pub const CHUNK_SIZE: usize = 1000;
 pub const CHUNK_OVERLAP: usize = 100;
 const SEPARATORS: &[&str] = &["\n\n", "\n", " ", ""];
 
-/// Bumped whenever CHUNK_SIZE/CHUNK_OVERLAP/SEPARATORS change. Baked into
-/// every `provenance_id` (see below) so that re-chunking the same document
-/// under a different configuration produces visibly different ids instead
-/// of silently colliding with — or worse, being mistaken for — the old
-/// ones: chunk_index=5 under v1 and chunk_index=5 under v2 can be
-/// completely different text.
-pub const CHUNKING_CONFIG_VERSION: u32 = 1;
+/// Bumped whenever CHUNK_SIZE/CHUNK_OVERLAP/SEPARATORS change, OR the
+/// stored/embedded text for a given chunk_index would otherwise differ from
+/// a prior version — e.g. `inject_heading_context` (below) started
+/// prepending heading context in v2, so a chunk re-ingested under v2 is
+/// genuinely different content from the same chunk_index under v1, even
+/// though `split_text`'s own boundaries are unchanged. Baked into every
+/// `provenance_id` (see below) so that re-chunking the same document under a
+/// different configuration produces visibly different ids instead of
+/// silently colliding with — or worse, being mistaken for — the old ones:
+/// chunk_index=5 under v1 and chunk_index=5 under v2 can be completely
+/// different text.
+pub const CHUNKING_CONFIG_VERSION: u32 = 2;
 
 /// Deterministic, versioned identifier for one chunk — stable across
 /// re-ingesting the SAME file content under the SAME extraction AND
@@ -237,6 +242,142 @@ fn char_chunks(root: &str, text: &str) -> Vec<Chunk> {
     chunks
 }
 
+// ── Structural heading context ──────────────────────────────────────────
+//
+// Chunk boundaries are byte-count-driven and know nothing about document
+// structure, so a chunk can easily fall entirely inside the BODY of e.g.
+// "Article 100" without containing that heading itself — the heading landed
+// a chunk or two earlier. Retrieval then hands the LLM a fragment like "...
+// shall be subject to administrative fines of up to EUR 1 500 000" with no
+// indication of which article it belongs to, which is how two independently
+// built RAG stacks (this one and the old Python one) both misattributed the
+// EU AI Act's Article 99/100/101 penalty clauses to the wrong article.
+//
+// The fix: detect short, standalone structural-heading lines ("Article 99",
+// "Chapter XII", ...) and prepend the nearest PRECEDING one to any chunk
+// that doesn't already start with it. This only touches the text that gets
+// embedded/stored (see `inject_heading_context`) — `Chunk.start_byte`/
+// `end_byte` themselves are untouched, so page numbers and citation spans
+// keep pointing at the real source location, not the injected label.
+
+/// A structural heading found in the source text, with the byte offset of
+/// its own line (in the ORIGINAL text, matching `Chunk::start_byte`'s
+/// coordinate space) and the label to inject.
+#[derive(Debug)]
+struct HeadingMarker {
+    byte_offset: usize,
+    label: String,
+}
+
+/// Recognised as a structural heading when a line starts with one of these
+/// (case-insensitively) followed immediately by a digit or an uppercase
+/// letter (roman numerals). Deliberately a small, explicit list rather than
+/// a generic "short capitalised line" heuristic — precision matters more
+/// than recall here, since a wrong injected heading actively misleads
+/// rather than just failing to help. Covers the structural units common to
+/// contracts, regulations and specs, not just this one EU regulation.
+const HEADING_PREFIXES: &[&str] = &[
+    "article ", "articolo ", "art. ",
+    "chapter ", "capitolo ", "cap. ",
+    "section ", "sezione ", "sec. ",
+    "annex ", "allegato ",
+    "clause ", "clausola ",
+];
+
+/// Standalone heading lines are short by nature ("Article 99", "Chapter
+/// XII") — this bound is what excludes a sentence that merely starts with
+/// the same word ("Article 99 provides that operators shall..." is prose,
+/// not a heading, and is long enough to fail this check regardless of its
+/// opening words).
+const MAX_HEADING_LINE_CHARS: usize = 60;
+/// A heading's title line ("Penalties" following "Article 99") is also
+/// short; this bound keeps a heading from accidentally swallowing the
+/// start of actual body text as its "title".
+const MAX_TITLE_LINE_CHARS: usize = 120;
+
+fn is_heading_line(line: &str) -> bool {
+    if line.is_empty() || line.chars().count() > MAX_HEADING_LINE_CHARS {
+        return false;
+    }
+    HEADING_PREFIXES.iter().any(|&prefix| {
+        line.len() >= prefix.len()
+            && line[..prefix.len()].eq_ignore_ascii_case(prefix)
+            && line[prefix.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+    })
+}
+
+/// Whether `line` looks like the start of a numbered body paragraph ("1. "
+/// or "1) "), as opposed to a heading's title line — used to stop
+/// `detect_headings` from swallowing real content as a "title".
+fn looks_like_numbered_paragraph(line: &str) -> bool {
+    let digits_end = line.find(|c: char| !c.is_ascii_digit()).unwrap_or(line.len());
+    digits_end > 0 && matches!(line[digits_end..].chars().next(), Some('.') | Some(')'))
+}
+
+/// Scan `text` for structural headings, in ascending byte order. Each
+/// heading also absorbs the following line as its title when that line is
+/// short and doesn't itself look like body text — "Article 99" followed by
+/// "Penalties" becomes the single label "Article 99 — Penalties".
+fn detect_headings(text: &str) -> Vec<HeadingMarker> {
+    let mut lines: Vec<(usize, &str)> = Vec::new();
+    let mut offset = 0usize;
+    for raw_line in text.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches('\n').trim();
+        lines.push((offset, line));
+        offset += raw_line.len();
+    }
+
+    let mut markers = Vec::new();
+    for (i, &(line_offset, line)) in lines.iter().enumerate() {
+        if !is_heading_line(line) {
+            continue;
+        }
+        let mut label = line.to_string();
+        if let Some(&(_, title)) = lines.get(i + 1) {
+            if !title.is_empty()
+                && title.chars().count() <= MAX_TITLE_LINE_CHARS
+                && !looks_like_numbered_paragraph(title)
+                && !is_heading_line(title)
+            {
+                label = format!("{label} — {title}");
+            }
+        }
+        markers.push(HeadingMarker { byte_offset: line_offset, label });
+    }
+    markers
+}
+
+/// Returns one String per chunk (same order as `chunks`): the chunk's own
+/// text, prefixed with `[nearest preceding heading]\n\n` when that heading
+/// isn't already how the chunk itself starts. A document with no detected
+/// headings — prose, a spreadsheet dump, anything non-legal-structured —
+/// makes every call a no-op, returning each chunk's text unchanged.
+pub fn inject_heading_context(text: &str, chunks: &[Chunk]) -> Vec<String> {
+    let headings = detect_headings(text);
+    if headings.is_empty() {
+        return chunks.iter().map(|c| c.text.clone()).collect();
+    }
+    chunks
+        .iter()
+        .map(|chunk| {
+            match headings.iter().rev().find(|h| h.byte_offset <= chunk.start_byte) {
+                Some(h) => {
+                    let heading_only = h.label.split(" — ").next().unwrap_or(&h.label);
+                    if chunk.text.trim_start().starts_with(heading_only) {
+                        chunk.text.clone()
+                    } else {
+                        format!("[{}]\n\n{}", h.label, chunk.text)
+                    }
+                }
+                None => chunk.text.clone(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +539,125 @@ mod tests {
         assert!(a.contains(&format!("cv{CHUNKING_CONFIG_VERSION}")));
         assert!(a.contains("pv1"));
         assert!(different_extraction_version.contains("pv2"));
+    }
+
+    #[test]
+    fn detect_headings_finds_article_and_captures_title() {
+        let text = "Article 99\nPenalties\n\n1. In accordance with this Regulation...";
+        let headings = detect_headings(text);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].byte_offset, 0);
+        assert_eq!(headings[0].label, "Article 99 — Penalties");
+    }
+
+    #[test]
+    fn detect_headings_recognises_chapter_roman_numerals_and_other_languages() {
+        let text = "CHAPTER XII\nPENALTIES\n\nArticolo 99\nSanzioni\n\n1. Testo qui.";
+        let headings = detect_headings(text);
+        assert_eq!(headings.len(), 2, "expected CHAPTER XII and Articolo 99, got {headings:?}",);
+        assert_eq!(headings[0].label, "CHAPTER XII — PENALTIES");
+        assert_eq!(headings[1].label, "Articolo 99 — Sanzioni");
+    }
+
+    #[test]
+    fn detect_headings_ignores_mid_sentence_mentions() {
+        let text = "This clause refers back to Article 99 of the Regulation in passing, \
+                     as part of a longer sentence that is clearly not a standalone heading line.";
+        assert!(detect_headings(text).is_empty(), "a long prose line must not be mistaken for a heading");
+    }
+
+    #[test]
+    fn detect_headings_does_not_swallow_numbered_body_text_as_a_title() {
+        // No blank/title line between "Article 5" and its first numbered
+        // paragraph: "1. Foo" must NOT be absorbed into the label.
+        let text = "Article 5\n1. The following AI practices shall be prohibited...";
+        let headings = detect_headings(text);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].label, "Article 5", "numbered paragraph text must not become the title");
+    }
+
+    #[test]
+    fn inject_heading_context_is_noop_without_any_headings() {
+        let text = "word ".repeat(400);
+        let text = text.trim();
+        let chunks = split_text(text);
+        let injected = inject_heading_context(text, &chunks);
+        assert_eq!(injected.len(), chunks.len());
+        for (c, i) in chunks.iter().zip(&injected) {
+            assert_eq!(&c.text, i, "no headings in the document must leave every chunk untouched");
+        }
+    }
+
+    #[test]
+    fn inject_heading_context_skips_chunk_that_already_starts_with_its_own_heading() {
+        let text = "Article 99\nPenalties\n\n1. Short paragraph.";
+        let chunks = split_text(text);
+        assert_eq!(chunks.len(), 1);
+        let injected = inject_heading_context(text, &chunks);
+        assert_eq!(injected[0], chunks[0].text, "a chunk that already opens with its heading must not be double-prefixed");
+    }
+
+    #[test]
+    fn inject_heading_context_prefixes_orphaned_chunk_with_nearest_preceding_heading() {
+        // A short heading followed by enough body text that a second,
+        // 1000-char chunk starts WITHOUT the heading line in it.
+        let body = "This is filler body text about the article's substance. ".repeat(30);
+        let text = format!("Article 42\nSome Title\n\n{}", body.trim());
+        let chunks = split_text(&text);
+        assert!(chunks.len() >= 2, "expected the filler to force a second chunk");
+        assert!(!chunks[1].text.contains("Article 42"), "test setup: chunk 1 must be the orphaned one");
+
+        let injected = inject_heading_context(&text, &chunks);
+        assert_eq!(injected[0], chunks[0].text, "chunk 0 already has its own heading");
+        assert!(
+            injected[1].starts_with("[Article 42 — Some Title]\n\n"),
+            "orphaned chunk 1 must be prefixed with the nearest preceding heading, got: {:?}",
+            &injected[1][..injected[1].len().min(80)]
+        );
+        assert!(injected[1].ends_with(chunks[1].text.as_str()), "injection must not alter the chunk's own text, only prefix it");
+    }
+
+    /// Regression test for the actual failure this feature exists to fix:
+    /// verbatim text of EU AI Act Article 100 (transcribed from the real
+    /// Official Journal PDF page). Its own EUR 1 500 000 / EUR 750 000
+    /// figures land in a later chunk that does NOT contain the "Article
+    /// 100" heading — exactly the case that made two independent RAG
+    /// stacks misattribute this article's fines to Article 99 or 101.
+    #[test]
+    fn real_article_100_text_orphaned_fine_amounts_get_heading_injected() {
+        let text = "Article 100\n\
+Administrative fines on Union institutions, bodies, offices and agencies\n\n\
+1. The European Data Protection Supervisor may impose administrative fines on Union institutions, bodies, offices and agencies falling within the scope of this Regulation. When deciding whether to impose an administrative fine and when deciding on the amount of the administrative fine in each individual case, all relevant circumstances of the specific situation shall be taken into account and due regard shall be given to the following:\n\n\
+(a) the nature, gravity and duration of the infringement and of its consequences, taking into account the purpose of the AI system concerned, as well as, where appropriate, the number of affected persons and the level of damage suffered by them;\n\n\
+(b) the degree of responsibility of the Union institution, body, office or agency, taking into account technical and organisational measures implemented by them;\n\n\
+(c) any action taken by the Union institution, body, office or agency to mitigate the damage suffered by affected persons;\n\n\
+(d) the degree of cooperation with the European Data Protection Supervisor in order to remedy the infringement and mitigate the possible adverse effects of the infringement, including compliance with any of the measures previously ordered by the European Data Protection Supervisor against the Union institution, body, office or agency concerned with regard to the same subject matter;\n\n\
+(e) any similar previous infringements by the Union institution, body, office or agency;\n\n\
+(f) the manner in which the infringement became known to the European Data Protection Supervisor, in particular whether, and if so to what extent, the Union institution, body, office or agency notified the infringement;\n\n\
+(g) the annual budget of the Union institution, body, office or agency.\n\n\
+2. Non-compliance with the prohibition of the AI practices referred to in Article 5 shall be subject to administrative fines of up to EUR 1 500 000.\n\n\
+3. The non-compliance of the AI system with any requirements or obligations under this Regulation, other than those laid down in Article 5, shall be subject to administrative fines of up to EUR 750 000.\n\n\
+4. Before taking decisions pursuant to this Article, the European Data Protection Supervisor shall give the Union institution, body, office or agency which is the subject of the proceedings conducted by the European Data Protection Supervisor the opportunity of being heard on the matter regarding the possible infringement.";
+
+        let chunks = split_text(text);
+        assert!(chunks.len() >= 2, "expected Article 100's real length to force multiple chunks");
+
+        let fines_chunk_idx = chunks
+            .iter()
+            .position(|c| c.text.contains("EUR 1 500 000") && c.text.contains("EUR 750 000"))
+            .expect("a chunk containing both real fine amounts must exist");
+        assert!(
+            !chunks[fines_chunk_idx].text.contains("Article 100"),
+            "test precondition: the fines chunk must NOT already contain its own heading \
+             (otherwise this isn't reproducing the bug)"
+        );
+
+        let injected = inject_heading_context(text, &chunks);
+        assert!(
+            injected[fines_chunk_idx].starts_with("[Article 100 — Administrative fines on Union institutions, bodies, offices and agencies]\n\n"),
+            "the chunk carrying the real EUR 1 500 000 / EUR 750 000 figures must now be \
+             traceable back to Article 100, got: {:?}",
+            &injected[fines_chunk_idx][..injected[fines_chunk_idx].len().min(120)]
+        );
     }
 }

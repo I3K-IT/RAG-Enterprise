@@ -305,8 +305,13 @@ async fn run_ingestion(
         "chunking done, starting embedding (this can take minutes on large documents)"
     );
 
+    // Same heading-context injection as the real upload path (see
+    // api/documents.rs) — otherwise a --bench run would silently embed and
+    // store different text than a real ingestion of the same file.
+    let chunk_texts = chunker::inject_heading_context(&text, &chunks);
+
     let t = Instant::now();
-    let chunk_refs: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+    let chunk_refs: Vec<&str> = chunk_texts.iter().map(|s| s.as_str()).collect();
     let embedding_vecs = embeddings.embed_texts(&chunk_refs).context("embedding chunk")?;
     let embed_time = t.elapsed();
     tracing::info!(ms = embed_time.as_millis(), "embedding done, starting the Qdrant upsert");
@@ -337,8 +342,8 @@ async fn run_ingestion(
                 chunk_index: i,
                 filename: filename.clone(),
                 upload_date: upload_date.clone(),
-                text: c.text.clone(),
-                chunk_size: c.text.len(),
+                text: chunk_texts[i].clone(),
+                chunk_size: chunk_texts[i].len(),
                 document_type: ext.clone(),
                 structured_fields: None,
                 source_start_byte: Some(c.start_byte),
