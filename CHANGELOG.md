@@ -19,6 +19,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.33] - 2026-08-20
 
+### Fixed (yet again)
+
+- **`EULLM__MODEL_OVERRIDE` didn't stop the manifest-pinned qwen3-14b
+  (8.4GB) from downloading anyway.** Same shape of bug as the bge-m3
+  gguf one above: `select_components()` always selects "qwen3-14b" —
+  a manifest model with no target, universal like every other model
+  component — regardless of Settings, but `start_eullm` only ever
+  falls back to it when `model_override` is unset. Once an override
+  is set — a local path already on the machine, or a URL eullm
+  fetches itself on `eullm run` — that download was never going to be
+  read by anything. New `bootstrap::drop_unused_chat_model`, applied
+  the same way as `drop_unused_embedding_model`, skips it whenever
+  `EULLM__MODEL_OVERRIDE` is set, either form.
+
 ### Fixed (again)
 
 - **bge-m3's GGUF was never going to resolve for eullm.** The manifest

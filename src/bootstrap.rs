@@ -182,6 +182,41 @@ mod manifest_tests {
              own URL-pull naming convention gives us"
         );
     }
+
+    /// A regression here means either an 8.4GB wasted download (no override
+    /// set, filter drops it anyway) or — far worse — start_eullm falling
+    /// back to a "qwen3-14b" that was never downloaded because the filter
+    /// dropped it while an override WAS set but pointed somewhere that
+    /// turned out not to work.
+    #[test]
+    fn drop_unused_chat_model_drops_qwen3_14b_only_when_overridden() {
+        let manifest = load_manifest().expect("manifest.toml must parse");
+        let selected = select_components(&manifest, &["linux-x86_64"]);
+        fn names_of<'a>(sel: &[&'a Component]) -> Vec<&'a str> {
+            sel.iter().map(|c| c.name.as_str()).collect()
+        }
+
+        assert!(names_of(&selected).contains(&"qwen3-14b"), "sanity: it starts out selected");
+
+        let no_override = names_of(&drop_unused_chat_model(selected.clone(), None));
+        assert!(no_override.contains(&"qwen3-14b"), "no override set: must keep qwen3-14b");
+
+        for over in ["/home/user/.eullm/models/custom/model.gguf", "hf.co/some/repo:Q4_K_M"] {
+            let overridden = names_of(&drop_unused_chat_model(selected.clone(), Some(over)));
+            assert!(
+                !overridden.contains(&"qwen3-14b"),
+                "override {over:?} set: must drop the now-unreachable qwen3-14b download"
+            );
+        }
+
+        // Every other component is untouched regardless.
+        let non_chat_names: Vec<&str> =
+            names_of(&selected).into_iter().filter(|n| *n != "qwen3-14b").collect();
+        let kept = names_of(&drop_unused_chat_model(selected.clone(), Some("/some/path.gguf")));
+        for n in &non_chat_names {
+            assert!(kept.contains(n), "must not touch unrelated component {n}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -722,6 +757,28 @@ fn drop_unused_embedding_model(
     selected.into_iter().filter(|c| !CANDLE_TRIO.contains(&c.name.as_str())).collect()
 }
 
+/// Same shape of bug as drop_unused_embedding_model, on the chat model
+/// instead of the embedding one. "qwen3-14b" has no target — a "model"
+/// component, universal like every other model in the manifest (see
+/// select_components' own doc comment) — so select_components() always
+/// picks it, 8.4GB, regardless of settings. But start_eullm only ever
+/// falls back to it when EullmSettings::model_override is None:
+/// `model_override.as_ref()...or_else(|| find_by_name(&manifest,
+/// "qwen3-14b", ...))` — the fallback branch is unreachable the moment an
+/// override is set, whether the override is a local path already on the
+/// machine (the common case) or a URL eullm itself fetches on `eullm run`
+/// (see spawn_eullm) — either way this binary's own download of qwen3-14b
+/// is never read by anything once model_override is set.
+fn drop_unused_chat_model<'a>(
+    selected: Vec<&'a Component>,
+    model_override: Option<&str>,
+) -> Vec<&'a Component> {
+    if model_override.is_none() {
+        return selected;
+    }
+    selected.into_iter().filter(|c| c.name != "qwen3-14b").collect()
+}
+
 // ── Path resolution ───────────────────────────────────────────────────────────
 
 fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
@@ -801,9 +858,12 @@ pub async fn provision_and_start_qdrant(
     let manifest = load_manifest()?;
     let data_dir = settings.data.data_path();
     let targets = current_targets();
-    let selected = drop_unused_embedding_model(
-        select_components(&manifest, &targets),
-        settings.embeddings.ingestion_embedding,
+    let selected = drop_unused_chat_model(
+        drop_unused_embedding_model(
+            select_components(&manifest, &targets),
+            settings.embeddings.ingestion_embedding,
+        ),
+        settings.eullm.model_override.as_deref(),
     );
 
     // Directory layout
