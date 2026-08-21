@@ -15,6 +15,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **README quick-start couldn't actually be followed as written.** The
+  release tarball is built as `tar czf ... -C stage .` — flat, no
+  wrapping version-named folder inside it — but the quick-start snippet
+  told users to `cd i3k-rag-engine-vX.Y.Z-linux-x86_64` right after
+  `tar -xzf`, a directory that plain extraction never creates. Fixed to
+  `mkdir` first. Also documented (new "Upgrading" section) that
+  extracting a new release's tarball *over* an existing install reuses
+  every already-downloaded component — `bootstrap::ensure_component`
+  only fetches what's missing or sha256-mismatched, and `DATA__DIR`
+  defaults to the binary's own directory — so this isn't a special
+  workflow, just how the existing idempotent provisioning already
+  behaves when pointed at a non-empty directory.
+
 ---
 
 ## [0.1.34] - 2026-08-21
