@@ -380,6 +380,7 @@ jobs:
         run: |
           mkdir -p dist stage/frontend
           cp target/release/i3k-rag-engine stage/
+          cp .env.example stage/
           cp -r frontend/dist stage/frontend/dist
           # Versione nel nome del tarball: GITHUB_REF su un tag è
           # "refs/tags/v0.1.3" — questo job gira solo su tag (if: sopra),
@@ -472,6 +473,7 @@ jobs:
         run: |
           mkdir -p dist stage/frontend
           cp target/release/i3k-rag-engine stage/
+          cp .env.example stage/
           cp -r frontend/dist stage/frontend/dist
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-arm64.tar.gz" -C stage .
@@ -624,6 +626,7 @@ jobs:
           mkdir -p dist stage/frontend
           cp target/x86_64-pc-windows-gnu/release/i3k-rag-engine.exe stage/
           cp /usr/lib/gcc/x86_64-w64-mingw32/*-posix/libstdc++-6.dll stage/
+          cp .env.example stage/
           cp -r frontend/dist stage/frontend/dist
           VERSION="${GITHUB_REF#refs/tags/}"
           (cd stage && zip -r "../dist/i3k-rag-engine-${VERSION}-windows-x86_64.zip" .)

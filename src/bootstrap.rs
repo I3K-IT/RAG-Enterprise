@@ -1802,11 +1802,21 @@ async fn kill_stale_process(bin: &Path) {
     tokio::time::sleep(Duration::from_millis(800)).await;
 }
 
+/// Bound to loopback only, not qdrant's own default (0.0.0.0 — verified by
+/// running the real pinned binary and reading its own startup log:
+/// "actix-web-service-0.0.0.0:6333"). There is no API key anywhere in this
+/// project's Qdrant integration (QdrantSettings has no such field), and
+/// QdrantSettings::default_qdrant_url/_grpc_url already point at localhost —
+/// this binary never has a reason to reach qdrant any other way, so loopback
+/// costs nothing functionally and closes an unauthenticated REST+gRPC vector
+/// database (every ingested document's full text, readable AND writable) off
+/// the network by default.
 fn spawn_qdrant(bin: &Path, storage: &Path) -> Result<tokio::process::Child> {
     Command::new(bin)
         .env("QDRANT__STORAGE__STORAGE_PATH", storage)
         .env("QDRANT__SERVICE__HTTP_PORT", "6333")
         .env("QDRANT__SERVICE__GRPC_PORT", "6334")
+        .env("QDRANT__SERVICE__HOST", "127.0.0.1")
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::inherit())

@@ -19,6 +19,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.33] - 2026-08-20
 
+### Security
+
+- **Qdrant no longer listens on all network interfaces.** The bundled
+  qdrant binary defaults to `0.0.0.0` when its host isn't set —
+  verified by running the actual pinned binary and reading its own
+  startup log — and this project has no API key concept for it at
+  all, so on any host where ports 6333/6334 weren't independently
+  firewalled, the full REST+gRPC API (read, write, and delete every
+  ingested document, completely unauthenticated) was reachable by
+  anyone who could reach those ports, bypassing this binary's own JWT
+  auth entirely. Now bound to `127.0.0.1` explicitly — this binary
+  only ever talks to qdrant over localhost anyway, so nothing
+  functional changes. Deployments with `DATA__MANAGE_SUBPROCESSES=false`
+  (qdrant run externally) are unaffected either way — that qdrant's
+  bind address was never this project's to control.
+  eullm was checked too and needs no equivalent fix: it also listens
+  on `0.0.0.0` at the socket level, but enforces its own IP allowlist
+  at the application layer, loopback-only by default (`Allowed source
+  IPs/subnets: 127.0.0.1/32, ::1/128`, per its own startup log) — a
+  deliberate default, not an oversight.
+
+### Fixed
+
+- **Release tarballs did not include `.env.example`.** It existed in
+  the repository since 0.1.32 but the packaging step never copied it
+  into `stage/` alongside the binary, so anyone who downloaded a
+  release instead of cloning the repo had no configuration template
+  at all. Added to all three platform tarballs.
+
 ### Changed
 
 - **`EMBEDDINGS__INGESTION_EMBEDDING=eullm` now also covers query-time
