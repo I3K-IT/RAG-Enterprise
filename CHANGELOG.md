@@ -28,6 +28,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an exact commit, per that repository's
   `I3K_RAG_Pro_Open_Core_Architecture.md` (private — not this repo).
 
+- **New `extensions::` module: generic extension points for a Pro
+  binary to register against.** Five traits (`ChunkEnricher`,
+  `StructuredKnowledgeProvider`, `RetrievalStrategy`, `Reranker`,
+  `EvidenceLayer`), bundled into `ExtensionRegistry` and threaded
+  through `AppState`. `ExtensionRegistry::default()` — what this binary
+  always uses — wraps only Community's own existing behavior (e.g. the
+  chunk enricher default is the already-shipped heading-injection logic,
+  proven byte-for-byte identical to calling it directly via a new test)
+  or is a genuine no-op where Community has no such feature yet
+  (reranking, evidence, structured knowledge). `api::router` also now
+  takes an optional second `pro_router` parameter, merged in when
+  present, so a Pro launcher can add its own routes against the same
+  `AppState` without this crate depending on Pro's code. No proprietary
+  logic lives here — see this repo's own rule on that. 114 tests pass
+  (one new), clippy stays clean. This is Phase 2 of the open-core
+  migration; see Phase 1's changelog entry above for context.
+
 ---
 
 ## [0.1.36] - 2026-08-21

@@ -8,6 +8,7 @@ use crate::clients::embeddings::EmbeddingService;
 use crate::clients::eullm::EullmClient;
 use crate::config::Settings;
 use crate::documents::storage::FileStorage;
+use crate::extensions::ExtensionRegistry;
 use crate::rag::vector_store::VectorStore;
 
 /// Shared state, cloned into every axum handler.
@@ -47,6 +48,10 @@ pub struct AppState {
     /// bench::LiveRecorder). None, the default, costs one Option check per
     /// request and no measurement overhead.
     pub live_bench: Option<Arc<LiveRecorder>>,
+    /// Extension points the Pro binary can register without forking this
+    /// crate — see extensions::ExtensionRegistry. Always
+    /// ExtensionRegistry::default() in the Community binary itself.
+    pub extensions: Arc<ExtensionRegistry>,
 }
 
 /// RAII guard: increments active_ingestions on creation and ALWAYS decrements
@@ -75,6 +80,7 @@ impl AppState {
         qdrant: Arc<dyn VectorStore>,
         eullm: EullmClient,
         live_bench: Option<Arc<LiveRecorder>>,
+        extensions: ExtensionRegistry,
     ) -> Self {
         let storage = FileStorage::new(&settings.storage.documents_dir);
         Self {
@@ -86,6 +92,7 @@ impl AppState {
             storage: Arc::new(storage),
             active_ingestions: Arc::new(AtomicUsize::new(0)),
             live_bench,
+            extensions: Arc::new(extensions),
         }
     }
 

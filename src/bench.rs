@@ -305,9 +305,13 @@ async fn run_ingestion(
         "chunking done, starting embedding (this can take minutes on large documents)"
     );
 
-    // Same heading-context injection as the real upload path (see
-    // api/documents.rs) — otherwise a --bench run would silently embed and
-    // store different text than a real ingestion of the same file.
+    // Same heading-context injection as api/documents.rs's default enricher
+    // — otherwise a --bench run would silently embed and store different
+    // text than a real ingestion of the same file. Deliberately calling the
+    // function directly rather than going through extensions::ChunkEnricher:
+    // --bench measures Community's own baseline, not whatever a Pro build's
+    // registry might swap in, and this run_ingestion() has no AppState (no
+    // live server here) to hold a registry in the first place.
     let chunk_texts = chunker::inject_heading_context(&text, &chunks);
 
     let t = Instant::now();

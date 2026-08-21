@@ -16,6 +16,7 @@ pub mod config;
 pub mod db;
 pub mod documents;
 pub mod error;
+pub mod extensions;
 pub mod observability;
 pub mod rag;
 pub mod state;
@@ -32,12 +33,23 @@ pub fn is_version_flag(args: &[String]) -> bool {
     args.iter().any(|a| a == "-V" || a == "--version")
 }
 
-/// Runs the full i3k-rag-engine server: bootstrap, database, HTTP server,
-/// graceful shutdown. The Community binary's `main()` is just
-/// `i3k_rag_engine::run().await` — see that file for why this lives here
-/// instead: this exact sequence is what a Pro launcher must also be able to
-/// call, per the open-core architecture.
+/// Runs the full i3k-rag-engine server with Community's own defaults — no
+/// extensions, no extra API routes. The Community binary's `main()` is just
+/// `i3k_rag_engine::run().await`.
 pub async fn run() -> Result<()> {
+    run_with_extensions(extensions::ExtensionRegistry::default(), None).await
+}
+
+/// Same as [`run`], but for a Pro launcher (or a test) that needs to
+/// register extensions and/or merge in extra API routes — see
+/// `extensions::ExtensionRegistry` and `extensions::api`'s doc comment.
+/// This is the exact sequence a Pro launcher calls, per
+/// `I3K_RAG_Pro_Open_Core_Architecture.md` (rag-enterprise-pro, private
+/// repo) section 11 — which is why it lives here instead of in main.rs.
+pub async fn run_with_extensions(
+    extensions: extensions::ExtensionRegistry,
+    pro_router: Option<axum::Router<state::AppState>>,
+) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     if is_version_flag(&args) {
@@ -146,8 +158,9 @@ pub async fn run() -> Result<()> {
         }
     });
 
-    let app_state =
-        state::AppState::new(settings, db, embeddings, Arc::new(qdrant), eullm, live_bench);
+    let app_state = state::AppState::new(
+        settings, db, embeddings, Arc::new(qdrant), eullm, live_bench, extensions,
+    );
     // Separate handle: app_state is consumed by api::router() below, but is
     // still needed after the shutdown select! in order to write the report.
     let live_bench_for_shutdown = app_state.live_bench.clone();
@@ -160,7 +173,7 @@ pub async fn run() -> Result<()> {
 
     open_browser(port);
 
-    let router = api::router(app_state);
+    let router = api::router(app_state, pro_router);
 
     // Graceful shutdown: SIGINT (Ctrl+C) or SIGTERM → drop guard → SIGKILL children.
     #[cfg(unix)]

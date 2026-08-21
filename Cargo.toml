@@ -32,7 +32,7 @@ url = "2"
 
 # --- Vector DB ---
 qdrant-client = "1"          # tested against Qdrant 1.18.2
-async-trait = "0.1"          # keeps the VectorStore trait object-safe
+async-trait = "0.1"          # object-safe async traits: VectorStore, extensions::*
 
 # --- Embeddings: bge-m3 through Candle (in-process, GPU/CPU, NO cuDNN) ---
 candle-core = "0.11"

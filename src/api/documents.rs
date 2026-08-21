@@ -198,13 +198,20 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         );
     }
 
-    // 4b. Prepend the nearest preceding structural heading ("Article 99",
-    // "Chapter XII", ...) to any chunk that doesn't already start with it —
-    // see chunker::inject_heading_context. This is what actually gets
-    // embedded and stored; `chunks[i].start_byte`/`end_byte` (used below for
-    // page lookups and citation spans) still point at the real source
-    // location, untouched by the injected label.
-    let chunk_texts = chunker::inject_heading_context(&text, &chunks);
+    // 4b. Enrich each chunk before it is embedded/stored — Community's own
+    // default prepends the nearest preceding structural heading ("Article
+    // 99", "Chapter XII", ...) to any chunk that doesn't already start with
+    // it (see extensions::ingestion::DefaultChunkEnricher, wrapping
+    // chunker::inject_heading_context); a Pro build can register a
+    // different enricher (e.g. Contextual Retrieval) here instead, per
+    // extensions::ChunkEnricher. Either way, `chunks[i].start_byte`/
+    // `end_byte` (used below for page lookups and citation spans) still
+    // point at the real source location, untouched by whatever enrichment
+    // ran.
+    let chunk_texts = match state.extensions.chunk_enricher.enrich(&text, &chunks).await {
+        Ok(texts) => texts,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("chunk enrichment: {e}")),
+    };
 
     // 5. Embed. Candle is CPU/GPU-bound (spawn_blocking); eullm is an HTTP
     // call (.await directly) — see config::IngestionEmbedding::Eullm.
