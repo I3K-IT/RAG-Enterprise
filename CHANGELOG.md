@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.1.37] - 2026-08-22
+
 ### Changed
 
 - **This crate is now also a library, not just a binary.** New
