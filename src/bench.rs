@@ -305,9 +305,13 @@ async fn run_ingestion(
         "chunking done, starting embedding (this can take minutes on large documents)"
     );
 
-    // Same heading-context injection as the real upload path (see
-    // api/documents.rs) — otherwise a --bench run would silently embed and
-    // store different text than a real ingestion of the same file.
+    // Same heading-context injection as api/documents.rs's default enricher
+    // — otherwise a --bench run would silently embed and store different
+    // text than a real ingestion of the same file. Deliberately calling the
+    // function directly rather than going through extensions::ChunkEnricher:
+    // --bench measures Community's own baseline, not whatever a Pro build's
+    // registry might swap in, and this run_ingestion() has no AppState (no
+    // live server here) to hold a registry in the first place.
     let chunk_texts = chunker::inject_heading_context(&text, &chunks);
 
     let t = Instant::now();
@@ -342,8 +346,11 @@ async fn run_ingestion(
                 chunk_index: i,
                 filename: filename.clone(),
                 upload_date: upload_date.clone(),
-                text: chunk_texts[i].clone(),
-                chunk_size: chunk_texts[i].len(),
+                // Same split as api/documents.rs: text is always the real
+                // chunk (citations/highlighting never show enricher output),
+                // the embedding above still comes from chunk_texts.
+                text: c.text.clone(),
+                chunk_size: c.text.len(),
                 document_type: ext.clone(),
                 structured_fields: None,
                 source_start_byte: Some(c.start_byte),
@@ -355,6 +362,7 @@ async fn run_ingestion(
                     i,
                     parser::EXTRACTION_CONFIG_VERSION,
                 )),
+                retrieval_text: (chunk_texts[i] != c.text).then(|| chunk_texts[i].clone()),
             }
         })
         .collect();

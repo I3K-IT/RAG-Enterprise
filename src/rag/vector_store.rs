@@ -59,6 +59,23 @@ pub struct ChunkPayload {
     /// and chunking configuration, and visibly changes if either changes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance_id: Option<String>,
+
+    /// The enriched text actually embedded and searched — e.g. a heading
+    /// prefix (Community's default enricher) or an LLM-generated context
+    /// blurb (Pro's Contextual Retrieval) — when it differs from `text`.
+    /// `None` means enrichment left this chunk unchanged (the common case:
+    /// no heading detected, or, for older points, ingested before this
+    /// field existed).
+    ///
+    /// `text` ALWAYS stays the chunk's real, unmodified source content —
+    /// what a citation, source highlight or future evidence layer must
+    /// show. `retrieval_text` exists only so query.rs can give the
+    /// answering LLM the same enriched context the embedding was computed
+    /// on, without that enrichment ever being presented as if it were the
+    /// source itself. See rag-enterprise-pro's
+    /// `I3K_RAG_Pro_Open_Core_Architecture.md` (private repo) section 14.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_text: Option<String>,
 }
 
 /// The result of a vector similarity search.
@@ -85,4 +102,54 @@ pub trait VectorStore: Send + Sync {
     /// Cancella tutti i vettori di un documento.
     /// INVARIANT: call this BEFORE updating SQLite.
     async fn delete_document(&self, document_id: &str) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload(retrieval_text: Option<&str>) -> ChunkPayload {
+        ChunkPayload {
+            document_id: "doc".into(),
+            chunk_index: 0,
+            filename: "f.txt".into(),
+            upload_date: String::new(),
+            text: "hello".into(),
+            chunk_size: 5,
+            document_type: "txt".into(),
+            structured_fields: None,
+            source_start_byte: None,
+            source_end_byte: None,
+            page_start: None,
+            page_end: None,
+            provenance_id: None,
+            retrieval_text: retrieval_text.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn retrieval_text_none_is_omitted_from_json() {
+        let json = serde_json::to_value(payload(None)).unwrap();
+        assert!(
+            json.get("retrieval_text").is_none(),
+            "skip_serializing_if must keep unenriched points identical to pre-Phase-6 ones"
+        );
+    }
+
+    #[test]
+    fn payload_without_retrieval_text_key_still_deserializes() {
+        // Simulates a point written before this field existed — no
+        // "retrieval_text" key in the stored JSON at all, not even null.
+        let mut json = serde_json::to_value(payload(None)).unwrap();
+        json.as_object_mut().unwrap().remove("retrieval_text");
+        let p: ChunkPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(p.retrieval_text, None);
+    }
+
+    #[test]
+    fn retrieval_text_round_trips_when_present() {
+        let json = serde_json::to_value(payload(Some("[Article 42] hello"))).unwrap();
+        let p: ChunkPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(p.retrieval_text.as_deref(), Some("[Article 42] hello"));
+    }
 }

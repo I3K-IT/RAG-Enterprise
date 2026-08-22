@@ -27,7 +27,12 @@ fn frontend_dist_dir() -> std::path::PathBuf {
 }
 
 /// Build the full axum Router with all routes and CORS middleware.
-pub fn router(state: AppState) -> Router {
+///
+/// `pro_router`, per extensions::api's doc comment, is the API extension
+/// point: a Pro launcher builds its own routes against this same
+/// `AppState` (`/license`, `/pro/...`, ...) and merges them in here.
+/// Community's own launcher (`lib::run`) always passes `None`.
+pub fn router(state: AppState, pro_router: Option<Router<AppState>>) -> Router {
     let public = Router::new()
         .route("/health", get(health::health))
         .route("/info", get(health::info));
@@ -86,14 +91,18 @@ pub fn router(state: AppState) -> Router {
     let dist = frontend_dist_dir();
     let spa = ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));
 
-    Router::new()
+    let mut app = Router::new()
         .merge(public)
         .merge(auth_routes)
         .merge(doc_routes)
         .merge(query_routes)
         .merge(conv_routes)
-        .merge(admin_routes)
-        .layer(CorsLayer::permissive())
+        .merge(admin_routes);
+    if let Some(pro_router) = pro_router {
+        app = app.merge(pro_router);
+    }
+
+    app.layer(CorsLayer::permissive())
         .with_state(state)
         .fallback_service(spa)
 }

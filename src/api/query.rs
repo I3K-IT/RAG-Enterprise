@@ -24,8 +24,15 @@ use serde_json::json;
 use crate::auth::jwt::Claims;
 use crate::bench;
 use crate::db;
-use crate::rag::{prompt, retrieval, sources::Source};
+use crate::rag::{prompt, retrieval, sources::Source, vector_store::ChunkPayload};
 use crate::state::AppState;
+
+/// Text to feed the answering LLM for one retrieved chunk: the enriched
+/// `retrieval_text` when present, otherwise the chunk's own `text`. Never
+/// the reverse — see `ChunkPayload::retrieval_text`'s doc comment.
+fn context_text(payload: &ChunkPayload) -> &str {
+    payload.retrieval_text.as_deref().unwrap_or(&payload.text)
+}
 
 #[allow(dead_code)]
 #[derive(Deserialize)]
@@ -139,9 +146,14 @@ async fn prepare(
         })
         .collect();
 
-    let context: String = sources
+    // context_text (not sources[i].text, which is always the original
+    // chunk — see ChunkPayload::retrieval_text): the answering LLM benefits
+    // from the same enrichment the embedding was computed on, even though
+    // that enrichment must never be shown to the user as if it were the
+    // source itself.
+    let context: String = hits
         .iter()
-        .map(|s| format!("[{}]\n{}", s.filename, s.text))
+        .map(|h| format!("[{}]\n{}", h.payload.filename, context_text(&h.payload)))
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
 
@@ -404,5 +416,41 @@ pub async fn delete_chat_history(State(state): State<AppState>, claims: Claims) 
     match db::conversations::delete_by_user(&state.db, claims.user_id).await {
         Ok(n) => Json(json!({ "deleted": n })).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload(text: &str, retrieval_text: Option<&str>) -> ChunkPayload {
+        ChunkPayload {
+            document_id: "doc".into(),
+            chunk_index: 0,
+            filename: "f.txt".into(),
+            upload_date: String::new(),
+            text: text.to_owned(),
+            chunk_size: text.len(),
+            document_type: "txt".into(),
+            structured_fields: None,
+            source_start_byte: None,
+            source_end_byte: None,
+            page_start: None,
+            page_end: None,
+            provenance_id: None,
+            retrieval_text: retrieval_text.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn context_text_prefers_retrieval_text_when_present() {
+        let p = payload("original", Some("[Article 42] original"));
+        assert_eq!(context_text(&p), "[Article 42] original");
+    }
+
+    #[test]
+    fn context_text_falls_back_to_text_when_retrieval_text_absent() {
+        let p = payload("original", None);
+        assert_eq!(context_text(&p), "original");
     }
 }

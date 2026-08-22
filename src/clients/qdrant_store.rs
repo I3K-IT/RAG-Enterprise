@@ -7,7 +7,7 @@
 //!   document_type, structured_fields (optional), plus the Source Provenance
 //!   Foundation fields (all optional — absent on points written before they
 //!   existed): source_start_byte, source_end_byte, page_start, page_end,
-//!   provenance_id — see ChunkPayload.
+//!   provenance_id, retrieval_text — see ChunkPayload.
 //! - search: optional score_threshold; returns {id, similarity, payload}
 //! - delete_document: filters by document_id
 
@@ -104,6 +104,9 @@ impl VectorStore for QdrantStore {
                     }
                     if let Some(v) = &p.provenance_id {
                         obj["provenance_id"] = serde_json::json!(v);
+                    }
+                    if let Some(v) = &p.retrieval_text {
+                        obj["retrieval_text"] = serde_json::json!(v);
                     }
                     let payload = Payload::try_from(obj).expect("shape JSON valido");
                     PointStruct::new(id, emb.clone(), payload)

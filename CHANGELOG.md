@@ -15,6 +15,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **This crate is now also a library, not just a binary.** New
+  `src/lib.rs` holds every module (now `pub mod`) and a new
+  `pub async fn run()` containing the full startup sequence that used
+  to live in `main()`. `src/main.rs` is now a thin launcher:
+  `i3k_rag_engine::run().await`. Zero behavior change — same 113 tests
+  pass, clippy stays clean, `--version` verified end-to-end through the
+  new wiring. This is Phase 1 of the open-core migration: it makes this
+  crate a reusable dependency for `I3K-IT/rag-enterprise-pro`, pinned to
+  an exact commit, per that repository's
+  `I3K_RAG_Pro_Open_Core_Architecture.md` (private — not this repo).
+
+- **New `extensions::` module: generic extension points for a Pro
+  binary to register against.** Six traits (`ChunkEnricher`,
+  `StructuredKnowledgeProvider`, `QueryPlanner`, `RetrievalStrategy`,
+  `Reranker`, `EvidenceLayer`), bundled into `ExtensionRegistry` and
+  threaded through `AppState`. `ExtensionRegistry::default()` — what
+  this binary always uses — wraps only Community's own existing
+  behavior (e.g. the chunk enricher default is the already-shipped
+  heading-injection logic, proven byte-for-byte identical to calling it
+  directly via a new test; the query planner default always routes
+  `Semantic`, Community's one real retrieval path today) or is a
+  genuine no-op where Community has no such feature yet (reranking,
+  evidence, structured knowledge). `api::router` also now takes an
+  optional second `pro_router` parameter, merged in when present, so a
+  Pro launcher can add its own routes against the same `AppState`
+  without this crate depending on Pro's code. No proprietary logic
+  lives here — see this repo's own rule on that. 115 tests pass (two
+  new), clippy stays clean. This is Phase 2 of the open-core migration;
+  see Phase 1's changelog entry above for context.
+
+- **New `build_info() -> (&str, &str)`, exposing the version/commit
+  `--version` already printed.** No behavior change for this binary —
+  it's the same two values, now also reachable as a function. Added so
+  `rag-enterprise-pro`'s Pro launcher, which statically links this crate
+  via a pinned Git dependency (Phase 4 of the open-core migration), can
+  read Community's own version/commit at runtime for its own
+  `--version` output, without re-deriving it. 116 tests pass (one new),
+  clippy stays clean.
+
+- **New `ChunkPayload.retrieval_text`, and a real (if small) citation
+  behavior change: stored/cited chunk text is now always the original,
+  un-enriched text, never whatever a `ChunkEnricher` produced.** Until
+  now, `text` (used both for citations shown to the user and for the
+  context fed to the answering LLM) was whatever the enricher returned —
+  for Community's own heading-injection, a real but easy-to-miss
+  side-effect: a citation could show an injected `[Article 42 — Title]`
+  prefix that isn't verbatim what's at that exact position in the
+  source. `text` is now always the chunk's real content; the enricher's
+  output, when it differs, is stored separately as `retrieval_text` and
+  used only to build the LLM's context (`api/query.rs`) — never shown to
+  a user as if it were the source. `chunk_size` now matches `text`'s own
+  length accordingly. `retrieval_text` is optional and
+  `skip_serializing_if`, so points written before this field existed
+  keep deserializing unchanged. Required core change for
+  `rag-enterprise-pro`'s upcoming Contextual Retrieval (Phase 6): an
+  LLM-generated context blurb is not "real document content" the way an
+  injected heading is, so this distinction matters far more there — see
+  that repository's `I3K_RAG_Pro_Open_Core_Architecture.md` (private)
+  section 14, and section 18 on why this core change comes from
+  Community first. 121 tests pass (five new), clippy stays clean.
+
+- **New `EullmClient::model_id() -> &str`.** The configured model name
+  was write-only (set in the constructor, never read back). Needed so
+  `rag-enterprise-pro`'s Contextual Retrieval cache key — which must
+  include `model_id` per the architecture document's section 15 — can
+  read it from the same client instance doing the generation, instead
+  of duplicating the configured model name as a second source of truth.
+
 ---
 
 ## [0.1.36] - 2026-08-21

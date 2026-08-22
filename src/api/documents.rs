@@ -198,13 +198,20 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         );
     }
 
-    // 4b. Prepend the nearest preceding structural heading ("Article 99",
-    // "Chapter XII", ...) to any chunk that doesn't already start with it —
-    // see chunker::inject_heading_context. This is what actually gets
-    // embedded and stored; `chunks[i].start_byte`/`end_byte` (used below for
-    // page lookups and citation spans) still point at the real source
-    // location, untouched by the injected label.
-    let chunk_texts = chunker::inject_heading_context(&text, &chunks);
+    // 4b. Enrich each chunk before it is embedded/stored — Community's own
+    // default prepends the nearest preceding structural heading ("Article
+    // 99", "Chapter XII", ...) to any chunk that doesn't already start with
+    // it (see extensions::ingestion::DefaultChunkEnricher, wrapping
+    // chunker::inject_heading_context); a Pro build can register a
+    // different enricher (e.g. Contextual Retrieval) here instead, per
+    // extensions::ChunkEnricher. Either way, `chunks[i].start_byte`/
+    // `end_byte` (used below for page lookups and citation spans) still
+    // point at the real source location, untouched by whatever enrichment
+    // ran.
+    let chunk_texts = match state.extensions.chunk_enricher.enrich(&text, &chunks).await {
+        Ok(texts) => texts,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("chunk enrichment: {e}")),
+    };
 
     // 5. Embed. Candle is CPU/GPU-bound (spawn_blocking); eullm is an HTTP
     // call (.await directly) — see config::IngestionEmbedding::Eullm.
@@ -260,8 +267,12 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                 chunk_index: i,
                 filename: filename.clone(),
                 upload_date: upload_date.clone(),
-                text: chunk_texts[i].clone(),
-                chunk_size: chunk_texts[i].len(),
+                // text is ALWAYS the real, unmodified chunk — citations and
+                // source highlighting must never show enricher output (see
+                // ChunkPayload::retrieval_text's doc comment). The embedding
+                // vector above is still computed from chunk_texts (enriched).
+                text: chunk.text.clone(),
+                chunk_size: chunk.text.len(),
                 document_type: ext.clone(),
                 structured_fields: None,
                 source_start_byte: Some(chunk.start_byte),
@@ -273,6 +284,7 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
                     i,
                     parser::EXTRACTION_CONFIG_VERSION,
                 )),
+                retrieval_text: (chunk_texts[i] != chunk.text).then(|| chunk_texts[i].clone()),
             }
         })
         .collect();
