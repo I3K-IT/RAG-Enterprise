@@ -6,6 +6,16 @@
 //! with no shortcuts: the timings must reflect real conditions. It writes into
 //! a dedicated Qdrant collection ("{collection}_benchmark", wiped on every
 //! run) so the user's real data is never touched.
+//!
+//! [`run`] takes a `&dyn ChunkEnricher` and threads it through to
+//! `run_ingestion` instead of hardcoding `chunker::inject_heading_context` —
+//! `run_with_extensions` (this crate's `lib.rs`) passes whatever is actually
+//! registered, so `--bench` on Community's own binary measures Community's
+//! own default, and `--bench` on a Pro launcher measures Pro's real enricher
+//! (e.g. Contextual Retrieval, on or off per its own license/runtime gate).
+//! Same tool, same report, comparable numbers — see
+//! `I3K_RAG_Pro_Open_Core_Architecture.md` (rag-enterprise-pro, private
+//! repo) section 16 on why that comparability is required.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -19,6 +29,7 @@ use crate::clients::eullm::EullmClient;
 use crate::clients::qdrant_store::QdrantStore;
 use crate::config::Settings;
 use crate::documents::parser;
+use crate::extensions::ChunkEnricher;
 use crate::rag::{chunker, prompt, retrieval, vector_store::ChunkPayload, vector_store::VectorStore};
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -272,6 +283,7 @@ async fn run_ingestion(
     settings: &Settings,
     embeddings: &EmbeddingService,
     qdrant: &QdrantStore,
+    chunk_enricher: &dyn ChunkEnricher,
 ) -> Result<IngestionResult> {
     let data_dir = settings.data.data_path();
     let doc_path_owned = doc_path.to_path_buf();
@@ -305,14 +317,16 @@ async fn run_ingestion(
         "chunking done, starting embedding (this can take minutes on large documents)"
     );
 
-    // Same heading-context injection as api/documents.rs's default enricher
-    // — otherwise a --bench run would silently embed and store different
-    // text than a real ingestion of the same file. Deliberately calling the
-    // function directly rather than going through extensions::ChunkEnricher:
-    // --bench measures Community's own baseline, not whatever a Pro build's
-    // registry might swap in, and this run_ingestion() has no AppState (no
-    // live server here) to hold a registry in the first place.
-    let chunk_texts = chunker::inject_heading_context(&text, &chunks);
+    // Goes through the SAME chunk_enricher a real ingestion would (see
+    // api/documents.rs) — not a hardcoded call to inject_heading_context —
+    // so --bench measures whatever is actually registered: Community's own
+    // default when this binary calls bench::run() (see run()'s own doc
+    // comment), or a Pro build's real enricher (e.g. Contextual Retrieval)
+    // when a Pro launcher does. Comparing the two is the whole point of
+    // `I3K_RAG_Pro_Open_Core_Architecture.md`'s (rag-enterprise-pro, private
+    // repo) section 16 A/B benchmarking — same tool, same report shape,
+    // different binary/config.
+    let chunk_texts = chunk_enricher.enrich(&text, &chunks).await.context("chunk enrichment")?;
 
     let t = Instant::now();
     let chunk_refs: Vec<&str> = chunk_texts.iter().map(|s| s.as_str()).collect();
@@ -910,6 +924,7 @@ pub async fn run(
     args: &BenchArgs,
     embeddings: Option<&mut EmbeddingService>,
     eullm: std::sync::Arc<EullmClient>,
+    chunk_enricher: &dyn ChunkEnricher,
 ) -> Result<()> {
     if !args.doc_path.is_file() {
         anyhow::bail!("file not found: {}", args.doc_path.display());
@@ -953,7 +968,7 @@ pub async fn run(
     if swap_enabled {
         swap_embedding_device(embeddings, true);
     }
-    let ingestion_result = run_ingestion(&args.doc_path, settings, embeddings, &qdrant).await;
+    let ingestion_result = run_ingestion(&args.doc_path, settings, embeddings, &qdrant, chunk_enricher).await;
     if swap_enabled {
         swap_embedding_device(embeddings, false);
     }

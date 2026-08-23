@@ -128,7 +128,14 @@ pub async fn run_with_extensions(
     // are still shut down properly once the benchmark ends.
     if let Some(bench_args) = bench::parse_args(&args) {
         tracing::info!(doc = %bench_args.doc_path.display(), "benchmark mode");
-        return bench::run(&settings, &bench_args, embeddings.as_mut(), Arc::new(eullm)).await;
+        return bench::run(
+            &settings,
+            &bench_args,
+            embeddings.as_mut(),
+            Arc::new(eullm),
+            extensions.chunk_enricher.as_ref(),
+        )
+        .await;
     }
 
     // --bench-live: the server and frontend start normally, but every real

@@ -28,6 +28,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **`bench::run()`'s chunk enrichment is now pluggable, via the same
+  `ChunkEnricher` a real ingestion uses.** `--bench <file>` used to
+  always call `chunker::inject_heading_context` directly, regardless of
+  what a caller's `ExtensionRegistry` actually registered — meaning a
+  Pro launcher's `--bench` could never measure its own real enricher
+  (e.g. Contextual Retrieval), only Community's default. `run()` and the
+  internal `run_ingestion()` now take a `&dyn ChunkEnricher` parameter;
+  `run_with_extensions` passes `extensions.chunk_enricher.as_ref()` —
+  already in scope exactly where `--bench` dispatches. This binary's own
+  behavior is unchanged (`ExtensionRegistry::default()`'s enricher wraps
+  the same heading-injection as before); a Pro build now gets a
+  `--bench` that genuinely exercises whatever it registered. Needed for
+  `rag-enterprise-pro`'s Phase 7 (`I3K_RAG_Pro_Open_Core_Architecture.md`,
+  private repo, section 24): comparing Community baseline vs. Pro
+  baseline vs. Pro+Contextual Retrieval needs the same tool measuring
+  the real thing in each case, not three different measurements of the
+  same hardcoded default. 121 tests pass, clippy stays clean.
+
 - **`BRANDING.clientName`/`.version` are now build-time configurable**
   (`VITE_BRANDING_NAME`/`VITE_BRANDING_VERSION`, defaulting to this
   repo's own `'i3k RAG Engine'`/`'Community'` — building without them
