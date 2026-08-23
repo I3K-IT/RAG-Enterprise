@@ -15,7 +15,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scrolling up to read earlier messages while a reply was still
+  streaming was effectively impossible.** The auto-scroll effect ran
+  unconditionally on every `messages` update — and streaming appends a
+  token to `messages` many times a second — so any manual scroll up got
+  yanked back to the bottom on the very next token. Now tracks whether
+  the user is within 100px of the bottom (via an `onScroll` handler) and
+  only auto-scrolls when they already were; sending your own message
+  always scrolls, regardless of prior position.
+
 ### Changed
+
+- **`BRANDING.clientName`/`.version` are now build-time configurable**
+  (`VITE_BRANDING_NAME`/`VITE_BRANDING_VERSION`, defaulting to this
+  repo's own `'i3k RAG Engine'`/`'Community'` — building without them
+  set is unchanged). The version badge — previously shown only in small
+  print in the app's footer — now also appears next to the product name
+  at login and in the main header. Added so a downstream build (e.g.
+  `rag-enterprise-pro`'s release CI, which builds this exact frontend
+  from the pinned Community rev) can show its own edition without
+  forking this file — not proprietary logic, just a configurable label,
+  same principle as `extensions::`'s generic hooks.
 
 - **This crate is now also a library, not just a binary.** New
   `src/lib.rs` holds every module (now `pub mod`) and a new
