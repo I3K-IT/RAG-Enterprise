@@ -15,6 +15,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scrolling up to read earlier messages while a reply was still
+  streaming was effectively impossible.** The auto-scroll effect ran
+  unconditionally on every `messages` update — and streaming appends a
+  token to `messages` many times a second — so any manual scroll up got
+  yanked back to the bottom on the very next token. Now tracks whether
+  the user is within 100px of the bottom (via an `onScroll` handler) and
+  only auto-scrolls when they already were; sending your own message
+  always scrolls, regardless of prior position.
+
+### Changed
+
+- **`bench::run()`'s chunk enrichment is now pluggable, via the same
+  `ChunkEnricher` a real ingestion uses.** `--bench <file>` used to
+  always call `chunker::inject_heading_context` directly, regardless of
+  what a caller's `ExtensionRegistry` actually registered — meaning a
+  Pro launcher's `--bench` could never measure its own real enricher
+  (e.g. Contextual Retrieval), only Community's default. `run()` and the
+  internal `run_ingestion()` now take a `&dyn ChunkEnricher` parameter;
+  `run_with_extensions` passes `extensions.chunk_enricher.as_ref()` —
+  already in scope exactly where `--bench` dispatches. This binary's own
+  behavior is unchanged (`ExtensionRegistry::default()`'s enricher wraps
+  the same heading-injection as before); a Pro build now gets a
+  `--bench` that genuinely exercises whatever it registered. Needed for
+  `rag-enterprise-pro`'s Phase 7 (`I3K_RAG_Pro_Open_Core_Architecture.md`,
+  private repo, section 24): comparing Community baseline vs. Pro
+  baseline vs. Pro+Contextual Retrieval needs the same tool measuring
+  the real thing in each case, not three different measurements of the
+  same hardcoded default. 121 tests pass, clippy stays clean.
+
+- **`BRANDING.clientName`/`.version` are now build-time configurable**
+  (`VITE_BRANDING_NAME`/`VITE_BRANDING_VERSION`, defaulting to this
+  repo's own `'i3k RAG Engine'`/`'Community'` — building without them
+  set is unchanged). The version badge — previously shown only in small
+  print in the app's footer — now also appears next to the product name
+  at login and in the main header. Added so a downstream build (e.g.
+  `rag-enterprise-pro`'s release CI, which builds this exact frontend
+  from the pinned Community rev) can show its own edition without
+  forking this file — not proprietary logic, just a configurable label,
+  same principle as `extensions::`'s generic hooks.
+
 ---
 
 ## [0.1.37] - 2026-08-22

@@ -2,13 +2,18 @@ import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import './index.css'
 
+// clientName/version are build-time configurable (VITE_BRANDING_*) so a
+// downstream build — e.g. rag-enterprise-pro's release CI, which builds this
+// same frontend from the pinned Community rev — can show its own edition
+// without forking this file. Defaults are this repo's own Community values;
+// building without those env vars set is unchanged from before.
 const BRANDING = {
   clientLogo: null,
-  clientName: 'i3k RAG Engine',
+  clientName: import.meta.env.VITE_BRANDING_NAME || 'i3k RAG Engine',
   primaryColor: '#3b82f6',
   poweredBy: 'I3K Technologies',
   poweredBySubtitle: 'Ltd.',
-  version: 'Community'
+  version: import.meta.env.VITE_BRANDING_VERSION || 'Community'
 }
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -74,14 +79,28 @@ function App() {
   const [showDocumentsSidebar, setShowDocumentsSidebar] = useState(true)
 
   const messagesEndRef = useRef(null)
+  const chatScrollRef = useRef(null)
   const fileInputRef = useRef(null)
   const modelLoadingTimerRef = useRef(null)
+  // Streaming appends a token to `messages` many times per second (appendToken
+  // below) — auto-scrolling unconditionally on every change fought any attempt
+  // to scroll up and read earlier messages while a reply was still streaming.
+  // Only auto-scroll if the user was already at (near) the bottom.
+  const isNearBottomRef = useRef(true)
+  const NEAR_BOTTOM_PX = 100
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  useEffect(scrollToBottom, [messages])
+  const handleChatScroll = (e) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+    isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < NEAR_BOTTOM_PX
+  }
+
+  useEffect(() => {
+    if (isNearBottomRef.current) scrollToBottom()
+  }, [messages])
 
   useEffect(() => {
     const savedToken = localStorage.getItem('rag_auth_token')
@@ -514,6 +533,7 @@ function App() {
 
     const userMessage = { role: 'user', content: query, timestamp: new Date().toISOString() }
     const updatedMessages = [...messages, userMessage]
+    isNearBottomRef.current = true // the user's own message always scrolls into view
     setMessages(updatedMessages)
     // Primo messaggio → rinomina la conversazione
     if (updatedMessages.length === 1) updateConversationTitleApi(currentConversationId, query)
@@ -670,7 +690,12 @@ function App() {
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
         <div className="w-full max-w-md p-8 bg-slate-800 rounded-lg shadow-2xl border border-slate-700">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-white mb-2">{BRANDING.clientName}</h1>
+            <h1 className="text-3xl font-bold text-white mb-2">
+              {BRANDING.clientName}
+              <span className="ml-2 align-middle text-xs font-semibold text-blue-400 border border-blue-400 rounded px-1.5 py-0.5">
+                {BRANDING.version}
+              </span>
+            </h1>
             <p className="text-slate-400">Sign in to continue</p>
           </div>
 
@@ -1139,7 +1164,12 @@ function App() {
 
       {/* HEADER */}
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">{BRANDING.clientName}</h1>
+        <h1 className="text-2xl font-bold text-white">
+          {BRANDING.clientName}
+          <span className="ml-2 align-middle text-xs font-semibold text-blue-400 border border-blue-400 rounded px-1.5 py-0.5">
+            {BRANDING.version}
+          </span>
+        </h1>
 
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
@@ -1252,7 +1282,7 @@ function App() {
             </button>
           )}
 
-          <div className="flex-1 overflow-y-auto p-6">
+          <div ref={chatScrollRef} onScroll={handleChatScroll} className="flex-1 overflow-y-auto p-6">
             <div className="max-w-5xl mx-auto w-full space-y-4">
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
