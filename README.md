@@ -57,9 +57,9 @@ eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
 No separate GPU build or download is needed on any platform.
 
 ```sh
-mkdir i3k-rag-engine-v0.1.37-linux-x86_64
-tar -xzf i3k-rag-engine-v0.1.37-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.37-linux-x86_64
-cd i3k-rag-engine-v0.1.37-linux-x86_64
+mkdir i3k-rag-engine-v0.1.38-linux-x86_64
+tar -xzf i3k-rag-engine-v0.1.38-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.38-linux-x86_64
+cd i3k-rag-engine-v0.1.38-linux-x86_64
 
 cat > .env <<'EOF'
 AUTH__JWT_SECRET=change-this-to-a-long-random-string
