@@ -285,11 +285,17 @@ const HEADING_PREFIXES: &[&str] = &[
 ];
 
 /// Standalone heading lines are short by nature ("Article 99", "Chapter
-/// XII") — this bound is what excludes a sentence that merely starts with
-/// the same word ("Article 99 provides that operators shall..." is prose,
-/// not a heading, and is long enough to fail this check regardless of its
-/// opening words).
+/// XII"). A backstop only: length alone does NOT separate a heading from
+/// prose — "Article 5 applies to providers." is well under this bound —
+/// so `is_heading_line` validates the line's structure instead. This just
+/// caps how much text a heading may drag along as its inline title.
 const MAX_HEADING_LINE_CHARS: usize = 60;
+
+/// What may follow a heading's identifier on the same line: an explicit
+/// title separator ("Article 5 — Definitions", "Section 2: Scope"). A
+/// space followed by an ordinary word instead means the line is prose that
+/// merely opens with a cross-reference, not a heading.
+const TITLE_SEPARATORS: &[char] = &['—', '–', '-', ':', '|', '.', '·'];
 /// A heading's title line ("Penalties" following "Article 99") is also
 /// short; this bound keeps a heading from accidentally swallowing the
 /// start of actual body text as its "title".
@@ -310,8 +316,25 @@ fn is_heading_line(line: &str) -> bool {
     }
     HEADING_PREFIXES.iter().any(|&prefix| {
         let mut rest = line.chars();
-        let matched = prefix.chars().all(|pc| rest.next().is_some_and(|lc| lc.eq_ignore_ascii_case(&pc)));
-        matched && rest.next().is_some_and(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+        if !prefix.chars().all(|pc| rest.next().is_some_and(|lc| lc.eq_ignore_ascii_case(&pc))) {
+            return false;
+        }
+        // The identifier opens with a digit or an uppercase letter (roman
+        // numerals): "5", "XII".
+        if !rest.next().is_some_and(|c| c.is_ascii_digit() || c.is_ascii_uppercase()) {
+            return false;
+        }
+        // ...and continues without spaces, so real-world variants stay
+        // whole: "5a", "5.1", "5-bis", "XII". A space ends it.
+        let mut rest = rest.skip_while(|c| c.is_alphanumeric() || *c == '.' || *c == '-');
+        // Structural test — this, not the length bound, is what rejects a
+        // cross-reference like "Article 5 applies to providers.": after the
+        // identifier a heading has either nothing left, or a separator
+        // introducing its title. Prose has an ordinary word instead.
+        match rest.find(|c: &char| !c.is_whitespace()) {
+            None => true,
+            Some(c) => TITLE_SEPARATORS.contains(&c),
+        }
     })
 }
 
@@ -594,6 +617,53 @@ mod tests {
         let text = "This clause refers back to Article 99 of the Regulation in passing, \
                      as part of a longer sentence that is clearly not a standalone heading line.";
         assert!(detect_headings(text).is_empty(), "a long prose line must not be mistaken for a heading");
+    }
+
+    /// Regression: the length bound alone used to be the only thing
+    /// separating a heading from prose, so any SHORT line opening with
+    /// "Article N" was taken for a structural heading. Cross-references
+    /// like this are everywhere in legal text, and PDF extraction preserves
+    /// the visual line breaks that leave them on a line of their own — so
+    /// this silently re-anchored every following chunk under the wrong
+    /// article until the next real heading appeared.
+    #[test]
+    fn detect_headings_rejects_short_cross_reference_prose() {
+        assert!(!is_heading_line("Article 5 applies to providers."));
+        assert!(!is_heading_line("Article 3 is hereby amended"));
+        assert!(!is_heading_line("Articolo 12 non si applica ai fornitori"));
+        assert!(!is_heading_line("Annex IV lists the required documentation"));
+
+        let doc = "Article 3\nDefinitions\n\nBody of article three.\n\n\
+                   Article 5 applies to providers.\n\n\
+                   More body text still belonging to article three.";
+        let headings = detect_headings(doc);
+        assert_eq!(
+            headings.iter().map(|h| h.label.as_str()).collect::<Vec<_>>(),
+            vec!["Article 3 — Definitions"],
+            "a cross-reference line must not become a heading and re-anchor the chunks after it",
+        );
+    }
+
+    /// The structural check must not overshoot: these are all real heading
+    /// shapes, with the title inline rather than on the next line, and with
+    /// the identifier forms actually used in EU/Italian legal texts.
+    #[test]
+    fn detect_headings_still_accepts_real_heading_shapes() {
+        for line in [
+            "Article 5",
+            "Article 5.",
+            "Article 5.1",
+            "Article 5a",
+            "Articolo 5-bis",
+            "Chapter XII",
+            "ANNEX IV",
+            "Article 99 — Penalties",
+            "Articolo 99 – Sanzioni",
+            "Section 2: Scope",
+            "Art. 3 - Definizioni",
+        ] {
+            assert!(is_heading_line(line), "must still be recognised as a heading: {line:?}");
+        }
     }
 
     #[test]
