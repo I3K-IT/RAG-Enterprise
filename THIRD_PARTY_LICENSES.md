@@ -2,7 +2,7 @@
 
 `i3k-rag-engine` is released under the **GNU Affero General Public License
 v3.0 only** (see `LICENSE`), and separately under a commercial licence from
-i3k (see `NOTICE`).
+I3K Technologies Srl ("i3k") (see `NOTICE`).
 
 This document inventories the third-party components — models and binaries —
 that the product **downloads at runtime** or **ships inside the release

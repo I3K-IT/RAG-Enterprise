@@ -4,6 +4,10 @@ Thank you for wanting to contribute. Before we can merge a pull request, we
 need you to agree to this document. It is short, and this section explains
 plainly why it exists.
 
+In this document **"i3k" means I3K Technologies Srl**, a company incorporated
+in Italy, which holds the copyright in this project. Every right granted below
+is granted to that company.
+
 ## Why we ask for this
 
 i3k-rag-engine is released under the **AGPL-3.0**, and i3k also sells a

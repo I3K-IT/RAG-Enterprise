@@ -225,7 +225,7 @@ Please report vulnerabilities privately rather than through a public issue.
 @software{i3k_rag_engine,
   author    = {Marchetti, Francesco},
   title     = {i3k RAG Engine: self-hosted document intelligence},
-  publisher = {i3k},
+  publisher = {I3K Technologies Srl},
   url       = {https://github.com/I3K-IT/RAG-Enterprise}
 }
 ```
@@ -246,10 +246,10 @@ a self-hosted system like this one.
 
 ### Commercial licence
 
-i3k holds the copyright and also offers this software under a separate
-commercial licence, for organisations that cannot accept the AGPL's terms.
-That same licence is what lets i3k's own proprietary product, **i3k RAG Pro**,
-build on this code. Enquiries: info@i3k.eu
+**I3K Technologies Srl** holds the copyright and also offers this software
+under a separate commercial licence, for organisations that cannot accept the
+AGPL's terms. That same licence is what lets its own proprietary product,
+**i3k RAG Pro**, build on this code. Enquiries: info@i3k.eu
 
 ### Earlier releases
 
