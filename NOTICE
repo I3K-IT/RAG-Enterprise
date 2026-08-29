@@ -1,23 +1,43 @@
 i3k-rag-engine
-Copyright 2025-2026 i3k — https://www.i3k.eu
+Copyright 2025-2026 I3K Technologies Srl — https://www.i3k.eu
 
-This product includes software developed at i3k.
+This product includes software developed at I3K Technologies Srl.
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not
-use this file except in compliance with the License. You may obtain a copy of
-the License at
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3, as published by
+the Free Software Foundation.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details.
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-License for the specific language governing permissions and limitations under
-the License.
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+---
+
+Dual licensing
+
+I3K Technologies Srl ("i3k") holds the copyright in this software and offers
+it under two licences: the AGPL-3.0 above, and a separate commercial licence
+for those who cannot accept the AGPL's terms — in particular section 13,
+which requires anyone offering the software to users over a network to make
+the corresponding source available to them. The commercial licence is also
+what allows i3k's own proprietary product, i3k RAG Pro, to build on this
+code. Enquiries: info@i3k.eu
+
+---
+
+Releases up to and including v0.1.39 were published under the Apache License
+2.0 and remain available under those terms. This change applies from the
+following release onward; it does not, and cannot, withdraw what was already
+released.
 
 ---
 
 This product downloads and, in some distributions, bundles third-party
 components (models and binaries) that are licensed separately. See
 THIRD_PARTY_LICENSES.md for the full inventory, the applicable licence of
-each component, and its upstream source.
+each component, and its upstream source. Those components keep their own
+licences and are not covered by the AGPL-3.0 above.
