@@ -2,7 +2,7 @@
 
 **Ask questions about your own documents. Everything runs on your machine.**
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Release](https://img.shields.io/github/v/release/I3K-IT/RAG-Enterprise)](../../releases)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 
@@ -33,7 +33,7 @@ neither.
   sha256-verifies everything it needs on first run — vector database, inference
   engine, models, OCR data — then runs them itself.
 - **Genuinely offline.** After the first run it needs no network at all.
-- **Auditable.** Apache-2.0, and you can read every line that touches your data.
+- **Auditable.** AGPL-3.0, and you can read every line that touches your data.
 
 Built for people who cannot use cloud RAG for regulatory, privacy or
 data-sovereignty reasons: law firms, healthcare, finance, public administration.
@@ -235,8 +235,38 @@ The archived 1.x Python release has its own DOI:
 
 ## Licence
 
-Apache-2.0 — see [LICENSE](LICENSE). Third-party components, including the
-models downloaded at runtime, keep their own licences: see
+**AGPL-3.0-only** — see [LICENSE](LICENSE).
+
+You can run it, read it, change it and share it. The one obligation worth
+knowing before you build on it is AGPL section 13: if you offer a modified
+version to users **over a network**, you have to offer those users the
+corresponding source too. Running it privately — inside your own company, on
+your own documents — carries no such obligation, which is the normal case for
+a self-hosted system like this one.
+
+### Commercial licence
+
+i3k holds the copyright and also offers this software under a separate
+commercial licence, for organisations that cannot accept the AGPL's terms.
+That same licence is what lets i3k's own proprietary product, **i3k RAG Pro**,
+build on this code. Enquiries: info@i3k.eu
+
+### Earlier releases
+
+Up to and including **v0.1.39** this project was published under the Apache
+License 2.0, and those releases remain available under those terms. The change
+applies from the following release onward — it does not withdraw anything
+already released.
+
+### Contributing
+
+Because the project is licensed both ways, contributions need a
+[Contributor Licence Agreement](CLA.md) — a one-line statement in your pull
+request. You keep the copyright in your own work; the CLA explains exactly
+what it grants and why it is necessary.
+
+Third-party components, including the models downloaded at runtime, keep their
+own licences and are not covered by the AGPL: see
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ## Credits

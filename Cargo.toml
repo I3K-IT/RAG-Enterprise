@@ -3,7 +3,7 @@ name = "i3k-rag-engine"
 version = "0.1.38"
 edition = "2021"
 description = "i3k RAG Engine — self-hosted document intelligence, fully local"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 [dependencies]
 # --- Web / API ---
