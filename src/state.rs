@@ -129,14 +129,21 @@ impl IngestionGuard {
     /// The second upload does wait here with its request body already in
     /// hand — the trade is a queued HTTP request against two ingestions
     /// fighting over the same card, and the queue is the better half of it.
-    pub async fn start(counter: &Arc<AtomicUsize>, slot: &Arc<Semaphore>) -> Self {
+    ///
+    /// A Result, not an expect(): this runs at the top of a live ingestion
+    /// request, and a closed semaphore must surface as a normal error, not
+    /// panic the request task — the same rule as the fallible swap below.
+    pub async fn start(counter: &Arc<AtomicUsize>, slot: &Arc<Semaphore>) -> anyhow::Result<Self> {
         let counted = CountedIngestion::start(counter);
         let permit = slot
             .clone()
             .acquire_owned()
             .await
-            .expect("the ingestion semaphore is never closed");
-        Self { _counted: counted, _permit: permit }
+            .context("ingestion slot semaphore is closed")?;
+        Ok(Self {
+            _counted: counted,
+            _permit: permit,
+        })
     }
 }
 
@@ -265,11 +272,11 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let slot = Arc::new(Semaphore::new(1));
 
-        let a = IngestionGuard::start(&counter, &slot).await;
+        let a = IngestionGuard::start(&counter, &slot).await.unwrap();
         assert_eq!(counter.load(Ordering::SeqCst), 1);
 
         let (c, s) = (counter.clone(), slot.clone());
-        let queued = tokio::spawn(async move { IngestionGuard::start(&c, &s).await });
+        let queued = tokio::spawn(async move { IngestionGuard::start(&c, &s).await.unwrap() });
         wait_for(&counter, 2).await;
 
         // Single-threaded test runtime: dropping A cannot yield, so B has
@@ -296,9 +303,9 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let slot = Arc::new(Semaphore::new(1));
 
-        let a = IngestionGuard::start(&counter, &slot).await;
+        let a = IngestionGuard::start(&counter, &slot).await.unwrap();
         let (c, s) = (counter.clone(), slot.clone());
-        let queued = tokio::spawn(async move { IngestionGuard::start(&c, &s).await });
+        let queued = tokio::spawn(async move { IngestionGuard::start(&c, &s).await.unwrap() });
         wait_for(&counter, 2).await;
 
         queued.abort();
@@ -329,5 +336,15 @@ mod tests {
     fn ingestion_blocks_true_when_enabled_and_active() {
         let counter = AtomicUsize::new(1);
         assert!(ingestion_blocks(true, &counter));
+    }
+
+    /// A closed ingestion slot must surface as an error, not panic the
+    /// request task — however unreachable closing it is in practice.
+    #[tokio::test]
+    async fn closed_slot_is_an_error_not_a_panic() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let slot = Arc::new(Semaphore::new(1));
+        slot.close();
+        assert!(IngestionGuard::start(&counter, &slot).await.is_err());
     }
 }

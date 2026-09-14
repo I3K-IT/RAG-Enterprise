@@ -15,6 +15,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`IngestionGuard::start` returns an error instead of panicking on a
+  closed semaphore.** The `acquire_owned().expect(...)` sat at the top of
+  every upload request: unreachable in practice, but a panic there would
+  take down the request task rather than surfacing a normal 500 — against
+  this file's own rule that request-path failures are `Result`s. The
+  upload handler maps it to a bare 500 (detail in the log, per the 5xx
+  rule), and a new test pins the no-panic behaviour.
+
 ---
 
 ## [0.1.43] - 2026-09-14

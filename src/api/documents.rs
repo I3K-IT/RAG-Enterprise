@@ -66,7 +66,15 @@ pub async fn upload(
     // holds the single ingestion permit, so a second upload waits here instead
     // of reloading the chat model into VRAM that this one is still embedding
     // in — see IngestionGuard::start.
-    let _ingestion_guard = crate::state::IngestionGuard::start(&state.active_ingestions, &state.ingestion_slot).await;
+    let _ingestion_guard =
+        match crate::state::IngestionGuard::start(&state.active_ingestions, &state.ingestion_slot)
+            .await
+        {
+            Ok(guard) => guard,
+            // A closed semaphore is our fault, not the caller's: err() logs
+            // the detail and the response stays a bare 500.
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        };
     let unload_enabled = state.settings.eullm.unload_during_ingestion;
     let ingestion_embedding = state.settings.embeddings.ingestion_embedding;
     let candle_gpu = ingestion_embedding == crate::config::IngestionEmbedding::CandleGpu;
