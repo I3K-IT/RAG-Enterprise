@@ -17,6 +17,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A failed SQLite restore no longer poisons its pooled connection.**
+  `copy_tables` runs inside `BEGIN IMMEDIATE`, but on a mid-copy failure
+  the error returned before `COMMIT` with no `ROLLBACK`: the connection
+  went back to the pool holding an open write transaction, so the next
+  operation on it — including a retried restore, which cannot `BEGIN`
+  inside it — failed far from the actual cause. The half-written copy is
+  now rolled back first (live rows survive a failed restore), alongside
+  the existing detach/foreign-keys cleanup.
+
 - **`IngestionGuard::start` returns an error instead of panicking on a
   closed semaphore.** The `acquire_owned().expect(...)` sat at the top of
   every upload request: unreachable in practice, but a panic there would
