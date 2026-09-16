@@ -17,6 +17,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+fix/enricher-length-contract
+- **A `ChunkEnricher` returning the wrong number of texts no longer
+  panics the upload.** The trait promises one `String` per chunk but
+  nothing enforced it, and both ingestion paths indexed the texts by
+  chunk position — a short or long return from any registered enricher
+  panicked inside the live request task (after pointlessly embedding
+  the wrong-sized batch first). Both call sites now check the
+  contract up front via `extensions::ingestion::ensure_enriched_len`,
+  mirroring the existing embeddings/payloads length bail.
+
 - **A failed SQLite restore no longer poisons its pooled connection.**
   `copy_tables` runs inside `BEGIN IMMEDIATE`, but on a mid-copy failure
   the error returned before `COMMIT` with no `ROLLBACK`: the connection
@@ -25,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inside it — failed far from the actual cause. The half-written copy is
   now rolled back first (live rows survive a failed restore), alongside
   the existing detach/foreign-keys cleanup.
+
 
 - **`IngestionGuard::start` returns an error instead of panicking on a
   closed semaphore.** The `acquire_owned().expect(...)` sat at the top of

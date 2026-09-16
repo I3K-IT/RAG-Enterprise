@@ -271,6 +271,13 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         Ok(texts) => texts,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("chunk enrichment: {e}")),
     };
+    // The trait promises one String per chunk but nothing enforces it, and
+    // both the embedding call and the payload building below index by
+    // position — a short or long return would panic the request task (after
+    // pointlessly embedding the wrong-sized batch first).
+    if let Err(e) = crate::extensions::ingestion::ensure_enriched_len(&chunks, &chunk_texts) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
 
     // 4. Embed. Candle is CPU/GPU-bound (spawn_blocking); eullm is an HTTP
     // call (.await directly) — see config::IngestionEmbedding::Eullm.
