@@ -544,6 +544,15 @@ async fn restore_sqlite(db: &SqlitePool, src: &Path) -> Result<(Vec<String>, u64
 
     let result = copy_tables(&mut conn).await;
 
+    if result.is_err() {
+        // Undo the half-written copy before handing the connection back:
+        // without this the pool inherits an open write transaction holding
+        // the RESERVED lock, and the next operation on that connection —
+        // including a retried restore, which cannot BEGIN inside it — fails
+        // with a confusing error far from the actual cause.
+        let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+    }
+
     // Restore connection state whatever happened, so the connection is safe to
     // hand back to the pool.
     let _ = sqlx::query("DETACH DATABASE backup").execute(&mut *conn).await;
@@ -923,6 +932,88 @@ mod tests {
         let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
             .fetch_all(&live).await.unwrap();
         assert_eq!(versions, vec![1, 2], "the applied migrations must be left alone");
+    }
+
+    /// A restore that fails halfway must leave the live database and the
+    /// pool behind it usable: the half-written copy is rolled back (so the
+    /// live rows are still there) and the connection is handed back with no
+    /// open transaction (so a retried restore can BEGIN, instead of failing
+    /// with "cannot start a transaction within a transaction").
+    ///
+    /// Single-connection pool on purpose: with several connections the
+    /// follow-up statements could land on a fresh one and pass even without
+    /// the rollback, which would prove nothing.
+    #[tokio::test]
+    async fn a_failed_restore_rolls_back_and_leaves_the_pool_usable() {
+        let d = tempfile::tempdir().unwrap();
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(d.path().join("live.db"))
+            .create_if_missing(true);
+        let live = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(&live)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users (id, name) VALUES (1, 'live')")
+            .execute(&live)
+            .await
+            .unwrap();
+
+        // A backup missing the NOT NULL column: the shared-column copy
+        // empties the live table first, then the INSERT..SELECT violates
+        // the constraint halfway through.
+        let bad = pool_at(&d.path().join("bad.db")).await;
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+            .execute(&bad)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users (id) VALUES (1)")
+            .execute(&bad)
+            .await
+            .unwrap();
+        let bad_file = d.path().join("bad.db");
+        bad.close().await;
+
+        let err = restore_sqlite(&live, &bad_file).await.unwrap_err();
+        assert!(
+            err.to_string().contains("copying users"),
+            "unexpected error: {err:#}"
+        );
+
+        // Rolled back, not half-emptied: the live row is still there.
+        let name: String = sqlx::query_scalar("SELECT name FROM users WHERE id = 1")
+            .fetch_one(&live)
+            .await
+            .unwrap();
+        assert_eq!(name, "live");
+
+        // The pool still accepts writes on the same connection.
+        sqlx::query("INSERT INTO users (id, name) VALUES (2, 'after')")
+            .execute(&live)
+            .await
+            .unwrap();
+
+        // And a retried restore with a good archive works instead of
+        // failing inside the leftover transaction.
+        let good_file = d.path().join("good.db");
+        sqlx::query(&format!("VACUUM INTO '{}'", good_file.display()))
+            .execute(&live)
+            .await
+            .unwrap();
+        let (tables, _) = restore_sqlite(&live, &good_file).await.unwrap();
+        assert_eq!(tables, vec!["users".to_string()]);
+
+        // Connection state was restored too.
+        let fk: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&live)
+            .await
+            .unwrap();
+        assert_eq!(fk, 1);
     }
 
     // ── archive verification ──────────────────────────────────────────────────
