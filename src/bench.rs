@@ -327,6 +327,10 @@ async fn run_ingestion(
     // repo) section 16 A/B benchmarking — same tool, same report shape,
     // different binary/config.
     let chunk_texts = chunk_enricher.enrich(&text, &chunks).await.context("chunk enrichment")?;
+    // Same contract as a real ingestion (see api/documents.rs): a wrong-sized
+    // return must fail here with context, not panic at payload building below.
+    crate::extensions::ingestion::ensure_enriched_len(&chunks, &chunk_texts)
+        .context("chunk enrichment length")?;
 
     let t = Instant::now();
     let chunk_refs: Vec<&str> = chunk_texts.iter().map(|s| s.as_str()).collect();

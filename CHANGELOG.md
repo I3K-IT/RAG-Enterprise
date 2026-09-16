@@ -17,6 +17,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A `ChunkEnricher` returning the wrong number of texts no longer
+  panics the upload.** The trait promises one `String` per chunk but
+  nothing enforced it, and both ingestion paths indexed the texts by
+  chunk position — a short or long return from any registered enricher
+  panicked inside the live request task (after pointlessly embedding
+  the wrong-sized batch first). Both call sites now check the
+  contract up front via `extensions::ingestion::ensure_enriched_len`,
+  mirroring the existing embeddings/payloads length bail.
+
 - **`IngestionGuard::start` returns an error instead of panicking on a
   closed semaphore.** The `acquire_owned().expect(...)` sat at the top of
   every upload request: unreachable in practice, but a panic there would
