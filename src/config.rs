@@ -486,6 +486,8 @@ impl Settings {
 
         validate_storage(&s.storage)?;
 
+        validate_eullm(&s.eullm)?;
+
         Ok(s)
     }
 }
@@ -625,6 +627,30 @@ fn validate_storage(storage: &StorageSettings) -> Result<()> {
         anyhow::bail!(
             "STORAGE__MAX_UPLOAD_MB must be at most {MAX_UPLOAD_MB} (provisional ceiling while \
              uploads are buffered in RAM — see MAX_UPLOAD_MB)."
+        );
+    }
+    Ok(())
+}
+
+/// Fail-closed validation of the eullm sizing knobs, run from
+/// Settings::load at startup — the same approach as `validate_auth` and
+/// `validate_storage` above.
+///
+/// `bootstrap::eullm_args` multiplies these two `u32`s into `--ctx-size`,
+/// so an absurd pair wraps in release (panics in debug) and starts eullm
+/// with a garbage context a RAG prompt will not fit in — or silently
+/// truncates answers. A zero on either side is a misconfiguration too:
+/// `--ctx-size 0` / `--batch-size 0` is never what an operator meant.
+fn validate_eullm(eullm: &EullmSettings) -> Result<()> {
+    if eullm.num_ctx == 0 {
+        anyhow::bail!("EULLM__NUM_CTX must be greater than 0 — 0 leaves no context for any prompt.");
+    }
+    if eullm.batch_size == 0 {
+        anyhow::bail!("EULLM__BATCH_SIZE must be greater than 0 — 0 leaves no slot for any request.");
+    }
+    if eullm.num_ctx.checked_mul(eullm.batch_size).is_none() {
+        anyhow::bail!(
+            "EULLM__NUM_CTX * EULLM__BATCH_SIZE overflows u32: lower at least one of them."
         );
     }
     Ok(())
@@ -862,6 +888,37 @@ mod tests {
     fn overflowing_upload_limit_fails() {
         let err = validate_storage(&storage_with(u64::MAX)).unwrap_err();
         assert!(err.to_string().contains("STORAGE__MAX_UPLOAD_MB"));
+    }
+
+    fn eullm_with(num_ctx: u32, batch_size: u32) -> EullmSettings {
+        EullmSettings { num_ctx, batch_size, ..Default::default() }
+    }
+
+    #[test]
+    fn default_eullm_sizing_passes() {
+        assert!(validate_eullm(&EullmSettings::default()).is_ok());
+    }
+
+    #[test]
+    fn zero_ctx_or_batch_size_fails() {
+        for (num_ctx, batch_size) in [(0, 1), (1, 0), (0, 0)] {
+            let err = validate_eullm(&eullm_with(num_ctx, batch_size)).unwrap_err();
+            assert!(
+                err.to_string().contains("EULLM__"),
+                "num_ctx={num_ctx} batch_size={batch_size}"
+            );
+        }
+    }
+
+    /// Same class of bug as the JWT expiry and upload-limit overflows: an
+    /// absurd pair must fail here, not panic in debug or wrap in release on
+    /// the way into `--ctx-size`.
+    #[test]
+    fn overflowing_ctx_product_fails() {
+        let err = validate_eullm(&eullm_with(u32::MAX, 2)).unwrap_err();
+        assert!(err.to_string().contains("EULLM__NUM_CTX"));
+        // The largest product that still fits stays valid.
+        assert!(validate_eullm(&eullm_with(u32::MAX, 1)).is_ok());
     }
 
     /// The default must stay loopback: a regression here silently re-exposes
