@@ -1,0 +1,18 @@
+# CHANGELOG.md merge=union
+#
+# Every pull request adds a bullet in the same place — the top of the
+# section under [Unreleased] — so two branches cut from the same main
+# collide there by construction, whoever wrote them. That conflict is
+# where `fix/enricher-length-contract` entered this file: it is the tail
+# of a `>>>>>>> ` marker that survived a hand resolution.
+#
+# `union` is one of git's built-in merge drivers: instead of stopping,
+# it keeps the lines from both sides. For a file whose changes are
+# additions, that is the right answer and removes the human from the
+# resolution entirely.
+#
+# Known limit, worth remembering: union never honours a deletion. When
+# one side removes a line and the other keeps it, the line survives.
+# Removing something from this file therefore belongs in its own commit
+# on main, not in a branch racing another one.
+CHANGELOG.md merge=union
