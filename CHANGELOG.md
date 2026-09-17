@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Conversation titles are capped at 200 characters.** `PUT
+  /api/conversations/{id}` only rejected empty titles, so anything up
+  to the 2 MB JSON body limit was stored verbatim and returned on
+  every list call — while the UI only ever shows ~50 characters. Now
+  enforced up front via a tested `validate_title`, mirroring
+  `validate_query` (characters, not bytes).
+
 - **Startup now refuses a misconfigured eullm context sizing.**
   `EULLM__NUM_CTX * EULLM__BATCH_SIZE` becomes `--ctx-size`, but neither
   side was validated: `0` started eullm with no context or no slot, and
