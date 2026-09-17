@@ -1,18 +1,23 @@
 # CHANGELOG.md merge=union
 #
-# Every pull request adds a bullet in the same place — the top of the
-# section under [Unreleased] — so two branches cut from the same main
-# collide there by construction, whoever wrote them. That conflict is
-# where `fix/enricher-length-contract` entered this file: it is the tail
-# of a `>>>>>>> ` marker that survived a hand resolution.
+# A safety net, not the fix. The fix is changelog.d/ — one file per
+# change, so two pull requests cannot touch the same lines at all. See
+# changelog.d/README.md.
 #
-# `union` is one of git's built-in merge drivers: instead of stopping,
-# it keeps the lines from both sides. For a file whose changes are
-# additions, that is the right answer and removes the human from the
-# resolution entirely.
+# This line still earns its place for the merges that do touch this file
+# directly: a release assembly, a correction, a branch cut before the
+# fragments landed. `union` is a built-in git driver that keeps the lines
+# from both sides instead of stopping at a conflict.
 #
-# Known limit, worth remembering: union never honours a deletion. When
-# one side removes a line and the other keeps it, the line survives.
-# Removing something from this file therefore belongs in its own commit
-# on main, not in a branch racing another one.
+# Two limits, both measured rather than assumed:
+#
+#   - GitHub's server-side merge does NOT honour it. The same merge that
+#     git resolves cleanly from the command line was still handed to a
+#     human in the web conflict editor. That is precisely why the real
+#     fix had to be changelog.d/ rather than this line.
+#
+#   - union never honours a deletion. When one side removes a line and
+#     the other keeps it, the line survives. Removing something from this
+#     file therefore belongs in its own commit on main, not in a branch
+#     racing another one.
 CHANGELOG.md merge=union

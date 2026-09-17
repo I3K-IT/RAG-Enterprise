@@ -15,22 +15,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Entries for the next release live in [`changelog.d/`](changelog.d/), one
+file per change, assembled into a version section here by
+`scripts/release-changelog.sh` when the version is cut. Keeping them in
+separate files is what stops two pull requests colliding in this one.
+
+---
+
+## [0.1.44] - 2026-09-16
+
 ### Fixed
-
-- **Conversation titles are capped at 200 characters.** `PUT
-  /api/conversations/{id}` only rejected empty titles, so anything up
-  to the 2 MB JSON body limit was stored verbatim and returned on
-  every list call — while the UI only ever shows ~50 characters. Now
-  enforced up front via a tested `validate_title`, mirroring
-  `validate_query` (characters, not bytes).
-
-- **Startup now refuses a misconfigured eullm context sizing.**
-  `EULLM__NUM_CTX * EULLM__BATCH_SIZE` becomes `--ctx-size`, but neither
-  side was validated: `0` started eullm with no context or no slot, and
-  an absurd pair overflowed `u32` — panicking in debug, wrapping in
-  release into a garbage context a RAG prompt will not fit in. Both are
-  rejected fail-fast in `Settings::load`, following the existing
-  `validate_auth`/`validate_storage` pattern.
 
 - **A `ChunkEnricher` returning the wrong number of texts no longer
   panics the upload.** The trait promises one `String` per chunk but
