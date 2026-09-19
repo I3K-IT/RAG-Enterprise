@@ -27,11 +27,11 @@ pub async fn create_backup(
     qdrant_collection: &str,
     backup_dir: &str,
 ) -> Result<PathBuf> {
-    let ts = Utc::now().format("%Y%m%d_%H%M%S");
     let dir = Path::new(backup_dir);
     std::fs::create_dir_all(dir).with_context(|| format!("create backup dir {}", dir.display()))?;
 
-    let work_dir = dir.join(format!("backup_{ts}"));
+    let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let (work_dir, archive_path) = backup_run_paths(dir, &ts);
     std::fs::create_dir_all(&work_dir)?;
 
     // 1. SQLite: VACUUM INTO for a WAL-safe consistent snapshot, then ask
@@ -88,7 +88,6 @@ pub async fn create_backup(
     .context("writing backup.json")?;
 
     // 4. Pack work_dir into a tar.gz archive
-    let archive_path = dir.join(format!("backup_{ts}.tar.gz"));
     pack_tar_gz(&work_dir, &archive_path)?;
 
     // 5. Remove the temp work directory
@@ -110,6 +109,21 @@ fn is_qdrant_unreachable(e: &anyhow::Error) -> bool {
             .downcast_ref::<reqwest::Error>()
             .is_some_and(|r| r.is_connect() || r.is_timeout() || r.is_request())
     })
+}
+
+/// Work dir + archive path for one backup run inside `dir`.
+///
+/// Split out so the uniqueness rule is testable without running a whole
+/// backup. `ts` has one-second granularity, which is NOT unique: two runs
+/// started in the same second (a double-clicked "Run Backup Now", a manual
+/// run landing on the 02:00 cron tick) would otherwise share both paths,
+/// interleaving their work dirs and having the second silently overwrite
+/// the first's archive. The short random suffix makes every run unique
+/// while keeping the timestamp prefix the listing sorts on.
+fn backup_run_paths(dir: &Path, ts: &str) -> (PathBuf, PathBuf) {
+    let uniq = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let stem = format!("backup_{ts}_{uniq}");
+    (dir.join(&stem), dir.join(format!("{stem}.tar.gz")))
 }
 
 /// Pack the directory at `src` into a tar.gz at `dest`.
@@ -710,6 +724,65 @@ mod tests {
     fn resolve_archive_rejects_a_missing_file() {
         let d = tempfile::tempdir().unwrap();
         assert!(resolve_archive(d.path().to_str().unwrap(), "absent.tar.gz").is_err());
+    }
+
+    // ── backup run paths ────────────────────────────────────────────────────
+
+    /// Same timestamp twice must still yield different paths: one-second
+    /// granularity is not unique across runs.
+    #[test]
+    fn same_second_runs_get_different_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (work_a, archive_a) = backup_run_paths(dir.path(), "20260101_000000");
+        let (work_b, archive_b) = backup_run_paths(dir.path(), "20260101_000000");
+        assert_ne!(work_a, work_b);
+        assert_ne!(archive_a, archive_b);
+        // The timestamp prefix stays, so the newest-first listing order is
+        // unaffected; only the .tar.gz archive keeps its extension.
+        for p in [&work_a, &work_b, &archive_a, &archive_b] {
+            assert!(
+                p.file_name().unwrap().to_str().unwrap().starts_with("backup_20260101_000000_"),
+                "unexpected name: {}",
+                p.display()
+            );
+        }
+        assert_eq!(archive_a.extension().unwrap(), "gz");
+    }
+
+    /// The reported scenario: two backups back to back keep two archives.
+    /// Unreachable Qdrant still writes a (database-only) archive, so no
+    /// server is needed.
+    #[tokio::test]
+    async fn two_backups_in_a_row_keep_two_archives() {
+        let d = tempfile::tempdir().unwrap();
+        let live = pool_at(&d.path().join("live.db")).await;
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+            .execute(&live)
+            .await
+            .unwrap();
+        let backup_dir = d.path().join("backups");
+        let unreachable = "http://127.0.0.1:9";
+        let first = create_backup(
+            &live,
+            "",
+            unreachable,
+            "rag_documents",
+            backup_dir.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        let second = create_backup(
+            &live,
+            "",
+            unreachable,
+            "rag_documents",
+            backup_dir.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_ne!(first, second);
+        assert!(first.is_file() && second.is_file(), "second run must not overwrite the first");
+        assert_eq!(list_backups(backup_dir.to_str().unwrap()).await.len(), 2);
     }
 
     // ── tar entry paths ───────────────────────────────────────────────────────
