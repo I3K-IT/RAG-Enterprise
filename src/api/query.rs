@@ -39,6 +39,22 @@ use crate::state::AppState;
 /// because it happens before the embedding.
 pub const MAX_QUERY_CHARS: usize = 4_000;
 
+/// Upper bound for the client-supplied `top_k` (see `resolve_top_k`).
+/// Fifteen chunks already cover several documents; beyond fifty the prompt
+/// only grows while relevance dilutes, and every extra chunk costs
+/// embedding-adjacent work per query on cards where that is scarcest.
+pub const MAX_TOP_K: u64 = 50;
+
+/// The retrieval depth for one question. Absent means the default; present
+/// is clamped, not rejected, so no client that worked before can break —
+/// `top_k: 0` retrieves a single chunk instead of erroring, and an absurd
+/// value stops at the ceiling instead of fanning out to Qdrant unbounded.
+/// A free function so the rule can be tested without a running server,
+/// like `validate_query` below.
+pub(crate) fn resolve_top_k(requested: Option<u64>) -> u64 {
+    requested.unwrap_or(retrieval::TOP_K).clamp(1, MAX_TOP_K)
+}
+
 /// `Err(message)` when the question is empty or too long. A free function so
 /// the rule can be tested without a running server, like `validate_auth` and
 /// `validate_new_password` elsewhere in this codebase.
@@ -64,7 +80,6 @@ fn context_text(payload: &ChunkPayload) -> &str {
     payload.retrieval_text.as_deref().unwrap_or(&payload.text)
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 pub struct QueryRequest {
     pub query: String,
@@ -119,6 +134,7 @@ async fn prepare(
     user_id: i64,
     use_history: bool,
     conversation_id: Option<&str>,
+    top_k: u64,
 ) -> anyhow::Result<(String, Vec<Source>, PrepareTimings)> {
     // 1. Embed the query. With ingestion_embedding=Eullm this now goes
     // through eullm's own POST /api/embed (an HTTP call, .await directly) —
@@ -160,11 +176,12 @@ async fn prepare(
     };
     let embed_query = t.elapsed();
 
-    // 2. Vector search (top_k=15, threshold=0.30 — MAPPA §5)
+    // 2. Vector search (threshold=0.30 — MAPPA §5; depth is the caller's
+    // resolved top_k, TOP_K when the request carries none).
     let t = Instant::now();
     let hits = state
         .qdrant
-        .search(query_vec, retrieval::TOP_K, Some(retrieval::RELEVANCE_THRESHOLD))
+        .search(query_vec, top_k, Some(retrieval::RELEVANCE_THRESHOLD))
         .await?;
     let search = t.elapsed();
 
@@ -288,11 +305,20 @@ pub async fn query(
     }
     // _timings: not instrumented — the frontend uses /api/query/stream (see
     // query_stream), which is where --bench-live records real queries.
-    let (full_prompt, sources, _timings) =
-        match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
-            Ok(v) => v,
-            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
-        };
+    let top_k = resolve_top_k(req.top_k);
+    let (full_prompt, sources, _timings) = match prepare(
+        &state,
+        &req.query,
+        claims.user_id,
+        req.use_history,
+        conv_id,
+        top_k,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
 
     let answer = match state.eullm.invoke(&full_prompt).await {
         Ok(a) => a,
@@ -369,11 +395,20 @@ pub async fn query_stream(
     }
     // Run setup synchronously before opening the SSE stream so we can return
     // a proper HTTP error if embed/search fails.
-    let (full_prompt, sources, timings) =
-        match prepare(&state, &req.query, claims.user_id, req.use_history, conv_id).await {
-            Ok(v) => v,
-            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
-        };
+    let top_k = resolve_top_k(req.top_k);
+    let (full_prompt, sources, timings) = match prepare(
+        &state,
+        &req.query,
+        claims.user_id,
+        req.use_history,
+        conv_id,
+        top_k,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
     let chunks_retrieved = sources.len();
 
     // Persist user question (answer is stored when the stream finishes).
@@ -575,5 +610,25 @@ mod tests {
     fn context_text_falls_back_to_text_when_retrieval_text_absent() {
         let p = payload("original", None);
         assert_eq!(context_text(&p), "original");
+    }
+
+    #[test]
+    fn absent_top_k_means_the_default() {
+        assert_eq!(resolve_top_k(None), retrieval::TOP_K);
+    }
+
+    #[test]
+    fn present_top_k_is_honored() {
+        assert_eq!(resolve_top_k(Some(5)), 5);
+        assert_eq!(resolve_top_k(Some(1)), 1);
+        assert_eq!(resolve_top_k(Some(MAX_TOP_K)), MAX_TOP_K);
+    }
+
+    /// Clamped, not rejected: no client that worked before can break, and
+    /// no value can fan out to Qdrant unbounded.
+    #[test]
+    fn out_of_range_top_k_is_clamped() {
+        assert_eq!(resolve_top_k(Some(0)), 1);
+        assert_eq!(resolve_top_k(Some(u64::MAX)), MAX_TOP_K);
     }
 }
