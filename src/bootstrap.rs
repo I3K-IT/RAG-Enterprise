@@ -2740,6 +2740,32 @@ fn fmt_eta(secs: u64) -> String {
     }
 }
 
+#[cfg(test)]
+mod fmt_tests {
+    use super::{fmt_bytes, fmt_eta};
+
+    #[test]
+    fn byte_boundaries_use_the_right_unit() {
+        assert_eq!(fmt_bytes(0), "0 KB");
+        assert_eq!(fmt_bytes(1023), "0 KB");
+        assert_eq!(fmt_bytes(1024), "1 KB");
+        assert_eq!(fmt_bytes(1024 * 1024), "1 MB");
+        assert_eq!(fmt_bytes(5 * (1 << 30)), "5.0 GB");
+        assert_eq!(fmt_bytes((1 << 30) + (1 << 29)), "1.5 GB");
+    }
+
+    #[test]
+    fn eta_boundaries_use_the_right_unit() {
+        assert_eq!(fmt_eta(0), "0s");
+        assert_eq!(fmt_eta(59), "59s");
+        assert_eq!(fmt_eta(60), "1m00s");
+        assert_eq!(fmt_eta(61), "1m01s");
+        assert_eq!(fmt_eta(3599), "59m59s");
+        assert_eq!(fmt_eta(3600), "1h00m");
+        assert_eq!(fmt_eta(3661), "1h01m");
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod stale_process_tests {
     use super::*;

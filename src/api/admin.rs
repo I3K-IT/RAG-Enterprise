@@ -228,3 +228,37 @@ pub async fn sqlite_documents(State(state): State<AppState>, claims: Claims) -> 
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_bad_request;
+
+    fn bad(msg: &str) -> anyhow::Error {
+        anyhow::anyhow!("{msg}")
+    }
+
+    /// The three prefix strings must stay in sync with
+    /// backup::service::resolve_archive: a drift here misclassifies a
+    /// caller error as a 500.
+    #[test]
+    fn caller_errors_are_recognised() {
+        for msg in [
+            "invalid archive name: \"../x.tar.gz\"",
+            "not a backup archive: \"rag_users.db\"",
+            "archive not found: absent.tar.gz",
+        ] {
+            assert!(is_bad_request(&bad(msg)), "msg={msg:?}");
+        }
+    }
+
+    #[test]
+    fn server_faults_are_not_recognised() {
+        for msg in [
+            "archive entry escapes the destination: x",
+            "the Qdrant snapshot could not be verified, backup aborted",
+            "internal server error",
+        ] {
+            assert!(!is_bad_request(&bad(msg)), "msg={msg:?}");
+        }
+    }
+}
