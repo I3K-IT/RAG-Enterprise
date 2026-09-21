@@ -435,23 +435,34 @@ pub async fn download(
     };
 
     let path = state.storage.path_for(&document_id, &doc.filename);
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    format!(
-                        "attachment; filename=\"{}\"",
-                        sanitize_header_filename(&doc.filename)
-                    ),
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => return err(StatusCode::NOT_FOUND, "file not found on disk"),
+    };
+    // Stream instead of buffering: originals run up to MAX_UPLOAD_MB, and
+    // holding a second gigabyte in RAM per concurrent download is the same
+    // peak the upload path just stopped paying (see stream_upload_to_file).
+    // A read failing mid-stream truncates the download rather than 404ing —
+    // inherent to streaming, and the only behavior this changes.
+    let len = match file.metadata().await {
+        Ok(m) => m.len(),
+        Err(_) => return err(StatusCode::NOT_FOUND, "file not found on disk"),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!(
+                    "attachment; filename=\"{}\"",
+                    sanitize_header_filename(&doc.filename)
                 ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => err(StatusCode::NOT_FOUND, "file not found on disk"),
-    }
+            ),
+            (header::CONTENT_LENGTH, len.to_string()),
+        ],
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+    )
+        .into_response()
 }
 
 // ── DELETE /api/documents/{id} ────────────────────────────────────────────────
@@ -661,7 +672,10 @@ fn sanitize_header_filename(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_private_file, sanitize_header_filename, stream_upload_to_file, ReceiveError};
+    use super::{
+        create_private_file, download, sanitize_header_filename, stream_upload_to_file,
+        ReceiveError,
+    };
     use futures_util::stream;
     use sha2::{Digest, Sha256};
 
@@ -806,5 +820,148 @@ mod tests {
                 "unsafe output {clean:?} for input {hostile:?}"
             );
         }
+    }
+
+    /// First handler-level test in this codebase: drives `download` end to
+    /// end (SQLite row + file on disk + real AppState, no server) and proves
+    /// the streamed body, the headers and the 404 path.
+    struct NoQdrant;
+
+    #[async_trait::async_trait]
+    impl crate::rag::vector_store::VectorStore for NoQdrant {
+        async fn upsert(
+            &self,
+            _embeddings: &[Vec<f32>],
+            _payloads: &[crate::rag::vector_store::ChunkPayload],
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn search(
+            &self,
+            _query_vec: Vec<f32>,
+            _top_k: u64,
+            _score_threshold: Option<f32>,
+        ) -> Result<Vec<crate::rag::vector_store::SearchHit>, anyhow::Error> {
+            Ok(vec![])
+        }
+
+        async fn delete_document(&self, _document_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn download_test_state(
+        dir: &tempfile::TempDir,
+    ) -> (crate::state::AppState, crate::auth::jwt::Claims) {
+        use std::sync::Arc;
+
+        let pool = {
+            let opts = sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(dir.path().join("test.db"))
+                .create_if_missing(true);
+            sqlx::SqlitePool::connect_with(opts).await.unwrap()
+        };
+        crate::db::migrate(&pool).await.unwrap();
+
+        let settings = crate::config::Settings {
+            storage: crate::config::StorageSettings {
+                documents_dir: dir.path().join("uploads").display().to_string(),
+                max_upload_mb: 100,
+            },
+            auth: crate::config::AuthSettings {
+                jwt_secret: "test-secret-that-is-long-enough".to_owned(),
+                jwt_expiry_minutes: 60,
+                admin_default_password: None,
+                admin_reset_password: None,
+            },
+            server: Default::default(),
+            database: Default::default(),
+            qdrant: Default::default(),
+            eullm: Default::default(),
+            embeddings: Default::default(),
+            backup: Default::default(),
+            data: Default::default(),
+        };
+        let state = crate::state::AppState::new(
+            settings,
+            pool,
+            None,
+            Arc::new(NoQdrant),
+            crate::clients::eullm::EullmClient::new(
+                "http://localhost:11434".into(),
+                "test-model".into(),
+                1024,
+                256,
+                1.3,
+                256,
+                -1,
+            ),
+            None,
+            crate::extensions::ExtensionRegistry::default(),
+        );
+        let claims = crate::auth::jwt::Claims {
+            user_id: 1,
+            username: "tester".into(),
+            role: crate::auth::rbac::Role::User,
+            exp: 9_999_999_999,
+        };
+        (state, claims)
+    }
+
+    #[tokio::test]
+    async fn download_streams_the_stored_bytes_with_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, claims) = download_test_state(&dir).await;
+
+        let body = vec![0u8; 300_000];
+        crate::db::documents::insert(&state.db, "doc-1", "report.pdf", Some(2), "pdf", 3)
+            .await
+            .unwrap();
+        let path = state.storage.path_for("doc-1", "report.pdf");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &body).unwrap();
+
+        let resp = download(
+            axum::extract::State(state.clone()),
+            claims,
+            axum::extract::Path("doc-1".to_owned()),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let headers = resp.headers();
+        assert_eq!(
+            headers[axum::http::header::CONTENT_TYPE].to_str().unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            headers[axum::http::header::CONTENT_LENGTH]
+                .to_str()
+                .unwrap(),
+            body.len().to_string()
+        );
+        assert_eq!(
+            headers[axum::http::header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap(),
+            "attachment; filename=\"report.pdf\""
+        );
+        let received = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(received.as_ref(), body.as_slice());
+    }
+
+    #[tokio::test]
+    async fn download_unknown_id_is_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, claims) = download_test_state(&dir).await;
+        let resp = download(
+            axum::extract::State(state),
+            claims,
+            axum::extract::Path("no-such-doc".to_owned()),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     }
 }
