@@ -967,4 +967,28 @@ mod tests {
             assert!(!host_is_loopback(host), "host={host:?}");
         }
     }
+
+    /// Touches HOME, so it saves and restores it: no other test reads it,
+    /// but process-global state deserves the caution regardless.
+    #[test]
+    fn tilde_expands_against_home() {
+        let saved = std::env::var("HOME").ok();
+        std::env::set_var("HOME", "/home/tester");
+        assert_eq!(expand_tilde("~"), std::path::PathBuf::from("/home/tester"));
+        assert_eq!(
+            expand_tilde("~/data"),
+            std::path::PathBuf::from("/home/tester").join("data")
+        );
+        match saved {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn plain_paths_pass_through_untouched() {
+        for p in ["/var/lib/rag", "./data", "relative/dir", "C:\\data"] {
+            assert_eq!(expand_tilde(p), std::path::PathBuf::from(p), "p={p:?}");
+        }
+    }
 }
