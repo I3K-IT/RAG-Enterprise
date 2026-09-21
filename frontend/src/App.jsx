@@ -585,7 +585,6 @@ function App() {
         },
         body: JSON.stringify({
           query: userMessage.content,
-          top_k: 5,
           use_history: true,
           conversation_id: currentConversationId,
         }),
