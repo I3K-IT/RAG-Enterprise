@@ -991,4 +991,88 @@ mod tests {
             assert_eq!(expand_tilde(p), std::path::PathBuf::from(p), "p={p:?}");
         }
     }
+
+    /// Every `SECTION__FIELD` key `Settings::load` reads, mirrored from
+    /// `.env.example`. The struct does not use `deny_unknown_fields`, so a
+    /// typo'd variable silently does nothing — and the template is the
+    /// install-time manual operators copy. Adding a setting means updating
+    /// both this list and the template; this test forces the second half.
+    const DOCUMENTED_ENV_KEYS: &[&str] = &[
+        "SERVER__HOST",
+        "SERVER__PORT",
+        "SERVER__CORS_ORIGINS",
+        "DATABASE__URL",
+        "AUTH__JWT_SECRET",
+        "AUTH__JWT_EXPIRY_MINUTES",
+        "AUTH__ADMIN_DEFAULT_PASSWORD",
+        "AUTH__ADMIN_RESET_PASSWORD",
+        "QDRANT__URL",
+        "QDRANT__GRPC_URL",
+        "QDRANT__COLLECTION",
+        "EULLM__URL",
+        "EULLM__MODEL",
+        "EULLM__NUM_CTX",
+        "EULLM__NUM_PREDICT",
+        "EULLM__REPEAT_PENALTY",
+        "EULLM__REPEAT_LAST_N",
+        "EULLM__KEEP_ALIVE",
+        "EULLM__BATCH_SIZE",
+        "EULLM__CACHE_TYPE_K",
+        "EULLM__CACHE_TYPE_V",
+        "EULLM__UNLOAD_DURING_INGESTION",
+        "EULLM__MODEL_OVERRIDE",
+        "EULLM__N_CPU_MOE",
+        "EULLM__RESERVE_EMBEDDING_MODEL",
+        "EMBEDDINGS__MODEL_ID",
+        "EMBEDDINGS__REQUIRE_GPU",
+        "EMBEDDINGS__INGESTION_EMBEDDING",
+        "BACKUP__DIR",
+        "STORAGE__DOCUMENTS_DIR",
+        "STORAGE__MAX_UPLOAD_MB",
+        "DATA__DIR",
+        "DATA__MANAGE_SUBPROCESSES",
+    ];
+
+    /// `Some(key)` when the line assigns `KEY=...`, commented or not;
+    /// `None` for prose, blanks and anything not shaped like a key.
+    fn env_key_of(line: &str) -> Option<&str> {
+        let line = line.trim_start();
+        let line = line.strip_prefix('#').unwrap_or(line).trim_start();
+        let (key, _) = line.split_once('=')?;
+        let key = key.trim_end();
+        if key.len() > 3
+            && key.contains("__")
+            && key
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        {
+            Some(key)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn env_example_documents_every_setting() {
+        let content = include_str!("../.env.example");
+        for key in DOCUMENTED_ENV_KEYS {
+            assert!(
+                content.lines().any(|line| env_key_of(line) == Some(*key)),
+                ".env.example never assigns {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_example_assigns_nothing_unknown() {
+        let content = include_str!("../.env.example");
+        for line in content.lines() {
+            if let Some(key) = env_key_of(line) {
+                assert!(
+                    DOCUMENTED_ENV_KEYS.contains(&key),
+                    ".env.example assigns {key}, unknown to Settings"
+                );
+            }
+        }
+    }
 }
