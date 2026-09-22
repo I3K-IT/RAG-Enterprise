@@ -26,7 +26,18 @@ pub struct UserRow {
 
 impl UserRow {
     pub fn role(&self) -> Role {
-        self.role.parse().unwrap_or(Role::User)
+        match self.role.parse() {
+            Ok(role) => role,
+            // Fail closed toward the least privilege, but loudly: the role
+            // is re-read from the database on login and on every request
+            // (see auth::extractor), so a typo or a corrupt row would
+            // otherwise demote someone — possibly the admin — with nothing
+            // in the log saying why.
+            Err(_) => {
+                tracing::warn!(role = %self.role, username = %self.username, "unknown role, falling back to user");
+                Role::User
+            }
+        }
     }
 }
 
@@ -184,4 +195,38 @@ pub async fn touch_last_login(pool: &SqlitePool, user_id: i64) -> Result<()> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row_with(role: &str) -> UserRow {
+        UserRow {
+            id: 1,
+            username: "someone".into(),
+            email: String::new(),
+            password_hash: String::new(),
+            role: role.into(),
+            created_at: String::new(),
+            last_login: None,
+            is_active: 1,
+        }
+    }
+
+    #[test]
+    fn known_roles_parse() {
+        assert_eq!(row_with("admin").role(), Role::Admin);
+        assert_eq!(row_with("super_user").role(), Role::SuperUser);
+        assert_eq!(row_with("user").role(), Role::User);
+    }
+
+    /// Fail-closed toward the least privilege — but observable, so a typo
+    /// or a corrupt row does not demote anyone silently.
+    #[test]
+    fn unknown_roles_fall_back_to_user() {
+        for role in ["owner", "", "ADMIN", "amdin"] {
+            assert_eq!(row_with(role).role(), Role::User, "role={role:?}");
+        }
+    }
 }
