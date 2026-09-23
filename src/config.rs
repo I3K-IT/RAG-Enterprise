@@ -291,6 +291,13 @@ pub struct EmbeddingsSettings {
 pub struct BackupSettings {
     #[serde(default = "default_backup_dir")]
     pub dir: String,
+    /// How many newest archives to keep after each successful backup.
+    /// `0` (the default) disables pruning: every archive is kept, which
+    /// is also the historical behaviour. Anything else prunes archives
+    /// beyond that count, oldest first — daily backups accumulate
+    /// otherwise, and nothing else ever deletes them.
+    #[serde(default = "default_backup_retain_last")]
+    pub retain_last: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,7 +403,9 @@ impl Default for EmbeddingsSettings {
     }
 }
 impl Default for BackupSettings {
-    fn default() -> Self { Self { dir: default_backup_dir() } }
+    fn default() -> Self {
+        Self { dir: default_backup_dir(), retain_last: default_backup_retain_last() }
+    }
 }
 impl Default for StorageSettings {
     fn default() -> Self {
@@ -431,6 +440,7 @@ fn default_repeat_last_n() -> u32 { 256 }
 fn default_keep_alive() -> i32 { -1 }
 fn default_embedding_model() -> String { "BAAI/bge-m3".into() }
 fn default_backup_dir() -> String { "./backups".into() }
+fn default_backup_retain_last() -> u64 { 0 }
 fn default_documents_dir() -> String { "./documents".into() }
 fn default_max_upload_mb() -> u64 { 100 }
 fn default_data_dir() -> String {
@@ -1027,6 +1037,7 @@ mod tests {
         "EMBEDDINGS__REQUIRE_GPU",
         "EMBEDDINGS__INGESTION_EMBEDDING",
         "BACKUP__DIR",
+        "BACKUP__RETAIN_LAST",
         "STORAGE__DOCUMENTS_DIR",
         "STORAGE__MAX_UPLOAD_MB",
         "DATA__DIR",

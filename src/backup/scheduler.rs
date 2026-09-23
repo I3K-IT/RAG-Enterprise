@@ -12,6 +12,7 @@ pub async fn start(
     qdrant_url: String,
     qdrant_collection: String,
     backup_dir: String,
+    retain_last: u64,
 ) -> Result<()> {
     let scheduler = JobScheduler::new().await?;
 
@@ -29,6 +30,7 @@ pub async fn start(
                 &qdrant_url,
                 &qdrant_collection,
                 &backup_dir,
+                retain_last,
             )
             .await
             {
