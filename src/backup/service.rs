@@ -20,12 +20,17 @@ use sqlx::{Row, SqliteConnection, SqlitePool};
 
 /// Create a backup archive in `backup_dir`.
 /// Returns the path of the `.tar.gz` file created.
+///
+/// `retain_last` caps how many newest archives survive: after a successful
+/// backup, anything older beyond that count is pruned. `0` disables
+/// pruning and keeps the historical accumulate-forever behaviour.
 pub async fn create_backup(
     db: &SqlitePool,
     _db_path: &str,
     qdrant_url: &str,
     qdrant_collection: &str,
     backup_dir: &str,
+    retain_last: u64,
 ) -> Result<PathBuf> {
     let dir = Path::new(backup_dir);
     std::fs::create_dir_all(dir).with_context(|| format!("create backup dir {}", dir.display()))?;
@@ -98,7 +103,43 @@ pub async fn create_backup(
         with_vectors = manifest.qdrant.is_some(),
         "backup complete"
     );
+
+    // 6. Retention, success-only: a failed backup must never delete older
+    // archives, and a pruning failure must never fail the backup.
+    prune_old_backups(backup_dir, retain_last).await;
+
     Ok(archive_path)
+}
+
+/// Delete `backup_*` archives beyond the newest `retain_last`, oldest
+/// first. `0` keeps everything. Only our own prefix is ever removed, so a
+/// foreign `.tar.gz` sitting in the same directory is left alone; removal
+/// failures are logged, never propagated.
+async fn prune_old_backups(backup_dir: &str, retain_last: u64) {
+    if retain_last == 0 {
+        return;
+    }
+    // Only our own prefix counts toward the quota: a foreign `.tar.gz`
+    // sitting in the same directory must neither be deleted nor consume a
+    // retained slot. `list_backups` already sorts newest first, and the
+    // filter preserves that order.
+    let ours: Vec<String> = list_backups(backup_dir)
+        .await
+        .into_iter()
+        .filter(|name| name.starts_with("backup_"))
+        .collect();
+    let mut pruned = 0u64;
+    for stale in ours.iter().skip(retain_last as usize) {
+        match tokio::fs::remove_file(Path::new(backup_dir).join(stale)).await {
+            Ok(()) => pruned += 1,
+            Err(e) => {
+                tracing::warn!(archive = %stale, error = %e, "backup retention: could not remove old archive")
+            }
+        }
+    }
+    if pruned > 0 {
+        tracing::info!(pruned, retain_last, "backup retention pruned old archives");
+    }
 }
 
 /// Did the snapshot fail because Qdrant is not there, rather than because what
@@ -768,6 +809,7 @@ mod tests {
             unreachable,
             "rag_documents",
             backup_dir.to_str().unwrap(),
+            0,
         )
         .await
         .unwrap();
@@ -777,11 +819,66 @@ mod tests {
             unreachable,
             "rag_documents",
             backup_dir.to_str().unwrap(),
+            0,
         )
         .await
         .unwrap();
         assert_ne!(first, second);
         assert!(first.is_file() && second.is_file(), "second run must not overwrite the first");
+        assert_eq!(list_backups(backup_dir.to_str().unwrap()).await.len(), 2);
+    }
+
+    // ── retention ───────────────────────────────────────────────────────────
+
+    fn fake_archive(dir: &Path, name: &str) {
+        std::fs::write(dir.join(name), b"not really an archive").unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_zero_disables_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 1..=3 {
+            fake_archive(dir.path(), &format!("backup_2026010{n}_000000_aaa{n}1111.tar.gz"));
+        }
+        prune_old_backups(dir.path().to_str().unwrap(), 0).await;
+        assert_eq!(list_backups(dir.path().to_str().unwrap()).await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn retention_keeps_the_newest_and_spares_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 1..=4 {
+            fake_archive(dir.path(), &format!("backup_2026010{n}_000000_aaa{n}1111.tar.gz"));
+        }
+        fake_archive(dir.path(), "someone-elses-archive.tar.gz");
+        prune_old_backups(dir.path().to_str().unwrap(), 2).await;
+        let mut names = list_backups(dir.path().to_str().unwrap()).await;
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "backup_20260103_000000_aaa31111.tar.gz".to_string(),
+                "backup_20260104_000000_aaa41111.tar.gz".to_string(),
+                "someone-elses-archive.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn three_backups_with_retain_two_leave_two_archives() {
+        let d = tempfile::tempdir().unwrap();
+        let live = pool_at(&d.path().join("live.db")).await;
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+            .execute(&live)
+            .await
+            .unwrap();
+        let backup_dir = d.path().join("backups");
+        let unreachable = "http://127.0.0.1:9";
+        for _ in 0..3 {
+            create_backup(&live, "", unreachable, "rag_documents", backup_dir.to_str().unwrap(), 2)
+                .await
+                .unwrap();
+        }
         assert_eq!(list_backups(backup_dir.to_str().unwrap()).await.len(), 2);
     }
 
@@ -1251,7 +1348,7 @@ mod tests {
             .execute(&db).await.unwrap();
 
         let backup_dir = dir.path().join("backups");
-        let archive = create_backup(&db, "", &url, coll, backup_dir.to_str().unwrap())
+        let archive = create_backup(&db, "", &url, coll, backup_dir.to_str().unwrap(), 0)
             .await
             .expect("create_backup");
         let archive_name = archive.file_name().unwrap().to_str().unwrap().to_owned();

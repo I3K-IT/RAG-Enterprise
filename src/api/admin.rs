@@ -63,6 +63,7 @@ pub async fn trigger_backup(State(state): State<AppState>, claims: Claims) -> Re
         &state.settings.qdrant.url,
         &state.settings.qdrant.collection,
         &state.settings.backup.dir,
+        state.settings.backup.retain_last,
     )
     .await
     {

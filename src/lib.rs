@@ -176,9 +176,10 @@ pub async fn run_with_extensions(
     let bk_qdrant_url = settings.qdrant.url.clone();
     let bk_qdrant_coll = settings.qdrant.collection.clone();
     let bk_dir = settings.backup.dir.clone();
+    let bk_retain = settings.backup.retain_last;
     tokio::spawn(async move {
         if let Err(e) =
-            backup::scheduler::start(bk_db, db_path, bk_qdrant_url, bk_qdrant_coll, bk_dir).await
+            backup::scheduler::start(bk_db, db_path, bk_qdrant_url, bk_qdrant_coll, bk_dir, bk_retain).await
         {
             tracing::warn!(error = %e, "backup scheduler did not start");
         }
