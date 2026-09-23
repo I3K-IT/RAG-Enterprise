@@ -276,7 +276,7 @@ impl InferenceResult {
     }
 }
 
-// ── Ingestione ───────────────────────────────────────────────────────────────
+// ── Ingestion ───────────────────────────────────────────────────────────────
 
 async fn run_ingestion(
     doc_path: &Path,
@@ -405,7 +405,7 @@ async fn run_ingestion(
     })
 }
 
-// ── Inferenza ────────────────────────────────────────────────────────────────
+// ── Inference ────────────────────────────────────────────────────────────────
 
 async fn run_inference(
     query: &str,
@@ -422,9 +422,9 @@ async fn run_inference(
     let hits = qdrant
         .search(query_vec, retrieval::TOP_K, Some(retrieval::RELEVANCE_THRESHOLD))
         .await
-        .context("ricerca Qdrant")?;
+        .context("Qdrant search")?;
     let search = t.elapsed();
-    tracing::info!(chunks_retrieved = hits.len(), ms = search.as_millis(), "ricerca completata");
+    tracing::info!(chunks_retrieved = hits.len(), ms = search.as_millis(), "search complete");
 
     let chunks_from_bench_doc = hits.iter().filter(|h| h.payload.document_id == bench_document_id).count();
 
@@ -461,10 +461,10 @@ async fn run_inference(
         tokens_generated += 1;
     }
     let total_generation = gen_start.elapsed();
-    gen_handle.await.context("join generazione eullm")?.context("eullm invoke_stream")?;
+    gen_handle.await.context("join eullm generation")?.context("eullm invoke_stream")?;
     tracing::info!(
         tokens = tokens_generated, ms = total_generation.as_millis(),
-        "generazione completata"
+        "generation complete"
     );
 
     Ok(InferenceResult {
@@ -522,7 +522,7 @@ fn print_summary(hw: &HardwareInfo, ingestion: &IngestionResult, inferences: &[I
     for (i, inf) in inferences.iter().enumerate() {
         println!("Inference #{} — \"{}\"", i + 1, truncate(&inf.query, 60));
         println!(
-            "  chunk recuperati: {} (di cui {} dal documento benchmark)",
+            "  chunks retrieved: {} ({} from the benchmark document)",
             inf.chunks_retrieved, inf.chunks_from_bench_doc
         );
         println!("  TTFT: {:.0} ms | total generation: {:.0} ms | tokens: {}",
@@ -562,13 +562,13 @@ fn write_markdown_report(
     md.push_str(&format!("# Benchmark i3k-rag-engine — {}\n\n", now.format("%Y-%m-%d %H:%M:%S")));
 
     md.push_str("## Hardware\n\n");
-    md.push_str("| Componente | Dettaglio |\n|---|---|\n");
+    md.push_str("| Component | Detail |\n|---|---|\n");
     md.push_str(&format!("| CPU | {} ({} cores) |\n", hw.cpu_model, hw.cpu_cores));
     md.push_str(&format!("| RAM | {} MB |\n", hw.ram_total_mb));
     match (&hw.gpu_name, hw.gpu_vram_total_mb, hw.gpu_vram_free_mb) {
         (Some(name), Some(total), Some(free)) => {
             md.push_str(&format!("| GPU | {name} |\n"));
-            md.push_str(&format!("| VRAM | {free} MB liberi / {total} MB totali |\n"));
+            md.push_str(&format!("| VRAM | {free} MB free / {total} MB total |\n"));
         }
         _ => md.push_str("| GPU | not detected (nvidia-smi unavailable, or no GPU) |\n"),
     }
@@ -580,7 +580,7 @@ fn write_markdown_report(
     md.push_str(&format!("- File: `{}`\n", doc_path.display()));
     md.push_str(&format!("- Pages: {}\n", hw_opt(ingestion.page_count)));
     md.push_str(&format!("- Words: {}\n", ingestion.word_count));
-    md.push_str(&format!("- Caratteri: {}\n", ingestion.char_count));
+    md.push_str(&format!("- Characters: {}\n", ingestion.char_count));
     md.push_str(&format!("- Chunks produced: {}\n", ingestion.chunk_count));
 
     md.push_str("\n## Ingestion — time per stage\n\n");
@@ -611,7 +611,7 @@ fn write_markdown_report(
         md.push_str("| Stage | Time (ms) |\n|---|---|\n");
         md.push_str(&format!("| Embedding query | {:.0} |\n", inf.embed_query.as_secs_f64() * 1000.0));
         md.push_str(&format!("| Qdrant search | {:.0} |\n", inf.search.as_secs_f64() * 1000.0));
-        md.push_str(&format!("| Costruzione prompt | {:.0} |\n", inf.prompt_build.as_secs_f64() * 1000.0));
+        md.push_str(&format!("| Prompt build | {:.0} |\n", inf.prompt_build.as_secs_f64() * 1000.0));
         md.push_str(&format!("| Time to first token (TTFT / prefill) | {:.0} |\n", inf.ttft.as_secs_f64() * 1000.0));
         md.push_str(&format!("| Total generation | {:.0} |\n", inf.total_generation.as_secs_f64() * 1000.0));
 
@@ -619,7 +619,7 @@ fn write_markdown_report(
             "\n- Chunks retrieved: {} (top_k={}, similarity threshold ≥ {}), of which {} from the document just ingested\n",
             inf.chunks_retrieved, retrieval::TOP_K, retrieval::RELEVANCE_THRESHOLD, inf.chunks_from_bench_doc
         ));
-        md.push_str(&format!("- Token generati: {}\n", inf.tokens_generated));
+        md.push_str(&format!("- Tokens generated: {}\n", inf.tokens_generated));
         match inf.decode_tokens_per_sec() {
             Some(tps) => md.push_str(&format!("- Decode speed (excluding prefill): {tps:.1} tokens/sec\n")),
             None => md.push_str("- Decode speed: N/A (too few tokens generated)\n"),
@@ -628,7 +628,7 @@ fn write_markdown_report(
         let decode_ms = inf.total_generation.saturating_sub(inf.ttft).as_secs_f64() * 1000.0;
         md.push_str("\n```mermaid\npie title Inference time per stage\n");
         md.push_str(&format!("    \"Embedding query\" : {:.1}\n", (inf.embed_query.as_secs_f64() * 1000.0).max(0.1)));
-        md.push_str(&format!("    \"Ricerca Qdrant\" : {:.1}\n", (inf.search.as_secs_f64() * 1000.0).max(0.1)));
+        md.push_str(&format!("    \"Qdrant search\" : {:.1}\n", (inf.search.as_secs_f64() * 1000.0).max(0.1)));
         md.push_str(&format!("    \"Prefill (TTFT)\" : {:.1}\n", (inf.ttft.as_secs_f64() * 1000.0).max(0.1)));
         md.push_str(&format!("    \"Decode\" : {:.1}\n", decode_ms.max(0.1)));
         md.push_str("```\n\n");
@@ -663,7 +663,7 @@ fn write_markdown_report(
     Ok(path)
 }
 
-// ── Modalità live (--bench-live) ────────────────────────────────────────────
+// ── Live mode (--bench-live) ────────────────────────────────────────────
 
 /// Records timings and hardware for every REAL ingestion and query made from
 /// the frontend during the session — unlike `--bench <file>`, which measures a
@@ -769,7 +769,7 @@ fn write_live_report(
     ));
 
     md.push_str("## Hardware\n\n");
-    md.push_str("| Componente | Dettaglio |\n|---|---|\n");
+    md.push_str("| Component | Detail |\n|---|---|\n");
     md.push_str(&format!("| CPU | {} ({} cores) |\n", hw.cpu_model, hw.cpu_cores));
     md.push_str(&format!("| RAM | {} MB |\n", hw.ram_total_mb));
     match (&hw.gpu_name, hw.gpu_vram_total_mb, hw.gpu_vram_free_mb) {
@@ -786,7 +786,7 @@ fn write_live_report(
     let mut bottleneck_stages: Vec<(&str, f64)> = Vec::new();
 
     if !ingestions.is_empty() {
-        md.push_str("\n## Ingestioni\n\n");
+        md.push_str("\n## Ingestions\n\n");
         md.push_str(
             "| Time | File | Pages | Words | Chunks | Extraction (ms) | Chunking (ms) | Embedding (ms) | Upsert (ms) | Total (ms) |\n|---|---|---|---|---|---|---|---|---|---|\n",
         );
@@ -885,7 +885,7 @@ fn write_live_report(
         };
 
         md.push_str(&format!(
-            "\n**Medie su {} query**: embed query {embed_avg:.0} ms, ricerca {search_avg:.0} ms, prompt {prompt_avg:.0} ms, TTFT {ttft_avg:.0} ms, decode {decode_avg:.0} ms",
+            "\n**Averages over {} queries**: embed query {embed_avg:.0} ms, search {search_avg:.0} ms, prompt {prompt_avg:.0} ms, TTFT {ttft_avg:.0} ms, decode {decode_avg:.0} ms",
             inferences.len()
         ));
         match tps_avg {
@@ -895,8 +895,8 @@ fn write_live_report(
 
         md.push_str("\n```mermaid\npie title Average inference time per stage\n");
         md.push_str(&format!("    \"Embedding query\" : {:.1}\n", embed_avg.max(0.1)));
-        md.push_str(&format!("    \"Ricerca Qdrant\" : {:.1}\n", search_avg.max(0.1)));
-        md.push_str(&format!("    \"Costruzione prompt\" : {:.1}\n", prompt_avg.max(0.1)));
+        md.push_str(&format!("    \"Qdrant search\" : {:.1}\n", search_avg.max(0.1)));
+        md.push_str(&format!("    \"Prompt build\" : {:.1}\n", prompt_avg.max(0.1)));
         md.push_str(&format!("    \"Prefill (TTFT)\" : {:.1}\n", ttft_avg.max(0.1)));
         md.push_str(&format!("    \"Decode\" : {:.1}\n", decode_avg.max(0.1)));
         md.push_str("```\n");
@@ -950,7 +950,7 @@ pub async fn run(
     };
 
     let bench_collection = format!("{}_benchmark", settings.qdrant.collection);
-    tracing::info!(collection = %bench_collection, "azzero la collection di benchmark");
+    tracing::info!(collection = %bench_collection, "wiping the benchmark collection");
     reset_benchmark_collection(&settings.qdrant.grpc_url, &bench_collection).await?;
     let qdrant = QdrantStore::new(&settings.qdrant.grpc_url, &bench_collection)
         .await
@@ -999,7 +999,7 @@ pub async fn run(
     let hw = collect_hardware_info(Some(&*embeddings), &settings.eullm.model);
     print_summary(&hw, &ingestion, &inferences);
     let report_path = write_markdown_report(&hw, &args.doc_path, &ingestion, &inferences)?;
-    println!("Report completo: {}", report_path.display());
+    println!("Full report: {}", report_path.display());
 
     Ok(())
 }
@@ -1113,12 +1113,12 @@ mod tests {
             search: Duration::ZERO,
             prompt_build: Duration::ZERO,
             ttft: Duration::from_millis(500),
-            total_generation: Duration::from_millis(1500), // 1000ms di decode
-            tokens_generated: 11,                          // 10 intervalli
+            total_generation: Duration::from_millis(1500), // 1000ms of decode
+            tokens_generated: 11,                          // 10 intervals
             chunks_retrieved: 0,
             chunks_from_bench_doc: 0,
         };
-        // 10 intervalli in 1000ms = 10 token/sec
+        // 10 intervals in 1000ms = 10 tokens/sec
         assert!((inf.decode_tokens_per_sec().unwrap() - 10.0).abs() < 0.01);
     }
 }
