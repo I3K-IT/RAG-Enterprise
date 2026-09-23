@@ -3,4 +3,5 @@
   removed, oldest first. `0` (the default) disables pruning and keeps
   the historical accumulate-forever behaviour — daily backups no
   longer fill the disk unnoticed. Pruning only ever touches `backup_*`
-  names and only warns on failure, never failing the backup itself.
+  names, never the archive the run has just written, and only warns on
+  failure, never failing the backup itself.

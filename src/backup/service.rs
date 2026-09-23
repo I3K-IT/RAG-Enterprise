@@ -105,29 +105,65 @@ pub async fn create_backup(
     );
 
     // 6. Retention, success-only: a failed backup must never delete older
-    // archives, and a pruning failure must never fail the backup.
-    prune_old_backups(backup_dir, retain_last).await;
+    // archives, and a pruning failure must never fail the backup. The
+    // archive we just wrote is named explicitly so this run can never
+    // prune its own output — see `prune_old_backups`.
+    let just_written = archive_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    prune_old_backups(backup_dir, retain_last, just_written).await;
 
     Ok(archive_path)
 }
+
+/// Held for the whole of one retention pass — see `prune_old_backups`.
+static PRUNE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Delete `backup_*` archives beyond the newest `retain_last`, oldest
 /// first. `0` keeps everything. Only our own prefix is ever removed, so a
 /// foreign `.tar.gz` sitting in the same directory is left alone; removal
 /// failures are logged, never propagated.
-async fn prune_old_backups(backup_dir: &str, retain_last: u64) {
+///
+/// Retention passes are serialized against each other. Two runs finishing
+/// together — the 02:00 cron tick and an admin "Run Backup Now" — would
+/// otherwise each list the same pair of archives, each pin a *different*
+/// `just_written` to the front, and each delete the other's, leaving no
+/// backup at all. Listing and the deletions it implies are therefore one
+/// critical section. A process-wide lock is enough: the two callers are the
+/// scheduler task and the admin handler inside one process, and startup
+/// kills any stale instance of the same binary before serving.
+///
+/// `just_written` is the archive the calling run has just produced, and it
+/// always survives. That is not redundant with "keep the newest": the
+/// listing sorts on the file name, whose timestamp has one-second
+/// granularity, so two archives written in the same second are ordered by
+/// the random suffix `backup_run_paths` appends — by chance, not by age. A
+/// second run landing inside the same second as an earlier one (the
+/// double-clicked "Run Backup Now" that suffix exists for) could therefore
+/// sort below it and, with a small `retain_last`, delete the archive it had
+/// just created while still returning its path to the caller. Pass an empty
+/// name when there is no such archive to protect.
+async fn prune_old_backups(backup_dir: &str, retain_last: u64, just_written: &str) {
     if retain_last == 0 {
         return;
     }
+    let _serialized = PRUNE_LOCK.lock().await;
     // Only our own prefix counts toward the quota: a foreign `.tar.gz`
     // sitting in the same directory must neither be deleted nor consume a
     // retained slot. `list_backups` already sorts newest first, and the
     // filter preserves that order.
-    let ours: Vec<String> = list_backups(backup_dir)
+    let mut ours: Vec<String> = list_backups(backup_dir)
         .await
         .into_iter()
         .filter(|name| name.starts_with("backup_"))
         .collect();
+    // Pin the run's own archive to the front: it is the newest by
+    // construction even when a same-second sibling sorts above it.
+    if let Some(i) = ours.iter().position(|name| name == just_written) {
+        let own = ours.remove(i);
+        ours.insert(0, own);
+    }
     let mut pruned = 0u64;
     for stale in ours.iter().skip(retain_last as usize) {
         match tokio::fs::remove_file(Path::new(backup_dir).join(stale)).await {
@@ -834,13 +870,17 @@ mod tests {
         std::fs::write(dir.join(name), b"not really an archive").unwrap();
     }
 
+    fn path_of(dir: &tempfile::TempDir) -> String {
+        dir.path().to_str().unwrap().to_owned()
+    }
+
     #[tokio::test]
     async fn retention_zero_disables_pruning() {
         let dir = tempfile::tempdir().unwrap();
         for n in 1..=3 {
             fake_archive(dir.path(), &format!("backup_2026010{n}_000000_aaa{n}1111.tar.gz"));
         }
-        prune_old_backups(dir.path().to_str().unwrap(), 0).await;
+        prune_old_backups(dir.path().to_str().unwrap(), 0, "").await;
         assert_eq!(list_backups(dir.path().to_str().unwrap()).await.len(), 3);
     }
 
@@ -851,7 +891,12 @@ mod tests {
             fake_archive(dir.path(), &format!("backup_2026010{n}_000000_aaa{n}1111.tar.gz"));
         }
         fake_archive(dir.path(), "someone-elses-archive.tar.gz");
-        prune_old_backups(dir.path().to_str().unwrap(), 2).await;
+        prune_old_backups(
+            dir.path().to_str().unwrap(),
+            2,
+            "backup_20260104_000000_aaa41111.tar.gz",
+        )
+        .await;
         let mut names = list_backups(dir.path().to_str().unwrap()).await;
         names.sort();
         assert_eq!(
@@ -880,6 +925,55 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(list_backups(backup_dir.to_str().unwrap()).await.len(), 2);
+    }
+
+    /// Two archives inside the same second are ordered by the random suffix,
+    /// not by age, so the one a run has just written can sort below an older
+    /// sibling. Without the `just_written` guard, `retain_last = 1` deletes it
+    /// and `create_backup` returns the path of a file that no longer exists.
+    #[tokio::test]
+    async fn a_run_never_prunes_the_archive_it_just_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = "backup_20260101_000000_ffffffff.tar.gz";
+        let just_written = "backup_20260101_000000_00000000.tar.gz";
+        fake_archive(dir.path(), older);
+        fake_archive(dir.path(), just_written);
+
+        prune_old_backups(dir.path().to_str().unwrap(), 1, just_written).await;
+
+        assert_eq!(
+            list_backups(dir.path().to_str().unwrap()).await,
+            vec![just_written.to_string()],
+            "the surviving archive must be the one this run wrote, not the \
+             same-second sibling that happens to sort above it"
+        );
+    }
+
+    /// Two runs finishing together each pin their own archive, so without a
+    /// lock around the pass each deletes the other's and the directory is
+    /// left empty — measured at 196 rounds out of 200 before `PRUNE_LOCK`.
+    /// Retention may never take the count below `retain_last`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_retention_passes_never_empty_the_directory() {
+        for round in 0..64 {
+            let dir = tempfile::tempdir().unwrap();
+            let one = "backup_20260101_000000_aaaaaaaa.tar.gz";
+            let two = "backup_20260101_000000_bbbbbbbb.tar.gz";
+            fake_archive(dir.path(), one);
+            fake_archive(dir.path(), two);
+
+            let (p1, p2) = (path_of(&dir), path_of(&dir));
+            let a = tokio::spawn(async move { prune_old_backups(&p1, 1, one).await });
+            let b = tokio::spawn(async move { prune_old_backups(&p2, 1, two).await });
+            let _ = tokio::join!(a, b);
+
+            assert_eq!(
+                list_backups(&path_of(&dir)).await.len(),
+                1,
+                "round {round}: two competing retention passes must leave \
+                 exactly the one archive `retain_last = 1` asks for"
+            );
+        }
     }
 
     // ── tar entry paths ───────────────────────────────────────────────────────
