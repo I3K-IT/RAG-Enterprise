@@ -221,8 +221,39 @@ pub fn collect_hardware_info(embeddings: Option<&EmbeddingService>, eullm_model:
 
 // ── Timing ───────────────────────────────────────────────────────────────────
 
+/// The four ingestion stages both reports measure.
+///
+/// An enum rather than a label string because the live report finds each
+/// stage by which one it is, and two free-form strings — the one the live
+/// recorder in `api::documents` writes and the one the report looks up —
+/// can drift apart without anything noticing. They did: from 0.1.25 to
+/// 0.1.45 a translation pass renamed the lookups here but not the
+/// recorder, `find` matched nothing, and the live report printed 0 ms for
+/// text extraction and Qdrant upsert on every real upload — halving the
+/// averages and keeping both stages out of the bottleneck ranking. A
+/// misnamed variant does not compile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    TextExtraction,
+    Chunking,
+    Embedding,
+    QdrantUpsert,
+}
+
+impl Stage {
+    /// The name both reports print.
+    pub fn label(self) -> &'static str {
+        match self {
+            Stage::TextExtraction => "Text extraction",
+            Stage::Chunking => "Chunking",
+            Stage::Embedding => "Embedding",
+            Stage::QdrantUpsert => "Qdrant upsert",
+        }
+    }
+}
+
 pub struct StageTiming {
-    pub name: &'static str,
+    pub stage: Stage,
     pub duration: Duration,
 }
 
@@ -393,10 +424,10 @@ async fn run_ingestion(
     Ok(IngestionResult {
         document_id,
         stages: vec![
-            StageTiming { name: "Text extraction", duration: extract_time },
-            StageTiming { name: "Chunking", duration: chunk_time },
-            StageTiming { name: "Embedding", duration: embed_time },
-            StageTiming { name: "Qdrant upsert", duration: upsert_time },
+            StageTiming { stage: Stage::TextExtraction, duration: extract_time },
+            StageTiming { stage: Stage::Chunking, duration: chunk_time },
+            StageTiming { stage: Stage::Embedding, duration: embed_time },
+            StageTiming { stage: Stage::QdrantUpsert, duration: upsert_time },
         ],
         page_count,
         word_count,
@@ -516,7 +547,7 @@ fn print_summary(hw: &HardwareInfo, ingestion: &IngestionResult, inferences: &[I
         ingestion.total().as_secs_f64() * 1000.0
     );
     for s in &ingestion.stages {
-        println!("  {:<20} {:>8.0} ms", s.name, s.ms());
+        println!("  {:<20} {:>8.0} ms", s.stage.label(), s.ms());
     }
     println!();
     for (i, inf) in inferences.iter().enumerate() {
@@ -587,20 +618,20 @@ fn write_markdown_report(
     md.push_str("| Stage | Time (ms) | % of total |\n|---|---|---|\n");
     let ingestion_total_ms = (ingestion.total().as_secs_f64() * 1000.0).max(0.001);
     for s in &ingestion.stages {
-        md.push_str(&format!("| {} | {:.0} | {:.1}% |\n", s.name, s.ms(), s.ms() / ingestion_total_ms * 100.0));
+        md.push_str(&format!("| {} | {:.0} | {:.1}% |\n", s.stage.label(), s.ms(), s.ms() / ingestion_total_ms * 100.0));
     }
     md.push_str(&format!("| **Total** | **{:.0}** | **100%** |\n", ingestion_total_ms));
 
     md.push_str("\n```mermaid\npie title Ingestion time per stage\n");
     for s in &ingestion.stages {
-        md.push_str(&format!("    \"{}\" : {:.1}\n", s.name, s.ms().max(0.1)));
+        md.push_str(&format!("    \"{}\" : {:.1}\n", s.stage.label(), s.ms().max(0.1)));
     }
     md.push_str("```\n");
 
     if let Some(worst) = ingestion.stages.iter().max_by(|a, b| a.duration.cmp(&b.duration)) {
         md.push_str(&format!(
             "\n**Ingestion bottleneck**: {} ({:.1}% of total time)\n",
-            worst.name,
+            worst.stage.label(),
             worst.ms() / ingestion_total_ms * 100.0
         ));
     }
@@ -638,7 +669,7 @@ fn write_markdown_report(
     let mut all_stages: Vec<(String, f64)> = ingestion
         .stages
         .iter()
-        .map(|s| (format!("Ingestion: {}", s.name), s.ms()))
+        .map(|s| (format!("Ingestion: {}", s.stage.label()), s.ms()))
         .collect();
     for (i, inf) in inferences.iter().enumerate() {
         all_stages.push((format!("Query {}: embedding", i + 1), inf.embed_query.as_secs_f64() * 1000.0));
@@ -751,11 +782,24 @@ fn write_live_report(
     ingestions: &[LiveIngestion],
     inferences: &[LiveInference],
 ) -> Result<PathBuf> {
-    let now = now_string();
     let path = PathBuf::from(format!(
         "benchmark-live-report-{}.md",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
+    let md = render_live_report(hw, started_at, ingestions, inferences);
+    std::fs::write(&path, md).with_context(|| format!("writing report {}", path.display()))?;
+    Ok(path)
+}
+
+/// The report's text, kept apart from writing it so a test can read what
+/// it says without leaving a file behind in the working directory.
+fn render_live_report(
+    hw: &HardwareInfo,
+    started_at: &str,
+    ingestions: &[LiveIngestion],
+    inferences: &[LiveInference],
+) -> String {
+    let now = now_string();
 
     let mut md = String::new();
     md.push_str(&format!(
@@ -791,8 +835,8 @@ fn write_live_report(
             "| Time | File | Pages | Words | Chunks | Extraction (ms) | Chunking (ms) | Embedding (ms) | Upsert (ms) | Total (ms) |\n|---|---|---|---|---|---|---|---|---|---|\n",
         );
         for ing in ingestions {
-            let stage_ms = |name: &str| {
-                ing.result.stages.iter().find(|s| s.name == name).map(|s| s.ms()).unwrap_or(0.0)
+            let stage_ms = |stage: Stage| {
+                ing.result.stages.iter().find(|s| s.stage == stage).map(|s| s.ms()).unwrap_or(0.0)
             };
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} |\n",
@@ -801,26 +845,26 @@ fn write_live_report(
                 hw_opt(ing.result.page_count),
                 ing.result.word_count,
                 ing.result.chunk_count,
-                stage_ms("Text extraction"),
-                stage_ms("Chunking"),
-                stage_ms("Embedding"),
-                stage_ms("Qdrant upsert"),
+                stage_ms(Stage::TextExtraction),
+                stage_ms(Stage::Chunking),
+                stage_ms(Stage::Embedding),
+                stage_ms(Stage::QdrantUpsert),
                 ing.result.total().as_secs_f64() * 1000.0,
             ));
         }
 
-        let by_stage = |name: &'static str| {
+        let by_stage = |stage: Stage| {
             avg_ms(
                 ingestions
                     .iter()
-                    .filter_map(move |i| i.result.stages.iter().find(|s| s.name == name))
+                    .filter_map(move |i| i.result.stages.iter().find(|s| s.stage == stage))
                     .map(|s| &s.duration),
             )
         };
-        let extract_avg = by_stage("Text extraction");
-        let chunk_avg = by_stage("Chunking");
-        let embed_avg = by_stage("Embedding");
-        let upsert_avg = by_stage("Qdrant upsert");
+        let extract_avg = by_stage(Stage::TextExtraction);
+        let chunk_avg = by_stage(Stage::Chunking);
+        let embed_avg = by_stage(Stage::Embedding);
+        let upsert_avg = by_stage(Stage::QdrantUpsert);
 
         md.push_str(&format!(
             "\n**Averages over {} ingestions**: extraction {extract_avg:.0} ms, chunking {chunk_avg:.0} ms, embedding {embed_avg:.0} ms, upsert {upsert_avg:.0} ms — {:.0} ms total on average.\n",
@@ -923,8 +967,7 @@ fn write_live_report(
         }
     }
 
-    std::fs::write(&path, md).with_context(|| format!("writing report {}", path.display()))?;
-    Ok(path)
+    md
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -1031,6 +1074,56 @@ fn swap_embedding_device(embeddings: &mut EmbeddingService, to_gpu: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_hardware() -> HardwareInfo {
+        HardwareInfo {
+            cpu_model: "test cpu".into(),
+            cpu_cores: 1,
+            ram_total_mb: 1,
+            gpu_name: None,
+            gpu_vram_total_mb: None,
+            gpu_vram_free_mb: None,
+            os: "test os".into(),
+            embedding_device: "cpu".into(),
+            eullm_model: "test model".into(),
+        }
+    }
+
+    /// Every stage the live recorder writes must land in its own column.
+    /// Before `Stage`, the recorder wrote "Estrazione testo" and "Upsert
+    /// Qdrant" while the report looked up "Text extraction" and "Qdrant
+    /// upsert": this row then read `0 | 22 | 33 | 0` against a total of 110,
+    /// and the averages claimed 55 ms where 110 had been spent.
+    #[test]
+    fn live_report_reads_every_ingestion_stage() {
+        let ms = Duration::from_millis;
+        let ingestion = LiveIngestion {
+            at: "12:00:00".into(),
+            filename: "report.pdf".into(),
+            result: IngestionResult {
+                document_id: "doc".into(),
+                stages: vec![
+                    StageTiming { stage: Stage::TextExtraction, duration: ms(11) },
+                    StageTiming { stage: Stage::Chunking, duration: ms(22) },
+                    StageTiming { stage: Stage::Embedding, duration: ms(33) },
+                    StageTiming { stage: Stage::QdrantUpsert, duration: ms(44) },
+                ],
+                page_count: None,
+                word_count: 0,
+                char_count: 0,
+                chunk_count: 0,
+            },
+        };
+
+        let md = render_live_report(&test_hardware(), "start", &[ingestion], &[]);
+
+        let row = md.lines().find(|l| l.contains("report.pdf")).expect("ingestion row");
+        assert!(row.ends_with("| 11 | 22 | 33 | 44 | 110 |"), "ingestion row: {row}");
+        assert!(
+            md.contains("extraction 11 ms, chunking 22 ms, embedding 33 ms, upsert 44 ms — 110 ms total"),
+            "averages line does not account for every stage:\n{md}"
+        );
+    }
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

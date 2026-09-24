@@ -368,10 +368,10 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
             bench::IngestionResult {
                 document_id: document_id.clone(),
                 stages: vec![
-                    bench::StageTiming { name: "Estrazione testo", duration: extract_time },
-                    bench::StageTiming { name: "Chunking", duration: chunk_time },
-                    bench::StageTiming { name: "Embedding", duration: embed_time },
-                    bench::StageTiming { name: "Upsert Qdrant", duration: upsert_time },
+                    bench::StageTiming { stage: bench::Stage::TextExtraction, duration: extract_time },
+                    bench::StageTiming { stage: bench::Stage::Chunking, duration: chunk_time },
+                    bench::StageTiming { stage: bench::Stage::Embedding, duration: embed_time },
+                    bench::StageTiming { stage: bench::Stage::QdrantUpsert, duration: upsert_time },
                 ],
                 page_count,
                 word_count: text.split_whitespace().count(),
