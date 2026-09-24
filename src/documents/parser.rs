@@ -64,7 +64,7 @@ pub struct ExtractedText {
 /// The two are pinned together by a test in this module; if you add an arm
 /// below, add it here too or that test fails.
 pub const SUPPORTED_EXTENSIONS: &[&str] =
-    &["txt", "md", "csv", "pdf", "docx", "doc", "xlsx", "xls", "html", "htm"];
+    &["txt", "md", "csv", "pdf", "docx", "doc", "xlsx", "xls", "xlsm", "xlsb", "ods", "html", "htm"];
 
 /// Whether `ext` (lowercase, no dot) is one this parser can read.
 pub fn is_supported_extension(ext: &str) -> bool {
@@ -77,8 +77,35 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+    guarded(&ext, || read_by_extension(path, data_dir, &ext))
+}
 
-    match ext.as_str() {
+/// Runs one format's reader and turns a panic inside it into an error.
+///
+/// Every reader — ours or a third-party crate — parses bytes an uploader
+/// chose, so a panic in one is a bug in that reader, but it must reach the
+/// caller as "this file cannot be read", not unwind through it. calamine
+/// 0.36.1 (the current release) panics on an .xlsb whose sheet relationship
+/// it looks up without checking: the upload answered 500 "parse task
+/// panicked" instead of 422, and `--bench` would simply have crashed. The
+/// release profile unwinds (no `panic = "abort"`), so this does catch it.
+fn guarded<T>(ext: &str, read: impl FnOnce() -> Result<T>) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)) {
+        Ok(result) => result,
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            tracing::warn!(ext, panic = %why, "a document reader panicked");
+            Err(anyhow::anyhow!("this .{ext} file could not be read: its reader failed on it"))
+        }
+    }
+}
+
+fn read_by_extension(path: &Path, data_dir: &Path, ext: &str) -> Result<ExtractedText> {
+    match ext {
         "txt" | "md" | "csv" => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
@@ -87,7 +114,7 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
         "pdf" => extract_pdf(path, data_dir),
         "docx" => extract_docx(path).map(|text| ExtractedText { text, ..Default::default() }),
         "doc" => extract_doc(path).map(|text| ExtractedText { text, ..Default::default() }),
-        "xlsx" | "xls" => extract_xlsx(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "xlsx" | "xls" | "xlsm" | "xlsb" | "ods" => extract_xlsx(path).map(|text| ExtractedText { text, ..Default::default() }),
         "html" | "htm" => extract_html(path).map(|text| ExtractedText { text, ..Default::default() }),
         _ => Err(anyhow::anyhow!("unsupported format: .{ext}")),
     }
@@ -249,7 +276,7 @@ fn extract_xlsx(path: &Path) -> Result<String> {
     // through the ZIP check, every real one was refused as "not a readable
     // zip archive" from 0.1.41, when the check arrived, until 0.1.46.
     if is_zip(path)? {
-        reject_decompression_bomb(path, "xlsx")?;
+        reject_decompression_bomb(path, "spreadsheet")?;
     }
     let mut wb = open_workbook_auto(path)
         .with_context(|| format!("calamine open {}", path.display()))?;
@@ -418,6 +445,15 @@ mod tests {
         assert!(e.to_string().contains("unsupported format"), "unexpected: {e}");
     }
 
+    /// A reader that panics must come back as an ordinary error. (The
+    /// panic message this prints is expected.)
+    #[test]
+    fn a_panicking_reader_becomes_an_error() {
+        let e = guarded::<()>("xlsb", || panic!("index out of range")).unwrap_err();
+        assert!(e.to_string().contains("could not be read"), "{e:#}");
+        assert_eq!(guarded("txt", || Ok::<_, anyhow::Error>(7)).unwrap(), 7);
+    }
+
     /// A genuine Excel 97–2003 workbook: an OLE compound file, not a ZIP.
     /// Generated once with xlwt 1.3.0; one sheet, a title and a small table.
     const LEGACY_XLS: &[u8] = include_bytes!("testdata/legacy.xls");
@@ -445,6 +481,27 @@ mod tests {
             text.contains("Quarter") && text.contains("Q2"),
             "table missing: {text:?}"
         );
+    }
+
+    /// .xlsm (macro-enabled; the macros are never run, only cell values
+    /// read) and .ods, both saved by LibreOffice 24.2 from the same small
+    /// table. .xlsb goes through the same calamine reader; LibreOffice
+    /// cannot write it, so it has no fixture here.
+    #[test]
+    fn other_spreadsheet_formats_are_read() {
+        let fixtures: [(&str, &[u8]); 2] = [
+            ("sheet.ods", include_bytes!("testdata/sheet.ods")),
+            ("sheet.xlsm", include_bytes!("testdata/sheet.xlsm")),
+        ];
+        for (name, bytes) in fixtures {
+            let dir = tempfile::tempdir().unwrap();
+            let f = dir.path().join(name);
+            std::fs::write(&f, bytes).unwrap();
+            let text = extract_text(&f, dir.path()).unwrap_or_else(|e| panic!("{name}: {e:#}")).text;
+            for expected in ["Quarter", "Città di Roma", "Perù €", "1250"] {
+                assert!(text.contains(expected), "{name}: missing {expected:?} in {text:?}");
+            }
+        }
     }
 
     /// The check goes by content: a ZIP renamed to .xls is still inspected
