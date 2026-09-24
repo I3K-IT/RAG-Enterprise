@@ -1,4 +1,4 @@
-//! Qdrant connector — implementa VectorStore.
+//! Qdrant connector — implements VectorStore.
 //!
 //! Parity with the Python qdrant_connector.py:
 //! - Collection: "rag_documents", size 1024, distance COSINE
@@ -155,7 +155,7 @@ impl VectorStore for QdrantStore {
                     if let Some(v) = &p.retrieval_text {
                         obj["retrieval_text"] = serde_json::json!(v);
                     }
-                    let payload = Payload::try_from(obj).expect("shape JSON valido");
+                    let payload = Payload::try_from(obj).expect("valid JSON shape");
                     PointStruct::new(id, emb.clone(), payload)
                 })
                 .collect();

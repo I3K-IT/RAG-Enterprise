@@ -231,7 +231,7 @@ async fn prepare(
         chars = full_prompt.len(),
         chunks = sources.len(),
         history_pairs = history.len(),
-        "prompt costruito"
+        "prompt built"
     );
     Ok((full_prompt, sources, PrepareTimings { embed_query, search, prompt_build }))
 }

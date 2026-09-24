@@ -87,7 +87,7 @@ pub async fn find_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserRo
     Ok(row)
 }
 
-/// Crea o aggiorna l'admin di default.
+/// Creates the default admin, or resets its password when explicitly asked to.
 ///
 /// Behaviour:
 /// - The admin does not exist yet → created, with `AUTH__ADMIN_DEFAULT_PASSWORD`
@@ -167,11 +167,11 @@ pub async fn seed_admin(
         .map(char::from)
         .collect();
     tracing::warn!("========================================");
-    tracing::warn!("ACCOUNT ADMIN CREATO CON PASSWORD CASUALE");
+    tracing::warn!("ADMIN ACCOUNT CREATED WITH A RANDOM PASSWORD");
     tracing::warn!("  Username: admin");
     tracing::warn!("  Password: {generated}");
     tracing::warn!("SAVE THIS PASSWORD — it will not be shown again!");
-    tracing::warn!("Per impostarne una fissa alla PRIMA installazione: AUTH__ADMIN_DEFAULT_PASSWORD=...");
+    tracing::warn!("To set a fixed one on the FIRST install: AUTH__ADMIN_DEFAULT_PASSWORD=...");
     tracing::warn!("========================================");
     let hash = password::hash(&generated)?;
     create(pool, "admin", "admin@rag-engine.local", &hash, Role::Admin).await?;

@@ -1,8 +1,8 @@
 //! Endpoints for managing conversations:
-//! GET    /api/conversations            → lista conversazioni utente
-//! POST   /api/conversations            → crea nuova conversazione
-//! PUT    /api/conversations/{id}       → rinomina
-//! DELETE /api/conversations/{id}       → elimina + messaggi
+//! GET    /api/conversations            → the user's conversations
+//! POST   /api/conversations            → create a new conversation
+//! PUT    /api/conversations/{id}       → rename
+//! DELETE /api/conversations/{id}       → delete, with its messages
 //! GET    /api/conversations/{id}/messages → messages of one conversation
 
 use axum::{

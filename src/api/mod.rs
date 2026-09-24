@@ -201,10 +201,9 @@ mod tests {
     /// for path params. The `{name}` syntax belongs to axum 0.8+: on 0.7 it is
     /// treated as a LITERAL segment and so never matches a real value. The only
     /// service that then catches those requests is the SPA fallback (ServeDir),
-    /// which
-    /// risponde 405 su DELETE/PUT e servirebbe silenziosamente index.html su GET.
-    /// Bug reale riscontrato in produzione (delete documenti/qdrant/conversazioni
-    /// answered them all with 405 — this test stops that recurring.
+    /// which answers 405 to DELETE/PUT and would silently serve index.html on
+    /// GET. A real bug, seen in production: deleting documents, Qdrant data and
+    /// conversations all answered 405 — this test stops that recurring.
     #[test]
     fn no_axum_08_style_path_params() {
         let src = include_str!("mod.rs");

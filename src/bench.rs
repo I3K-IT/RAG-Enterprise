@@ -511,7 +511,7 @@ async fn run_inference(
     })
 }
 
-// ── Collection Qdrant dedicata ──────────────────────────────────────────────
+// ── Dedicated Qdrant collection ─────────────────────────────────────────────
 
 /// Wipes the benchmark collection before each run so results never mix with
 /// those of earlier runs. Never the user's real collection. QdrantStore::new

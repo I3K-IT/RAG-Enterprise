@@ -99,7 +99,7 @@ pub trait VectorStore: Send + Sync {
         score_threshold: Option<f32>,
     ) -> Result<Vec<SearchHit>>;
 
-    /// Cancella tutti i vettori di un documento.
+    /// Deletes every vector belonging to one document.
     /// INVARIANT: call this BEFORE updating SQLite.
     async fn delete_document(&self, document_id: &str) -> Result<()>;
 }

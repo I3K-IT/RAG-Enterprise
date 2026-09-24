@@ -1092,7 +1092,7 @@ pub async fn start_eullm(
             ),
         }
     } else {
-        tracing::info!("manage_subprocesses=false — processi esterni attesi (eullm)");
+        tracing::info!("manage_subprocesses=false — expecting external processes (eullm)");
     }
 
     wait_for_url(
@@ -1800,7 +1800,7 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     save_eullm_override(data_dir, &ov).await;
 }
 
-// ── Spazio disco ──────────────────────────────────────────────────────────────
+// ── Disk space ────────────────────────────────────────────────────────────────
 
 fn check_disk_space(selected: &[&Component], data_dir: &Path) -> Result<()> {
     struct Item<'a> {
@@ -1947,7 +1947,7 @@ fn write_all_at_portable(file: &std::fs::File, mut buf: &[u8], mut offset: u64) 
     Ok(())
 }
 
-// ── Avvio processi ────────────────────────────────────────────────────────────
+// ── Process startup ───────────────────────────────────────────────────────────
 
 /// Looks a component up by name, honouring target priority (used to decide
 /// which qdrant to start). Iterates targets from most specific and takes the
@@ -2484,7 +2484,7 @@ async fn download_streaming(
     use tokio::io::AsyncWriteExt;
     let is_tty = std::io::stderr().is_terminal();
     let total = resp.content_length().unwrap_or(0);
-    let mut file = tokio::fs::File::create(dest).await.context("crea file")?;
+    let mut file = tokio::fs::File::create(dest).await.context("create file")?;
     let mut downloaded: u64 = 0;
     let mut stream = resp;
     let start = Instant::now();
