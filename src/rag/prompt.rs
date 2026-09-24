@@ -86,7 +86,7 @@ mod tests {
     fn truncate_counts_chars_not_bytes() {
         // Parity with Python's s[:800]: counts code points, not bytes.
         let s: String = "é".repeat(500); // 500 char, 1000 byte
-        assert_eq!(truncate(&s, 800), s); // sotto soglia in CHAR → invariato
+        assert_eq!(truncate(&s, 800), s); // below threshold in CHARs → unchanged
     }
 
     #[test]
