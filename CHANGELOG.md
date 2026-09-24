@@ -22,6 +22,27 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
+## [0.1.45] - 2026-09-17
+
+### Fixed
+
+- **Conversation titles are capped at 200 characters.** `PUT
+  /api/conversations/{id}` only rejected empty titles, so anything up
+  to the 2 MB JSON body limit was stored verbatim and returned on
+  every list call — while the UI only ever shows ~50 characters. Now
+  enforced up front via a tested `validate_title`, mirroring
+  `validate_query` (characters, not bytes).
+
+- **Startup now refuses a misconfigured eullm context sizing.**
+  `EULLM__NUM_CTX * EULLM__BATCH_SIZE` becomes `--ctx-size`, but neither
+  side was validated: `0` started eullm with no context or no slot, and
+  an absurd pair overflowed `u32` — panicking in debug, wrapping in
+  release into a garbage context a RAG prompt will not fit in. Both are
+  rejected fail-fast in `Settings::load`, following the existing
+  `validate_auth`/`validate_storage` pattern.
+
+---
+
 ## [0.1.44] - 2026-09-16
 
 ### Fixed
