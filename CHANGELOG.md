@@ -22,6 +22,106 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
+## [0.1.46] - 2026-09-24
+
+### Added
+
+- **Backups can now prune old archives.** New `BACKUP__RETAIN_LAST`:
+  after each successful backup, archives beyond that many newest are
+  removed, oldest first. `0` (the default) disables pruning and keeps
+  the historical accumulate-forever behaviour — daily backups no
+  longer fill the disk unnoticed. Pruning only ever touches `backup_*`
+  names, never the archive the run has just written, and only warns on
+  failure, never failing the backup itself.
+
+- **`.env.example` is now checked against the settings the loader
+  reads.** A test keeps the template and a list of every
+  `SECTION__FIELD` key in step, in both directions: a key the template
+  assigns but the loader does not know — a typo, or a setting since
+  removed — fails the build, and so does a listed setting missing from
+  the template. It matters because unknown variables are ignored
+  silently, so a misspelled one looked configured while doing nothing.
+  The list is kept by hand next to the settings: a new setting still
+  has to be added to it to be covered.
+
+- **Regression coverage for four untested pure helpers.**
+  `expand_tilde` (data-dir resolution), `fmt_bytes`/`fmt_eta`
+  (bootstrap progress output) and `is_bad_request` (the 400-vs-500
+  split on restore failures) were deterministic and load-bearing but
+  had zero tests. Covered now, boundaries included. `l2_normalize`
+  was deliberately left out: it is dead code, and testing it would
+  cement it instead of questioning it.
+
+### Changed
+
+- **The benchmark report and its logs are fully English.**
+  Completes the translation pass: section headers, table labels,
+  mermaid slices, console lines and tracing messages that were still
+  Italian now match the rest of the report. Comments, output and log
+  strings only; no behavioral change.
+
+- **The application's last Italian text is now English.** In the web
+  UI: the admin panel's Qdrant and SQLite tabs, the chat's error and
+  timeout messages, the source list and the ingestion banner — and the
+  dates in that panel now follow the browser's locale instead of being
+  forced to Italian. In the server: the first-install banner that
+  prints the generated admin password, the `embedding_device` value
+  `/api/info` reports when the embedding lock is poisoned, the warning
+  logged when a CUDA embedding batch runs out of memory, and the doc
+  comments and log lines left over from earlier passes. Italian that is
+  there on purpose stays: the heading keywords the chunker matches in
+  Italian documents (`articolo`, `capitolo`, …), the multilingual
+  example inside the answer prompt, and Italian test fixtures.
+
+### Fixed
+
+- **Two backups started in the same second no longer overwrite each
+  other.** Archive and work-dir names had one-second granularity, so a
+  double-clicked "Run Backup Now" (or a manual run landing on the cron
+  tick) silently replaced the first archive with the second. Names now
+  carry a short random suffix after the timestamp prefix the listing
+  sorts on.
+
+- **`--bench-live` reports every ingestion stage again.** Since 0.1.25
+  the live report showed 0 ms for text extraction and Qdrant upsert on
+  every real upload: a translation pass renamed the stage names the
+  report looks up, but not the names the upload handler records them
+  under, and the lookup fell back to zero without a word. Each row's
+  columns no longer added up to its own total, the averages understated
+  the real time, and neither stage could ever be named the bottleneck.
+  Stages are now an enum, so the two sides cannot disagree again.
+
+- **The `top_k` request field is honored instead of silently ignored.**
+  `POST /api/query` accepted `top_k` but always retrieved the
+  hardcoded 15. A value sent by an API client is now used, clamped to
+  `1..=50` so nothing fans out to Qdrant unbounded; absent still means
+  15. The web UI used to send `top_k: 5`, which the backend ignored —
+  it no longer sends it, so its answers keep the depth of 15 they have
+  always had instead of dropping to a third of their context.
+
+- **Downloads stream instead of buffering the whole file in RAM.**
+  `GET /api/documents/{id}/download` loaded the entire original (up to
+  the 1024 MB cap) before responding — the same peak the upload path
+  just stopped paying. The file now streams with a `Content-Length`
+  header; headers and 404 behavior are unchanged. A read failing
+  mid-stream truncates rather than 404s, inherent to streaming.
+
+- **An unknown role in the database now logs instead of silently
+  demoting.** `UserRow::role()` fell back to `User` on any unparsable
+  value, and the role is re-read from the row on login and on every
+  request — so a typo or a corrupt row could demote anyone, admin
+  included, with nothing in the log saying why. Still fail-closed
+  toward the least privilege, now with a warning naming the user and
+  the offending value.
+
+- **The upload dialog no longer offers `.pptx` and no longer hides
+  `.md`/`.csv`.** The file picker's allow-list had drifted from
+  `SUPPORTED_EXTENSIONS`: `.pptx` was offered but refused after
+  selection, while `.md` and `.csv` parsed fine but were undiscoverable.
+  One-line sync plus the rebuilt bundle, per repo convention.
+
+---
+
 ## [0.1.45] - 2026-09-17
 
 ### Fixed
