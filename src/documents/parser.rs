@@ -223,7 +223,13 @@ fn push_paragraph_text(out: &mut String, para: &docx_rs::Paragraph) {
 
 fn extract_xlsx(path: &Path) -> Result<String> {
     use calamine::{open_workbook_auto, Reader};
-    reject_decompression_bomb(path, "xlsx")?;
+    // Only a ZIP container (.xlsx) can be a decompression bomb. A legacy
+    // .xls is an OLE compound file that calamine reads natively: sent
+    // through the ZIP check, every real one was refused as "not a readable
+    // zip archive" from 0.1.41, when the check arrived, until 0.1.46.
+    if is_zip(path)? {
+        reject_decompression_bomb(path, "xlsx")?;
+    }
     let mut wb = open_workbook_auto(path)
         .with_context(|| format!("calamine open {}", path.display()))?;
     let mut out = String::new();
@@ -286,6 +292,25 @@ fn total_within_limit(sizes: impl Iterator<Item = u64>) -> Result<u64, u64> {
 /// Catching that needs the decompression itself to run through a capped
 /// reader, which means either patching the parsers or decompressing twice —
 /// worth doing, but not at this price.
+/// Whether `path` holds a ZIP container, judged by its first bytes rather
+/// than its extension — so an .xlsx renamed to .xls is still checked for
+/// decompression bombs, and a genuine .xls is not mistaken for a broken
+/// ZIP. Local-file, empty-archive and spanned-archive signatures all count.
+fn is_zip(path: &Path) -> Result<bool> {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    match file.read_exact(&mut magic) {
+        Ok(()) => Ok(matches!(
+            &magic,
+            b"PK\x03\x04" | b"PK\x05\x06" | b"PK\x07\x08"
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
 fn reject_decompression_bomb(path: &Path, kind: &str) -> Result<()> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("opening {kind} {}", path.display()))?;
@@ -332,6 +357,10 @@ mod tests {
     /// read. Each extension is exercised against an empty file — what
     /// matters is only that the answer is NOT "unsupported format", which
     /// is the one error the dispatch's catch-all arm produces.
+    ///
+    /// That proves dispatch, not parsing: an extension can be routed and
+    /// still never succeed. .xls passed here for five releases while every
+    /// real .xls was refused — see `a_real_xls_is_read_not_refused_as_a_zip`.
     #[test]
     fn supported_extensions_match_the_dispatch() {
         let dir = tempfile::tempdir().unwrap();
@@ -356,6 +385,51 @@ mod tests {
         std::fs::write(&f, b"").unwrap();
         let e = extract_text(&f, dir.path()).unwrap_err();
         assert!(e.to_string().contains("unsupported format"), "unexpected: {e}");
+    }
+
+    /// A genuine Excel 97–2003 workbook: an OLE compound file, not a ZIP.
+    /// Generated once with xlwt 1.3.0; one sheet, a title and a small table.
+    const LEGACY_XLS: &[u8] = include_bytes!("testdata/legacy.xls");
+
+    #[test]
+    fn a_real_xls_is_read_not_refused_as_a_zip() {
+        assert_eq!(
+            &LEGACY_XLS[..4],
+            b"\xD0\xCF\x11\xE0",
+            "fixture is not an OLE file"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("legacy.xls");
+        std::fs::write(&f, LEGACY_XLS).unwrap();
+
+        let text = extract_text(&f, dir.path())
+            .expect("a real .xls must parse")
+            .text;
+
+        assert!(
+            text.contains("Legacy spreadsheet"),
+            "title cell missing: {text:?}"
+        );
+        assert!(
+            text.contains("Quarter") && text.contains("Q2"),
+            "table missing: {text:?}"
+        );
+    }
+
+    /// The check goes by content: a ZIP renamed to .xls is still inspected
+    /// as one, rather than handed to the OLE reader unchecked.
+    #[test]
+    fn a_zip_named_xls_still_goes_through_the_bomb_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("renamed.xls");
+        std::fs::write(&f, b"PK\x03\x04 not really an archive").unwrap();
+
+        let e = extract_text(&f, dir.path()).unwrap_err();
+
+        assert!(
+            format!("{e:#}").contains("zip archive"),
+            "bomb check skipped: {e:#}"
+        );
     }
 
     fn span(page: u32, start: usize, end: usize) -> PageSpan {

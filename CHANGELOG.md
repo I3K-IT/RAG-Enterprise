@@ -120,6 +120,14 @@ separate files is what stops two pull requests colliding in this one.
   selection, while `.md` and `.csv` parsed fine but were undiscoverable.
   One-line sync plus the rebuilt bundle, per repo convention.
 
+- **Legacy `.xls` spreadsheets upload again.** Since 0.1.41 every
+  Excel 97–2003 workbook was refused with "xlsx is not a readable zip
+  archive": the check against decompression bombs — which only ZIP
+  containers can be — ran on every spreadsheet, and a real `.xls` is
+  not a ZIP. It now runs only when the file actually is one, judged by
+  its content rather than its name, so an `.xlsx` renamed to `.xls` is
+  still inspected.
+
 ---
 
 ## [0.1.45] - 2026-09-17
