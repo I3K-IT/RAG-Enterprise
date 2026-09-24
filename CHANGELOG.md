@@ -34,6 +34,17 @@ separate files is what stops two pull requests colliding in this one.
   names, never the archive the run has just written, and only warns on
   failure, never failing the backup itself.
 
+- **`.doc` files are read — Word 6.0 through 2003.** The upload dialog
+  accepted them, but every real one failed: `.doc` went to the `.docx`
+  reader, which only understands the ZIP-based format. The binary
+  format is now read directly, with no external converter — body,
+  footnotes, headers and tables, the visible text of links and other
+  fields, Unicode, and for Word 6.0/95, which predates Unicode, the code
+  page named by the document's fonts. A file is read by what it
+  contains, so a `.docx` renamed to `.doc` still works. Password-protected
+  documents and those older than Word 6.0 are refused with a message
+  saying so.
+
 - **`.env.example` is now checked against the settings the loader
   reads.** A test keeps the template and a list of every
   `SECTION__FIELD` key in step, in both directions: a key the template

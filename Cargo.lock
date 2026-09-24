@@ -597,6 +597,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfb"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f13298d9178622b7916ec5d01d470425c04273c8ed07e87b1c38b34c4f4612b"
+dependencies = [
+ "fnv",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2262,11 +2273,13 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "cfb",
  "chrono",
  "config",
  "csv",
  "docx-rs",
  "dotenvy",
+ "encoding_rs",
  "flate2",
  "futures-util",
  "jsonwebtoken",

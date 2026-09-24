@@ -85,7 +85,8 @@ pub fn extract_text(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
             Ok(ExtractedText { text, ..Default::default() })
         }
         "pdf" => extract_pdf(path, data_dir),
-        "docx" | "doc" => extract_docx(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "docx" => extract_docx(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "doc" => extract_doc(path).map(|text| ExtractedText { text, ..Default::default() }),
         "xlsx" | "xls" => extract_xlsx(path).map(|text| ExtractedText { text, ..Default::default() }),
         "html" | "htm" => extract_html(path).map(|text| ExtractedText { text, ..Default::default() }),
         _ => Err(anyhow::anyhow!("unsupported format: .{ext}")),
@@ -176,6 +177,26 @@ fn extract_docx(path: &Path) -> Result<String> {
     let docx = docx_rs::read_docx(&bytes)
         .map_err(|e| anyhow::anyhow!("docx parse: {e:?}"))?;
     Ok(collect_docx_text(&docx))
+}
+
+/// Word 6.0–2003 (.doc). What a file named .doc contains is checked first:
+/// a .docx renamed to .doc is common, and Word itself saves RTF under that
+/// extension when asked to.
+fn extract_doc(path: &Path) -> Result<String> {
+    let head = head(path)?;
+    if head.starts_with(&OLE_MAGIC) {
+        return super::msdoc::extract_text(path, MAX_UNCOMPRESSED_BYTES);
+    }
+    if is_zip_magic(&head) {
+        return extract_docx(path);
+    }
+    if head.starts_with(b"{\\rtf") {
+        anyhow::bail!("this .doc is actually an RTF file, which is not supported yet");
+    }
+    if head.starts_with(&[0xDB, 0xA5]) {
+        anyhow::bail!("this .doc was saved by Word 2.0, which is not supported — save it as .docx");
+    }
+    anyhow::bail!("this .doc is neither a Word 6.0–2003 document nor a .docx")
 }
 
 fn collect_docx_text(docx: &docx_rs::Docx) -> String {
@@ -292,23 +313,33 @@ fn total_within_limit(sizes: impl Iterator<Item = u64>) -> Result<u64, u64> {
 /// Catching that needs the decompression itself to run through a capped
 /// reader, which means either patching the parsers or decompressing twice —
 /// worth doing, but not at this price.
+/// Signature of an OLE compound file: .doc, .xls and the other Office
+/// 97–2003 formats.
+const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Up to the first 8 bytes of `path`: enough to tell the containers apart.
+fn head(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(8);
+    std::fs::File::open(path)
+        .with_context(|| format!("opening {}", path.display()))?
+        .take(8)
+        .read_to_end(&mut head)
+        .with_context(|| format!("reading {}", path.display()))?;
+    Ok(head)
+}
+
+/// Local-file, empty-archive and spanned-archive signatures all count.
+fn is_zip_magic(head: &[u8]) -> bool {
+    [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"].iter().any(|m| head.starts_with(*m))
+}
+
 /// Whether `path` holds a ZIP container, judged by its first bytes rather
 /// than its extension — so an .xlsx renamed to .xls is still checked for
 /// decompression bombs, and a genuine .xls is not mistaken for a broken
-/// ZIP. Local-file, empty-archive and spanned-archive signatures all count.
+/// ZIP.
 fn is_zip(path: &Path) -> Result<bool> {
-    use std::io::Read;
-    let mut magic = [0u8; 4];
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    match file.read_exact(&mut magic) {
-        Ok(()) => Ok(matches!(
-            &magic,
-            b"PK\x03\x04" | b"PK\x05\x06" | b"PK\x07\x08"
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
+    Ok(is_zip_magic(&head(path)?))
 }
 
 fn reject_decompression_bomb(path: &Path, kind: &str) -> Result<()> {
@@ -430,6 +461,26 @@ mod tests {
             format!("{e:#}").contains("zip archive"),
             "bomb check skipped: {e:#}"
         );
+    }
+
+    /// A file named .doc is dispatched on what it contains.
+    #[test]
+    fn a_doc_is_read_by_what_it_contains_not_by_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases: [(&[u8], &str); 3] = [
+            // a .docx renamed: goes to the .docx reader and its bomb check
+            (b"PK\x03\x04 not really an archive", "zip archive"),
+            // RTF that Word saved under .doc
+            (b"{\\rtf1\\ansi hello}", "RTF"),
+            // Word 2.0, from before the OLE container
+            (&[0xDB, 0xA5, 0x2D, 0x00, 0x31, 0x40], "Word 2.0"),
+        ];
+        for (bytes, expected) in cases {
+            let f = dir.path().join("sample.doc");
+            std::fs::write(&f, bytes).unwrap();
+            let e = extract_text(&f, dir.path()).unwrap_err();
+            assert!(format!("{e:#}").contains(expected), "expected {expected:?}, got: {e:#}");
+        }
     }
 
     fn span(page: u32, start: usize, end: usize) -> PageSpan {

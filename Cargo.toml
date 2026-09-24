@@ -52,6 +52,10 @@ pdfium-render = { version = "0.8", features = ["sync"] }
 libloading = "0.8"
 # Other formats (no Tika in the Community core):
 calamine = "0.36"
+# Word 97–2003 (.doc): the OLE compound-file container. The text inside it is
+# read by documents::word97, following [MS-DOC].
+cfb = "0.15"
+encoding_rs = "0.8"
 docx-rs = "0.4"
 zip = "2"
 scraper = "0.21"
