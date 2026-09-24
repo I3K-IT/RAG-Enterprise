@@ -227,7 +227,7 @@ impl AppState {
             let guard = embeddings.read().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
             guard.model_id().to_owned()
         };
-        let fresh = loader(&model_id).context("reload embedding su nuovo device")?;
+        let fresh = loader(&model_id).context("reload embedding onto the new device")?;
         let mut guard = embeddings.write().map_err(|_| anyhow::anyhow!("embeddings: lock poisoned"))?;
         *guard = fresh;
         Ok(())

@@ -2657,7 +2657,7 @@ mod progress_guard_tests {
 
     #[test]
     fn drop_without_commit_rolls_back_only_this_attempt() {
-        let counter = AtomicU64::new(1_000); // byte già committati da altri pezzi
+        let counter = AtomicU64::new(1_000); // bytes already committed by other pieces
         {
             let mut guard = ProgressGuard::new(&counter);
             guard.add(100);
@@ -2716,7 +2716,7 @@ async fn fetch_chunk_once(
     Ok(buf)
 }
 
-// ── Formattatori ─────────────────────────────────────────────────────────────
+// ── Formatters ─────────────────────────────────────────────────────────────
 
 fn fmt_bytes(b: u64) -> String {
     const GB: u64 = 1 << 30;

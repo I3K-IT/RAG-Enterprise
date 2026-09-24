@@ -325,11 +325,11 @@ impl StorageSettings {
 /// uploads stream to disk it can be raised.
 pub const MAX_UPLOAD_MB: u64 = 1024;
 
-/// Radice dati: binari, modelli, storage Qdrant, db SQLite, uploads.
+/// Data root: binaries, models, Qdrant storage, SQLite db, uploads.
 /// Layout: {dir}/bin/  {dir}/models/  {dir}/storage/  {dir}/db/  {dir}/uploads/  {dir}/tmp/
 #[derive(Debug, Deserialize)]
 pub struct DataSettings {
-    /// Percorso radice (default: cartella dell'eseguibile — portable app dir).
+    /// Root path (default: the executable's folder — portable app dir).
     /// Dev override: DATA__DIR=/path/to/working/dir (the binary lives in target/debug/).
     #[serde(default = "default_data_dir")]
     pub dir: String,
