@@ -85,6 +85,10 @@ separate files is what stops two pull requests colliding in this one.
   transparent background is laid over white, so dark text on it is not
   read as black on black.
 
+- **`.xlsm`, `.xlsb` and `.ods` spreadsheets are read.** The reader
+  behind `.xlsx` already understood them; they were simply not accepted.
+  Macros in an `.xlsm` are never run — only cell values are read.
+
 - **`.env.example` is now checked against the settings the loader
   reads.** A test keeps the template and a list of every
   `SECTION__FIELD` key in step, in both directions: a key the template
@@ -134,6 +138,16 @@ separate files is what stops two pull requests colliding in this one.
   e-mail. Since an unchanged `.html` file now extracts differently,
   `EXTRACTION_CONFIG_VERSION` is 2: chunks ingested from now on carry
   `pv2` in their provenance id.
+
+- **The chat history no longer stores a copy of every source's text.**
+  Each answer was saved together with the full text of every chunk it was
+  built from — up to 15 of them, 10–15 KB per question, kept for good —
+  although nothing ever displayed it: the web UI shows a source's file,
+  pages and score. Stored sources now keep only what locates the passage
+  (document, chunk, byte range, pages), so each question takes about a
+  quarter of the space. The live answer still carries the chunk text.
+  Messages already in the history are left as they are; for new ones,
+  `GET /api/chat/history` returns sources without `text`.
 
 ### Fixed
 
@@ -189,6 +203,12 @@ separate files is what stops two pull requests colliding in this one.
   not a ZIP. It now runs only when the file actually is one, judged by
   its content rather than its name, so an `.xlsx` renamed to `.xls` is
   still inspected.
+
+- **A file that crashes its reader is refused cleanly.** When a
+  document reader panicked on an upload — calamine, the spreadsheet
+  library, does on some `.xlsb` files — the upload answered 500 "parse
+  task panicked". It now gets the usual 422 saying the file could not be
+  read, and `--bench` no longer crashes on such a file.
 
 - **A password-protected `.docx`, `.xlsx` or `.pptx` says so.** Office
   encrypts such a file into an OLE container instead of a ZIP archive,
