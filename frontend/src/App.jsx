@@ -1446,7 +1446,7 @@ function App() {
                     onChange={handleFileUpload}
                     disabled={uploading}
                     className="hidden"
-                    accept=".pdf,.docx,.txt,.doc,.pptx,.xlsx,.xls,.html,.htm"
+                    accept=".pdf,.docx,.doc,.txt,.md,.csv,.xlsx,.xls,.html,.htm"
                   />
                   <button
                     onClick={() => fileInputRef.current?.click()}
