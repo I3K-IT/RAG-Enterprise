@@ -139,6 +139,14 @@ separate files is what stops two pull requests colliding in this one.
   its content rather than its name, so an `.xlsx` renamed to `.xls` is
   still inspected.
 
+- **OCR can no longer crash the server after it finishes.** Tesseract
+  was loaded for each scanned document and unloaded after it. The one
+  bundled here is built without OpenMP, but the Tesseract of a Linux
+  distribution — used when `TESSERACT_DYNAMIC_LIB_PATH` points to it, or
+  when the bundled one is missing — is not: unloading it from under its
+  worker threads crashed the process with SIGSEGV, now and then. It is
+  now loaded once and kept.
+
 ---
 
 ## [0.1.45] - 2026-09-17

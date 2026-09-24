@@ -92,10 +92,7 @@ fn resolve_tesseract_library_path() -> std::path::PathBuf {
 
 type TessHandle = *mut c_void;
 
-/// The handful of Tesseract C API entry points OCR needs. Loaded once per
-/// `ocr_pdf` call rather than cached process-wide: ingestion is not hot enough
-/// for the dlopen cost to matter, and not caching means a corrupted or
-/// missing library fails the one document being ingested, not the process.
+/// The handful of Tesseract C API entry points OCR needs.
 struct TessApi {
     _lib: libloading::Library,
     create: unsafe extern "C" fn() -> TessHandle,
@@ -145,6 +142,25 @@ impl TessApi {
             })
         }
     }
+}
+
+/// libtesseract, loaded on first use and kept for the life of the process.
+///
+/// Never unloaded: a Tesseract built with OpenMP — as Linux distributions
+/// ship it, unlike the one bundled here — leaves worker threads running in
+/// libgomp, and unloading the library from under them crashed the process
+/// with SIGSEGV, now and then, after an OCR had finished. Only a successful
+/// load is kept, so a missing library still fails just the document being
+/// ingested, and is looked for again on the next one.
+fn tesseract() -> Result<&'static TessApi> {
+    static TESSERACT: std::sync::OnceLock<TessApi> = std::sync::OnceLock::new();
+    if let Some(api) = TESSERACT.get() {
+        return Ok(api);
+    }
+    let api = TessApi::load(&resolve_tesseract_library_path())?;
+    // Should two loads race, the loser only drops a second reference to
+    // the same library, which stays loaded.
+    Ok(TESSERACT.get_or_init(|| api))
 }
 
 /// One OCR session: a TessBaseAPI handle plus the vtable that operates on it.
@@ -242,7 +258,7 @@ pub fn ocr_pdf(
         .load_pdf_from_file(path, None)
         .map_err(|e| anyhow::anyhow!("pdfium: loading {:?}: {e}", path))?;
 
-    let tess = TessApi::load(&resolve_tesseract_library_path())?;
+    let tess = tesseract()?;
 
     // Look for tessdata in {data_dir}/tessdata/, where the manifest downloads
     // it; if absent (development without the bootstrap) fall back to the
@@ -272,7 +288,7 @@ pub fn ocr_pdf(
         let rgba = bitmap.as_rgba_bytes();
         let (width, height) = (bitmap.width() as i32, bitmap.height() as i32);
 
-        let session = TessSession::new(&tess, tessdata_path.as_deref(), "ita+eng")?;
+        let session = TessSession::new(tess, tessdata_path.as_deref(), "ita+eng")?;
         session.set_image_rgba(&rgba, width, height);
         let page_text = session.get_text().with_context(|| format!("OCR page {i}"))?;
 
@@ -395,6 +411,10 @@ mod smoke_test {
                 }
             }
         }
+
+        // The library is loaded once per process — possibly already, by
+        // another test — so the resolution is checked on its own.
+        assert_eq!(resolve_tesseract_library_path(), tesseract_dest, "libtesseract must resolve next to the executable");
 
         let pdf_bytes = minimal_pdf_with_text("i3k OCR bundling smoke test");
         let tmp_pdf = std::env::temp_dir().join("i3k_ocr_smoke.pdf");
