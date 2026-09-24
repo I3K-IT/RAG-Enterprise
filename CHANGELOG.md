@@ -45,6 +45,46 @@ separate files is what stops two pull requests colliding in this one.
   documents and those older than Word 6.0 are refused with a message
   saying so.
 
+- **PowerPoint presentations are read — `.pptx` and `.ppt`.** Slides
+  come in the order the presentation shows them, not the order their
+  parts were saved in, each followed by the text of its SmartArt
+  diagrams and its speaker notes; a table stays one row per line. The
+  PowerPoint 97–2003 binary format is read directly, following
+  PowerPoint's own record of its last save, so text deleted in an
+  earlier session does not come back. Either kind is recognised by its
+  content, so one renamed to the other still works.
+
+- **OpenDocument text and presentations are read — `.odt`, `.odp`.**
+  LibreOffice's own formats. Text deleted under change tracking and
+  reviewers' comments are left out; a presentation's speaker notes are
+  kept. Password-protected files are refused with a message saying so.
+
+- **RTF documents are read, and so are `.doc` files that are really
+  RTF,** as Word writes them when asked to — until now such a `.doc`
+  was refused as "not supported yet". Any code page and Unicode, tables,
+  text boxes, headers and footers, and the visible result of links and
+  other fields; comments, hidden text, pictures and embedded objects
+  are skipped.
+
+- **EPUB e-books are read,** chapter by chapter in reading order,
+  without the table of contents. A book under DRM is refused with a
+  message saying so rather than indexed as noise.
+
+- **E-mails are read — `.eml` and Outlook's `.msg`.** Subject, sender,
+  recipients, date and attachment names, then the body — the plain-text
+  one, or the HTML one, or Outlook's compressed RTF when that is all
+  there is — then the attachments that are plain text, then any message
+  forwarded as an attachment. Other attachments are listed by name but
+  not read: upload them as documents of their own. Messages saved in a
+  legacy 8-bit code page decode the way Outlook wrote them.
+
+- **Pictures are read through OCR — `.png`, `.jpg`/`.jpeg`,
+  `.tif`/`.tiff`, `.bmp`, `.gif`, `.webp`.** The same Tesseract, in
+  Italian and English, as scanned PDFs. Every page of a multi-page TIFF
+  is read, fax compression included, and cited by page like a PDF's; a
+  transparent background is laid over white, so dark text on it is not
+  read as black on black.
+
 - **`.env.example` is now checked against the settings the loader
   reads.** A test keeps the template and a list of every
   `SECTION__FIELD` key in step, in both directions: a key the template
@@ -83,6 +123,17 @@ separate files is what stops two pull requests colliding in this one.
   there on purpose stays: the heading keywords the chunker matches in
   Italian documents (`articolo`, `capitolo`, …), the multilingual
   example inside the answer prompt, and Italian test fixtures.
+
+- **HTML pages keep all their visible text.** Text outside paragraphs,
+  headings, list items and table cells — in a `div`, a `blockquote`, a
+  `pre`, after a `<br>` — was dropped, and a list item holding a
+  paragraph was indexed twice. Every visible piece of text is now kept
+  once, in order, with a table row on one line; what a browser never
+  shows — scripts, styles, the page's `head` — still is not. The same
+  reader handles the chapters of an EPUB and the HTML body of an
+  e-mail. Since an unchanged `.html` file now extracts differently,
+  `EXTRACTION_CONFIG_VERSION` is 2: chunks ingested from now on carry
+  `pv2` in their provenance id.
 
 ### Fixed
 
@@ -125,11 +176,11 @@ separate files is what stops two pull requests colliding in this one.
   toward the least privilege, now with a warning naming the user and
   the offending value.
 
-- **The upload dialog no longer offers `.pptx` and no longer hides
-  `.md`/`.csv`.** The file picker's allow-list had drifted from
-  `SUPPORTED_EXTENSIONS`: `.pptx` was offered but refused after
-  selection, while `.md` and `.csv` parsed fine but were undiscoverable.
-  One-line sync plus the rebuilt bundle, per repo convention.
+- **The upload dialog offers exactly what the server reads.** The file
+  picker's allow-list had drifted from `SUPPORTED_EXTENSIONS`: `.pptx`
+  was offered but refused after selection, while `.md` and `.csv` parsed
+  fine but were undiscoverable. The two lists now match — the formats
+  added above included — and a test keeps them matching.
 
 - **Legacy `.xls` spreadsheets upload again.** Since 0.1.41 every
   Excel 97–2003 workbook was refused with "xlsx is not a readable zip
@@ -138,6 +189,11 @@ separate files is what stops two pull requests colliding in this one.
   not a ZIP. It now runs only when the file actually is one, judged by
   its content rather than its name, so an `.xlsx` renamed to `.xls` is
   still inspected.
+
+- **A password-protected `.docx`, `.xlsx` or `.pptx` says so.** Office
+  encrypts such a file into an OLE container instead of a ZIP archive,
+  and it was refused as "not a readable zip archive". The message now
+  says the document is password-protected.
 
 - **OCR can no longer crash the server after it finishes.** Tesseract
   was loaded for each scanned document and unloaded after it. The one

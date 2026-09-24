@@ -52,10 +52,23 @@ pdfium-render = { version = "0.8", features = ["sync"] }
 libloading = "0.8"
 # Other formats (no Tika in the Community core):
 calamine = "0.36"
-# Word 97–2003 (.doc): the OLE compound-file container. The text inside it is
-# read by documents::word97, following [MS-DOC].
+# The OLE compound-file container of the Office 97–2003 formats (.doc, .ppt)
+# and of Outlook messages (.msg); what is inside is read by documents::msdoc,
+# documents::ppt and documents::msg.
 cfb = "0.15"
 encoding_rs = "0.8"
+# OpenDocument, PowerPoint and EPUB are ZIP archives of XML; this is the XML
+# reader calamine already brings in.
+quick-xml = "0.41"
+# E-mail (.eml): MIME, header encodings and legacy charsets — the latter
+# through encoding_rs, already here.
+mail-parser = { version = "0.11", features = ["full_encoding"] }
+# Pictures for OCR, decoded in pure Rust: the Leptonica bundled with
+# Tesseract has no image formats built in. Both crates are already here
+# through docx-rs and pdfium-render; tiff directly, to read every page of a
+# multi-page scan, fax (CCITT Group 4) included.
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+tiff = "0.11"
 docx-rs = "0.4"
 zip = "2"
 scraper = "0.21"

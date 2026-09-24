@@ -254,7 +254,7 @@ fn word6_text(word: &[u8], flags: u16, max_bytes: u64) -> Result<String> {
 /// by entries whose first byte is their own length minus one and whose
 /// fifth is the character set.
 fn word6_code_page(word: &[u8]) -> &'static encoding_rs::Encoding {
-    use encoding_rs::*;
+    use encoding_rs::WINDOWS_1252;
     let table = u32_at(word, 0xD0)
         .and_then(|at| Ok((at as usize, u32_at(word, 0xD4)? as usize)))
         .ok()
@@ -264,24 +264,7 @@ fn word6_code_page(word: &[u8]) -> &'static encoding_rs::Encoding {
     };
     let mut at = 2;
     while let (Some(&len_m1), Some(&charset)) = (table.get(at), table.get(at + 4)) {
-        let encoding = match charset {
-            0..=2 => None, // ANSI, default, symbol: nothing to learn
-            128 => Some(SHIFT_JIS),
-            129 => Some(EUC_KR),
-            134 => Some(GBK),
-            136 => Some(BIG5),
-            161 => Some(WINDOWS_1253),
-            162 => Some(WINDOWS_1254),
-            163 => Some(WINDOWS_1258),
-            177 => Some(WINDOWS_1255),
-            178 => Some(WINDOWS_1256),
-            186 => Some(WINDOWS_1257),
-            204 => Some(WINDOWS_1251),
-            222 => Some(WINDOWS_874),
-            238 => Some(WINDOWS_1250),
-            _ => None, // OEM, Mac and the like: not a body-text code page
-        };
-        if let Some(encoding) = encoding {
+        if let Some(encoding) = super::codepage::by_charset(charset) {
             return encoding;
         }
         at += len_m1 as usize + 1;

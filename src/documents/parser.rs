@@ -1,15 +1,19 @@
-//! Document text extraction.
+//! Document text extraction: one reader per format, chosen by extension —
+//! and, where one format is often found under another's name, by what the
+//! file contains.
 //!
-//! Extraction chain, following ocr_service.py:
-//! 1. .txt/.md/.csv  → read directly as UTF-8
-//! 2. PDF            → pdf_oxide (text_ratio > 0.5 AND len > 500)
-//!    → OCR fallback below that ratio (see ocr.rs)
-//! 3. DOCX           → docx-rs
-//! 4. XLSX/XLS       → calamine
-//! 5. HTML           → scraper
+//! - .txt/.md/.csv → read directly as UTF-8
+//! - PDF → pdf_oxide (text_ratio > 0.5 AND len > 500), with an OCR fallback
+//!   below that ratio (see ocr.rs)
+//! - DOCX → docx-rs; DOC → msdoc.rs (or rtf.rs, or docx-rs, by content);
+//!   ODT/ODP → odf.rs; RTF → rtf.rs
+//! - XLSX/XLSM/XLSB/XLS/ODS → calamine
+//! - PPTX → pptx.rs; PPT → ppt.rs (either, by content)
+//! - HTML → html.rs; EPUB → epub.rs
+//! - EML → eml.rs (mail-parser); MSG → msg.rs
+//! - PNG/JPEG/TIFF/BMP/GIF/WebP → OCR (ocr.rs)
 //!
-//! OCR trigger: text_ratio below 30% of pages containing text, as in the
-//! Python implementation. Chunking happens in rag::chunker, NOT here.
+//! Chunking happens in rag::chunker, NOT here.
 
 use std::path::Path;
 use anyhow::{Context, Result};
@@ -17,19 +21,21 @@ use anyhow::{Context, Result};
 /// Bumped whenever extraction logic changes in a way that could alter the
 /// resulting text or page spans for an unchanged input file — e.g. the
 /// native/OCR acceptance threshold below, the OCR rasterisation DPI, or a
-/// fix to how page spans are computed. Baked into every
+/// fix to how page spans are computed. Version 2: HTML keeps every visible
+/// piece of text, where it used to keep only paragraphs, headings, list
+/// items and table cells. Baked into every
 /// `rag::chunker::provenance_id` (as `pv{VERSION}`), independently of
 /// `rag::chunker::CHUNKING_CONFIG_VERSION`: an extraction change and a
 /// chunking change are different pipeline stages with different change
 /// cadences, so conflating them into one counter would make old ids less
 /// diagnostic when something changes.
-pub const EXTRACTION_CONFIG_VERSION: u32 = 1;
+pub const EXTRACTION_CONFIG_VERSION: u32 = 2;
 
 /// One page's byte-offset span `[start_byte, end_byte)` within
-/// `ExtractedText::text`. `page` is 1-based. PDF-only (native or OCR) —
-/// every other format leaves `ExtractedText::pages` empty, since none of
-/// txt/md/csv/docx/xlsx/html has a page concept that survives extraction
-/// into flat text today. BYTE offsets, not char offsets — see
+/// `ExtractedText::text`. `page` is 1-based. Only PDFs (native or OCR) and
+/// pictures (one page, or one per page of a multi-page TIFF) have pages —
+/// every other format leaves `ExtractedText::pages` empty, since none has a
+/// page concept that survives extraction into flat text today. BYTE offsets, not char offsets — see
 /// rag::chunker::Chunk for why that's named explicitly rather than left
 /// implicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,26 +57,31 @@ pub struct ExtractedText {
     pub pages: Vec<PageSpan>,
 }
 
-/// Extracts the text (and, for PDF, the per-page spans within it).
-///
-/// `data_dir` is the data root (`Settings.data.data_path()`), needed only by
-/// the OCR branch to find `{data_dir}/tessdata/`, where the manifest
-/// downloads it.
 /// Extensions `extract_text` below knows how to read.
 ///
 /// Exported so the upload handler can refuse an unsupported file BEFORE
-/// streaming it to disk: a .pptx used to be written out in full — up to the
-/// configured limit — and only then rejected by the match in extract_text.
-/// The two are pinned together by a test in this module; if you add an arm
-/// below, add it here too or that test fails.
-pub const SUPPORTED_EXTENSIONS: &[&str] =
-    &["txt", "md", "csv", "pdf", "docx", "doc", "xlsx", "xls", "xlsm", "xlsb", "ods", "html", "htm"];
+/// streaming it to disk: an unsupported file used to be written out in full —
+/// up to the configured limit — and only then rejected by the match in
+/// extract_text. The two are pinned together by a test in this module, and
+/// the web UI's file picker to this list by another; if you add an arm
+/// below, add it here and there too or those tests fail.
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "txt", "md", "csv", "pdf", "docx", "doc", "odt", "rtf", "xlsx", "xls", "xlsm", "xlsb", "ods", "pptx",
+    "ppt", "odp", "epub", "html", "htm", "eml", "msg", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif",
+    "webp",
+];
 
 /// Whether `ext` (lowercase, no dot) is one this parser can read.
 pub fn is_supported_extension(ext: &str) -> bool {
     SUPPORTED_EXTENSIONS.contains(&ext)
 }
 
+/// Extracts the text (and, for PDFs and pictures, the per-page spans within
+/// it).
+///
+/// `data_dir` is the data root (`Settings.data.data_path()`), needed only by
+/// OCR — of scanned PDFs and of pictures — to find `{data_dir}/tessdata/`,
+/// where the manifest downloads it.
 pub fn extract_text(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
     let ext = path
         .extension()
@@ -105,6 +116,9 @@ fn guarded<T>(ext: &str, read: impl FnOnce() -> Result<T>) -> Result<T> {
 }
 
 fn read_by_extension(path: &Path, data_dir: &Path, ext: &str) -> Result<ExtractedText> {
+    if matches!(ext, "docx" | "xlsx" | "xlsm" | "xlsb" | "pptx") && is_encrypted_ooxml(path) {
+        anyhow::bail!("this .{ext} is password-protected, so its text cannot be read");
+    }
     match ext {
         "txt" | "md" | "csv" => {
             let text = std::fs::read_to_string(path)
@@ -115,6 +129,13 @@ fn read_by_extension(path: &Path, data_dir: &Path, ext: &str) -> Result<Extracte
         "docx" => extract_docx(path).map(|text| ExtractedText { text, ..Default::default() }),
         "doc" => extract_doc(path).map(|text| ExtractedText { text, ..Default::default() }),
         "xlsx" | "xls" | "xlsm" | "xlsb" | "ods" => extract_xlsx(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "odt" | "odp" => super::odf::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "pptx" | "ppt" => extract_presentation(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "epub" => super::epub::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "rtf" => super::rtf::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "eml" => super::eml::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "msg" => super::msg::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "gif" | "webp" => super::ocr::ocr_picture(path, data_dir),
         "html" | "htm" => extract_html(path).map(|text| ExtractedText { text, ..Default::default() }),
         _ => Err(anyhow::anyhow!("unsupported format: .{ext}")),
     }
@@ -218,12 +239,26 @@ fn extract_doc(path: &Path) -> Result<String> {
         return extract_docx(path);
     }
     if head.starts_with(b"{\\rtf") {
-        anyhow::bail!("this .doc is actually an RTF file, which is not supported yet");
+        return super::rtf::extract_text(path);
     }
     if head.starts_with(&[0xDB, 0xA5]) {
         anyhow::bail!("this .doc was saved by Word 2.0, which is not supported — save it as .docx");
     }
     anyhow::bail!("this .doc is neither a Word 6.0–2003 document nor a .docx")
+}
+
+/// PowerPoint, 97–2003 (.ppt) or 2007 and later (.pptx), told apart by
+/// what the file contains rather than its name: either is often found
+/// renamed to the other.
+fn extract_presentation(path: &Path) -> Result<String> {
+    let head = head(path)?;
+    if head.starts_with(&OLE_MAGIC) {
+        return super::ppt::extract_text(path);
+    }
+    if is_zip_magic(&head) {
+        return super::pptx::extract_text(path);
+    }
+    anyhow::bail!("this is neither a PowerPoint 97–2003 presentation nor a .pptx")
 }
 
 fn collect_docx_text(docx: &docx_rs::Docx) -> String {
@@ -327,19 +362,6 @@ fn total_within_limit(sizes: impl Iterator<Item = u64>) -> Result<u64, u64> {
     Ok(total)
 }
 
-/// Refuses a zip-based document whose entries declare more uncompressed bytes
-/// than `MAX_UNCOMPRESSED_BYTES`, before any parser inflates it.
-///
-/// Reads the central directory only — `ZipEntry::size()` is a header field,
-/// so nothing is decompressed to run this check.
-///
-/// Known limit, stated rather than implied: the declared size is part of the
-/// archive and therefore also attacker-controlled. This stops the ordinary
-/// bomb, which declares its real (enormous) size because that is what makes
-/// it inflate; it does not stop an archive that lies about its sizes.
-/// Catching that needs the decompression itself to run through a capped
-/// reader, which means either patching the parsers or decompressing twice —
-/// worth doing, but not at this price.
 /// Signature of an OLE compound file: .doc, .xls and the other Office
 /// 97–2003 formats.
 const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -361,6 +383,17 @@ fn is_zip_magic(head: &[u8]) -> bool {
     [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"].iter().any(|m| head.starts_with(*m))
 }
 
+/// Whether `path` is an Office 2007+ document protected by a password: not
+/// a ZIP archive then, but an OLE compound file holding the encrypted
+/// package — which the ZIP readers would only call corrupt.
+fn is_encrypted_ooxml(path: &Path) -> bool {
+    head(path).is_ok_and(|head| head.starts_with(&OLE_MAGIC))
+        && std::fs::File::open(path)
+            .ok()
+            .and_then(|file| cfb::CompoundFile::open(file).ok())
+            .is_some_and(|ole| ole.is_stream("EncryptedPackage"))
+}
+
 /// Whether `path` holds a ZIP container, judged by its first bytes rather
 /// than its extension — so an .xlsx renamed to .xls is still checked for
 /// decompression bombs, and a genuine .xls is not mistaken for a broken
@@ -369,7 +402,20 @@ fn is_zip(path: &Path) -> Result<bool> {
     Ok(is_zip_magic(&head(path)?))
 }
 
-fn reject_decompression_bomb(path: &Path, kind: &str) -> Result<()> {
+/// Refuses a zip-based document whose entries declare more uncompressed bytes
+/// than `MAX_UNCOMPRESSED_BYTES`, before any parser inflates it.
+///
+/// Reads the central directory only — `ZipEntry::size()` is a header field,
+/// so nothing is decompressed to run this check.
+///
+/// Known limit, stated rather than implied: the declared size is part of the
+/// archive and therefore also attacker-controlled. This stops the ordinary
+/// bomb, which declares its real (enormous) size because that is what makes
+/// it inflate; it does not stop an archive that lies about its sizes.
+/// Catching that needs the decompression itself to run through a capped
+/// reader, which means either patching the parsers or decompressing twice —
+/// worth doing, but not at this price.
+pub(crate) fn reject_decompression_bomb(path: &Path, kind: &str) -> Result<()> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("opening {kind} {}", path.display()))?;
     let mut archive = zip::ZipArchive::new(file)
@@ -394,15 +440,7 @@ fn reject_decompression_bomb(path: &Path, kind: &str) -> Result<()> {
 fn extract_html(path: &Path) -> Result<String> {
     let html = std::fs::read_to_string(path)
         .with_context(|| format!("reading html {}", path.display()))?;
-    let document = scraper::Html::parse_document(&html);
-    let selector =
-        scraper::Selector::parse("p, h1, h2, h3, h4, h5, h6, li, td, th").unwrap();
-    let text: Vec<String> = document
-        .select(&selector)
-        .map(|el| el.text().collect::<String>().trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect();
-    Ok(text.join("\n"))
+    Ok(super::html::to_text(&html))
 }
 
 #[cfg(test)]
@@ -435,11 +473,29 @@ mod tests {
         }
     }
 
+    /// The web UI's file picker offers exactly these extensions: the two
+    /// lists are kept by hand, and had drifted apart before — `.pptx`
+    /// offered and refused, `.md` and `.csv` read but not offered.
+    #[test]
+    fn the_upload_picker_offers_exactly_the_supported_extensions() {
+        let app = include_str!("../../frontend/src/App.jsx");
+        let accept = app
+            .split("accept=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("App.jsx has an accept=\"…\" attribute");
+        let mut offered: Vec<&str> = accept.split(',').map(|e| e.trim().trim_start_matches('.')).collect();
+        let mut supported = SUPPORTED_EXTENSIONS.to_vec();
+        offered.sort_unstable();
+        supported.sort_unstable();
+        assert_eq!(offered, supported, "frontend/src/App.jsx accept= and SUPPORTED_EXTENSIONS differ");
+    }
+
     #[test]
     fn an_unlisted_extension_is_refused_by_both() {
-        assert!(!is_supported_extension("pptx"));
+        assert!(!is_supported_extension("pages"));
         let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("deck.pptx");
+        let f = dir.path().join("letter.pages");
         std::fs::write(&f, b"").unwrap();
         let e = extract_text(&f, dir.path()).unwrap_err();
         assert!(e.to_string().contains("unsupported format"), "unexpected: {e}");
@@ -524,20 +580,21 @@ mod tests {
     #[test]
     fn a_doc_is_read_by_what_it_contains_not_by_its_name() {
         let dir = tempfile::tempdir().unwrap();
-        let cases: [(&[u8], &str); 3] = [
+        let cases: [(&[u8], &str); 2] = [
             // a .docx renamed: goes to the .docx reader and its bomb check
             (b"PK\x03\x04 not really an archive", "zip archive"),
-            // RTF that Word saved under .doc
-            (b"{\\rtf1\\ansi hello}", "RTF"),
             // Word 2.0, from before the OLE container
             (&[0xDB, 0xA5, 0x2D, 0x00, 0x31, 0x40], "Word 2.0"),
         ];
+        let f = dir.path().join("sample.doc");
         for (bytes, expected) in cases {
-            let f = dir.path().join("sample.doc");
             std::fs::write(&f, bytes).unwrap();
             let e = extract_text(&f, dir.path()).unwrap_err();
             assert!(format!("{e:#}").contains(expected), "expected {expected:?}, got: {e:#}");
         }
+        // RTF that Word saved under .doc
+        std::fs::write(&f, b"{\\rtf1\\ansi hello}").unwrap();
+        assert_eq!(extract_text(&f, dir.path()).unwrap().text, "hello");
     }
 
     fn span(page: u32, start: usize, end: usize) -> PageSpan {
