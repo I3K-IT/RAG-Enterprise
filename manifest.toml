@@ -191,14 +191,11 @@ size    = 902154208
 dest    = "{data}/bin/eullm"
 exec    = true
 
-# x86_64 CPU-only, SENZA CUDA — mancava del tutto, stesso bug già corretto
-# più sotto per ARM64 (vedi il commento su quella entry): prima di questa,
-# su un Linux x86_64 SENZA GPU NVIDIA rilevata select_components() non
-# trovava NESSUN target eullm utilizzabile — l'unico pin x86_64 esistente
-# richiedeva CUDA — e bootstrap ricadeva silenziosamente sul ramo "eullm o
-# modello non trovati, RAG senza LLM" (main.rs). Scoperto durante un audit
-# tecnico Community-vs-Pro, sha256/size verificati scaricando davvero
-# l'asset (non dai soli metadati della release).
+# x86_64 CPU-only, without CUDA. Before this entry, a Linux x86_64 host
+# with no NVIDIA GPU found no usable eullm target — the only x86_64 pin
+# needed CUDA — and bootstrap silently fell back to running without an LLM
+# (same bug as the ARM64 entry below). sha256 and size were checked
+# against the downloaded asset, not just the release metadata.
 [[component]]
 name    = "eullm"
 version = "0.6.90"

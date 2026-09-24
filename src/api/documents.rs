@@ -257,13 +257,12 @@ async fn process_upload(state: &AppState, mut multipart: Multipart) -> Response 
         );
     }
 
-    // 3b. Enrich each chunk before it is embedded/stored — Community's own
-    // default prepends the nearest preceding structural heading ("Article
-    // 99", "Chapter XII", ...) to any chunk that doesn't already start with
-    // it (see extensions::ingestion::DefaultChunkEnricher, wrapping
-    // chunker::inject_heading_context); a Pro build can register a
-    // different enricher (e.g. Contextual Retrieval) here instead, per
-    // extensions::ChunkEnricher. Either way, `chunks[i].start_byte`/
+    // 3b. Enrich each chunk before it is embedded/stored — the default
+    // prepends the nearest preceding structural heading ("Article 99",
+    // "Chapter XII", ...) to any chunk that doesn't already start with it
+    // (see extensions::ingestion::DefaultChunkEnricher, wrapping
+    // chunker::inject_heading_context); a launcher can register a different
+    // enricher, per extensions::ChunkEnricher. Either way, `chunks[i].start_byte`/
     // `end_byte` (used below for page lookups and citation spans) still
     // point at the real source location, untouched by whatever enrichment
     // ran.

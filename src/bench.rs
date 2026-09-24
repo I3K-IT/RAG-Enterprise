@@ -10,12 +10,9 @@
 //! [`run`] takes a `&dyn ChunkEnricher` and threads it through to
 //! `run_ingestion` instead of hardcoding `chunker::inject_heading_context` —
 //! `run_with_extensions` (this crate's `lib.rs`) passes whatever is actually
-//! registered, so `--bench` on Community's own binary measures Community's
-//! own default, and `--bench` on a Pro launcher measures Pro's real enricher
-//! (e.g. Contextual Retrieval, on or off per its own license/runtime gate).
-//! Same tool, same report, comparable numbers — see
-//! `I3K_RAG_Pro_Open_Core_Architecture.md` (rag-enterprise-pro, private
-//! repo) section 16 on why that comparability is required.
+//! registered: this binary's `--bench` measures the default enricher, and
+//! a launcher that registers another one measures that. Same tool, same
+//! report, comparable numbers.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -350,13 +347,10 @@ async fn run_ingestion(
 
     // Goes through the SAME chunk_enricher a real ingestion would (see
     // api/documents.rs) — not a hardcoded call to inject_heading_context —
-    // so --bench measures whatever is actually registered: Community's own
-    // default when this binary calls bench::run() (see run()'s own doc
-    // comment), or a Pro build's real enricher (e.g. Contextual Retrieval)
-    // when a Pro launcher does. Comparing the two is the whole point of
-    // `I3K_RAG_Pro_Open_Core_Architecture.md`'s (rag-enterprise-pro, private
-    // repo) section 16 A/B benchmarking — same tool, same report shape,
-    // different binary/config.
+    // so --bench measures whatever is actually registered: the default
+    // when this binary calls bench::run() (see run()'s own doc comment), or
+    // whatever enricher another launcher registered — same tool, same
+    // report shape, directly comparable.
     let chunk_texts = chunk_enricher.enrich(&text, &chunks).await.context("chunk enrichment")?;
     // Same contract as a real ingestion (see api/documents.rs): a wrong-sized
     // return must fail here with context, not panic at payload building below.

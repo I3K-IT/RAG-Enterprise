@@ -3,10 +3,8 @@ import axios from 'axios'
 import './index.css'
 
 // clientName/version are build-time configurable (VITE_BRANDING_*) so a
-// downstream build — e.g. rag-enterprise-pro's release CI, which builds this
-// same frontend from the pinned Community rev — can show its own edition
-// without forking this file. Defaults are this repo's own Community values;
-// building without those env vars set is unchanged from before.
+// downstream build can show its own name and edition without forking this
+// file. Without those variables the defaults below apply.
 const BRANDING = {
   clientLogo: null,
   clientName: import.meta.env.VITE_BRANDING_NAME || 'i3k RAG Engine',

@@ -613,30 +613,26 @@ separate files is what stops two pull requests colliding in this one.
   `ChunkEnricher` a real ingestion uses.** `--bench <file>` used to
   always call `chunker::inject_heading_context` directly, regardless of
   what a caller's `ExtensionRegistry` actually registered — meaning a
-  Pro launcher's `--bench` could never measure its own real enricher
-  (e.g. Contextual Retrieval), only Community's default. `run()` and the
+  launcher that registered its own enricher could never measure it, only
+  the default. `run()` and the
   internal `run_ingestion()` now take a `&dyn ChunkEnricher` parameter;
   `run_with_extensions` passes `extensions.chunk_enricher.as_ref()` —
   already in scope exactly where `--bench` dispatches. This binary's own
   behavior is unchanged (`ExtensionRegistry::default()`'s enricher wraps
-  the same heading-injection as before); a Pro build now gets a
-  `--bench` that genuinely exercises whatever it registered. Needed for
-  `rag-enterprise-pro`'s Phase 7 (`I3K_RAG_Pro_Open_Core_Architecture.md`,
-  private repo, section 24): comparing Community baseline vs. Pro
-  baseline vs. Pro+Contextual Retrieval needs the same tool measuring
-  the real thing in each case, not three different measurements of the
-  same hardcoded default. 121 tests pass, clippy stays clean.
+  the same heading-injection as before); any other launcher now gets a
+  `--bench` that genuinely exercises whatever it registered, so results
+  across enrichers come from the same tool. 121 tests pass, clippy stays
+  clean.
 
 - **`BRANDING.clientName`/`.version` are now build-time configurable**
   (`VITE_BRANDING_NAME`/`VITE_BRANDING_VERSION`, defaulting to this
   repo's own `'i3k RAG Engine'`/`'Community'` — building without them
   set is unchanged). The version badge — previously shown only in small
   print in the app's footer — now also appears next to the product name
-  at login and in the main header. Added so a downstream build (e.g.
-  `rag-enterprise-pro`'s release CI, which builds this exact frontend
-  from the pinned Community rev) can show its own edition without
-  forking this file — not proprietary logic, just a configurable label,
-  same principle as `extensions::`'s generic hooks.
+  at login and in the main header. Added so a downstream build can show
+  its own edition without forking this file — not proprietary logic,
+  just a configurable label, same principle as `extensions::`'s generic
+  hooks.
 
 ---
 
@@ -650,13 +646,11 @@ separate files is what stops two pull requests colliding in this one.
   to live in `main()`. `src/main.rs` is now a thin launcher:
   `i3k_rag_engine::run().await`. Zero behavior change — same 113 tests
   pass, clippy stays clean, `--version` verified end-to-end through the
-  new wiring. This is Phase 1 of the open-core migration: it makes this
-  crate a reusable dependency for `I3K-IT/rag-enterprise-pro`, pinned to
-  an exact commit, per that repository's
-  `I3K_RAG_Pro_Open_Core_Architecture.md` (private — not this repo).
+  new wiring. Other binaries can now depend on this crate, pinned to an
+  exact commit.
 
-- **New `extensions::` module: generic extension points for a Pro
-  binary to register against.** Six traits (`ChunkEnricher`,
+- **New `extensions::` module: generic extension points another binary
+  can register against.** Six traits (`ChunkEnricher`,
   `StructuredKnowledgeProvider`, `QueryPlanner`, `RetrievalStrategy`,
   `Reranker`, `EvidenceLayer`), bundled into `ExtensionRegistry` and
   threaded through `AppState`. `ExtensionRegistry::default()` — what
@@ -667,21 +661,18 @@ separate files is what stops two pull requests colliding in this one.
   `Semantic`, Community's one real retrieval path today) or is a
   genuine no-op where Community has no such feature yet (reranking,
   evidence, structured knowledge). `api::router` also now takes an
-  optional second `pro_router` parameter, merged in when present, so a
-  Pro launcher can add its own routes against the same `AppState`
-  without this crate depending on Pro's code. No proprietary logic
-  lives here — see this repo's own rule on that. 115 tests pass (two
-  new), clippy stays clean. This is Phase 2 of the open-core migration;
-  see Phase 1's changelog entry above for context.
+  optional second parameter of extra routes, merged in when present, so
+  a launcher can add its own routes against the same `AppState` without
+  this crate depending on its code. No proprietary logic lives here —
+  see this repo's own rule on that. 115 tests pass (two new), clippy
+  stays clean.
 
 - **New `build_info() -> (&str, &str)`, exposing the version/commit
   `--version` already printed.** No behavior change for this binary —
   it's the same two values, now also reachable as a function. Added so
-  `rag-enterprise-pro`'s Pro launcher, which statically links this crate
-  via a pinned Git dependency (Phase 4 of the open-core migration), can
-  read Community's own version/commit at runtime for its own
-  `--version` output, without re-deriving it. 116 tests pass (one new),
-  clippy stays clean.
+  a binary that links this crate as a pinned Git dependency can report
+  the core's version/commit in its own `--version` output, without
+  re-deriving it. 116 tests pass (one new), clippy stays clean.
 
 - **New `ChunkPayload.retrieval_text`, and a real (if small) citation
   behavior change: stored/cited chunk text is now always the original,
@@ -697,20 +688,15 @@ separate files is what stops two pull requests colliding in this one.
   a user as if it were the source. `chunk_size` now matches `text`'s own
   length accordingly. `retrieval_text` is optional and
   `skip_serializing_if`, so points written before this field existed
-  keep deserializing unchanged. Required core change for
-  `rag-enterprise-pro`'s upcoming Contextual Retrieval (Phase 6): an
-  LLM-generated context blurb is not "real document content" the way an
-  injected heading is, so this distinction matters far more there — see
-  that repository's `I3K_RAG_Pro_Open_Core_Architecture.md` (private)
-  section 14, and section 18 on why this core change comes from
-  Community first. 121 tests pass (five new), clippy stays clean.
+  keep deserializing unchanged. The distinction matters even more for an
+  enricher that adds generated text, which is not document content at
+  all. 121 tests pass (five new), clippy stays clean.
 
 - **New `EullmClient::model_id() -> &str`.** The configured model name
   was write-only (set in the constructor, never read back). Needed so
-  `rag-enterprise-pro`'s Contextual Retrieval cache key — which must
-  include `model_id` per the architecture document's section 15 — can
-  read it from the same client instance doing the generation, instead
-  of duplicating the configured model name as a second source of truth.
+  a cache keyed on the model can read it from the same client instance
+  doing the generation, instead of duplicating the configured model name
+  as a second source of truth.
 
 ---
 

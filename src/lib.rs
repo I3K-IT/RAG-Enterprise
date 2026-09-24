@@ -1,10 +1,6 @@
-//! Shared I3K RAG runtime — the reusable core behind the Community binary
-//! (`src/main.rs`, a thin launcher calling [`run`]) and, per
-//! `I3K_RAG_Pro_Open_Core_Architecture.md` in the `rag-enterprise-pro`
-//! repository, the Pro binary too, via a pinned Git dependency on this
-//! crate. Pro must depend on this library rather than forking it — any
-//! core change is made here first, tested, merged, then Pro's pinned
-//! revision is bumped (see that document's section 18).
+//! Shared I3K RAG runtime — the reusable core behind this crate's own
+//! binary (`src/main.rs`, a thin launcher calling [`run`]), and usable as a
+//! library by any binary that depends on it, pinned to a Git revision.
 
 pub mod api;
 pub mod auth;
@@ -35,13 +31,11 @@ pub fn is_version_flag(args: &[String]) -> bool {
 
 /// This crate's own `(CARGO_PKG_VERSION, BUILD_GIT_HASH)`, the same values
 /// `-V`/`--version` prints. A function, not just a side-effecting print, so
-/// a Pro launcher statically linking this crate via the pinned Git
-/// dependency (`I3K_RAG_Pro_Open_Core_Architecture.md`, rag-enterprise-pro
-/// private repo, section 9) can read Community's own version/commit at
-/// runtime and fold it into its own `--version` output (that document's
-/// section 19). Because Pro compiles this crate from its own pinned git
-/// checkout, `BUILD_GIT_HASH` here resolves to Community's real pinned
-/// commit — not Pro's — with no extra plumbing needed.
+/// a binary that links this crate as a pinned Git dependency can report the
+/// core's version and commit in its own `--version` output. Because such a
+/// binary compiles this crate from its own pinned checkout, `BUILD_GIT_HASH`
+/// resolves to this crate's commit — not the binary's — with no extra
+/// plumbing.
 pub fn build_info() -> (&'static str, &'static str) {
     (env!("CARGO_PKG_VERSION"), env!("BUILD_GIT_HASH"))
 }
@@ -53,15 +47,14 @@ pub async fn run() -> Result<()> {
     run_with_extensions(extensions::ExtensionRegistry::default(), None).await
 }
 
-/// Same as [`run`], but for a Pro launcher (or a test) that needs to
-/// register extensions and/or merge in extra API routes — see
+/// Same as [`run`], but for a launcher (or a test) that needs to register
+/// extensions and/or merge in extra API routes — see
 /// `extensions::ExtensionRegistry` and `extensions::api`'s doc comment.
-/// This is the exact sequence a Pro launcher calls, per
-/// `I3K_RAG_Pro_Open_Core_Architecture.md` (rag-enterprise-pro, private
-/// repo) section 11 — which is why it lives here instead of in main.rs.
+/// It lives here rather than in main.rs so every launcher runs the same
+/// sequence.
 pub async fn run_with_extensions(
     extensions: extensions::ExtensionRegistry,
-    pro_router: Option<axum::Router<state::AppState>>,
+    extra_routes: Option<axum::Router<state::AppState>>,
 ) -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -214,7 +207,7 @@ pub async fn run_with_extensions(
 
     open_browser(port);
 
-    let router = api::router(app_state, pro_router);
+    let router = api::router(app_state, extra_routes);
 
     // Graceful shutdown: SIGINT (Ctrl+C) or SIGTERM → drop guard → SIGKILL children.
     #[cfg(unix)]

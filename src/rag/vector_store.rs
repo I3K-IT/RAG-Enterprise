@@ -31,8 +31,8 @@ pub struct ChunkPayload {
     // ── Source Provenance Foundation ────────────────────────────────────
     // Infrastructural provenance only (locator + stable id) — NOT claim-level
     // attribution, evidence IDs, sentence citations, highlighting or NLI
-    // verification: those stay Pro-roadmap items, deliberately out of scope
-    // here. All Option so points written before these fields existed still
+    // verification, all deliberately out of scope here. All Option so
+    // points written before these fields existed still
     // deserialize (see clients/qdrant_store.rs::search) without forcing a
     // re-ingestion.
     /// BYTE-offset span `[source_start_byte, source_end_byte)` of this
@@ -60,9 +60,9 @@ pub struct ChunkPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance_id: Option<String>,
 
-    /// The enriched text actually embedded and searched — e.g. a heading
-    /// prefix (Community's default enricher) or an LLM-generated context
-    /// blurb (Pro's Contextual Retrieval) — when it differs from `text`.
+    /// The enriched text actually embedded and searched — e.g. the heading
+    /// prefix the default enricher adds, or whatever a registered enricher
+    /// produces — when it differs from `text`.
     /// `None` means enrichment left this chunk unchanged (the common case:
     /// no heading detected, or, for older points, ingested before this
     /// field existed).
@@ -72,8 +72,7 @@ pub struct ChunkPayload {
     /// show. `retrieval_text` exists only so query.rs can give the
     /// answering LLM the same enriched context the embedding was computed
     /// on, without that enrichment ever being presented as if it were the
-    /// source itself. See rag-enterprise-pro's
-    /// `I3K_RAG_Pro_Open_Core_Architecture.md` (private repo) section 14.
+    /// source itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retrieval_text: Option<String>,
 }
