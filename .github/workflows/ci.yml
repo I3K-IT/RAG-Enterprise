@@ -1,160 +1,42 @@
 name: CI
 
-# Job "rust"/"frontend": build+test ad ogni push su main (invariati).
+# Jobs:
+# - rust, frontend: build and test on every push to main and every pull
+#   request.
+# - detect-deps-change + warm-cache-*: on main, only when Cargo.lock or
+#   Cargo.toml change (or on manual dispatch). A tag can restore only caches
+#   saved on its own ref or on main, and release-* run only on tags, so
+#   without this every new tag would compile from cold.
+# - release-*: on v* tags, build the three downloadable archives and attach
+#   them to the GitHub Release.
 #
-# Job "release-*": SOLO sui tag v*, producono i 3 binari scaricabili allegati
-# alla GitHub Release (release-linux-x86_64, release-linux-arm64,
-# release-windows-x86_64) — tutti CPU-only per l'embedding Candle/bge-m3
-# interno a questo binario. ARM64 gira su runner nativi ubuntu-24.04-arm
-# (niente cross-compilation, niente toolchain gcc-aarch64/
-# PKG_CONFIG_ALLOW_CROSS).
+# Release builds are CPU-only for the in-process Candle embedding. The cuda
+# feature still compiles by hand (see BUILD.md) but is not built or shipped
+# here: eullm already embeds on its own bundled CUDA, and its CUDA variant
+# is downloaded at runtime whenever an NVIDIA GPU is present.
 #
-# Candle-CUDA (--features cuda, ex release-linux-{x86_64,arm64}-cuda) NON è
-# più compilato né pubblicato da questo workflow: eullm sa già fare
-# l'embedding bge-m3 con la propria CUDA bundlata (/api/embed dalla 0.6.82,
-# --embedding-model dalla 0.6.90 — vedi config::IngestionEmbedding::Eullm),
-# quindi una seconda toolchain CUDA dentro il binario RAG per lo stesso scopo
-# è solo peso morto. Il feature flag e il codice device (clients/
-# embeddings.rs, IngestionEmbedding::CandleGpu) restano nel sorgente —
-# compilabili a mano con `cargo build --features cuda`, vedi BUILD.md — ma
-# non testati né rilasciati: passo intermedio prima della rimozione
-# completa, non una scelta lasciata a marcire indefinitamente. I job rimossi
-# (release-linux-*-cuda, warm-cache-*-cuda) restano nella storia git di
-# questo file come riferimento.
-#
-# Non riguarda eullm: la sua variante CUDA resta scaricata automaticamente
-# su tutte e 3 le piattaforme quando c'è una GPU NVIDIA con driver
-# funzionante — bootstrap::current_targets() la rileva a runtime
-# (nvidia-smi), indipendentemente da come è compilato QUESTO binario. È lo
-# stesso meccanismo già in produzione su Windows, da sempre CPU-only per
-# Candle pur scaricando eullm-cuda quando la GPU c'è (vedi più sotto).
-#
-# qdrant su arm64 (entrambi i job): NON è l'ufficiale, è una build custom
-# scaricata da i3k.dev e bundlata in bin/qdrant nel tarball — vedi commento
-# sopra la entry qdrant/linux-aarch64 in manifest.toml per il perché
-# (jemalloc + page size 64K, es. Radxa Orion O6). bootstrap.rs salta il
-# download se trova già il file con lo sha256 giusto, quindi bundlarlo qui
-# non ha richiesto modifiche al codice di bootstrap.
-#
-# Contenuto del tarball (non solo il binario nudo — riscontrato in produzione
-# sull'Orion che senza questo il binario non parte nemmeno):
-#   - frontend/dist/ (buildato inline in ogni job release-*, npm ci + npm
-#     run build) — ServeDir in api/mod.rs è exe-relative (frontend_dist_dir,
-#     stessa convenzione "portable app dir" di config::default_data_dir),
-#     non CWD-relative: funziona da qualunque cartella si lanci il binario,
-#     basta che "frontend/dist" stia accanto ad esso.
-#   - lib/libtesseract.so.5 + lib/libleptonica.so.6: costruite da sorgente in
-#     ogni job (Tesseract 5.5.0 + Leptonica 1.85.0, DISABLE_CURL/ARCHIVE +
-#     codec immagine OFF — Tesseract riceve solo pixel già decodificati da
-#     pdfium, mai un file da rasterizzare da solo) e copiate in stage/lib,
-#     RPATH $ORIGIN via patchelf così libtesseract trova libleptonica accanto
-#     a sé ovunque il paio venga copiato. A differenza di pdfium (bblanchon/
-#     pdfium-binaries, un repo di binari upstream pronti) Tesseract non ha un
-#     equivalente — comprimerli qui invece che scaricarli dal manifest evita
-#     di dover ospitare e mantenere noi stessi quei binari. Da quando l'OCR
-#     li carica a runtime via libloading (src/documents/ocr.rs) invece di
-#     collegarsi a compilazione, non sono più un NEEDED del nostro binario —
-#     ldd non li vedrebbe più senza questo step, motivo per cui va rifatto
-#     esplicitamente qui e non lasciato al vecchio meccanismo compile-time.
-#   - Le altre dipendenze dinamiche (glibc, libssl, libcurl…) NON sono
-#     bundlate: sono librerie di base presenti su qualunque distro Linux
-#     reale, bundlarle anche loro aggiungerebbe fragilità (versioni/ABI) senza
-#     un beneficio reale, e per libssl/libcrypto sarebbe pure controproducente
-#     (niente aggiornamenti di sicurezza dal sistema).
-#
-# release-windows-x86_64: cross-compilata da un runner Linux (mingw-w64,
-# target x86_64-pc-windows-gnu — nessun runner Windows nativo necessario).
-# Solo CPU: --features cuda richiede nvcc, che sul toolchain mingw non è
-# disponibile e cross-compilare CUDA per Windows da un host Linux non è una
-# combinazione supportata (cudarc cerca nvcc a build.rs, non un target
-# Windows) — verificato con un tentativo reale, non assunto. eullm resta
-# indipendente (processo esterno, non compilato qui): eullm-windows-x64-cuda
-# in manifest.toml continua a dare inferenza GPU su Windows, è solo
-# l'embedding (Candle, dentro questo binario) a restare su CPU lì. Tesseract/
-# Leptonica: stesso principio dei job Linux, ma col linking statico
-# -static-libgcc/-static-libstdc++/-lwinpthread (altrimenti le DLL cercano il
-# runtime mingw, assente su un Windows pulito — verificato via objdump: senza
-# quei flag comparivano libgcc_s_seh-1.dll/libstdc++-6.dll/libwinpthread-1.dll
-# fra le importazioni, con quei flag restano solo KERNEL32/msvcrt/GDI32/
-# USER32 più la sibling libleptonica.dll). pdfium.dll NON è bundlato: arriva
-# già dal manifest al primo avvio, come su Linux.
-#
-# i3k-rag-engine.exe stesso, a differenza di Tesseract/Leptonica, NON riesce
-# a fare a meno di libstdc++-6.dll: esaxx-rs (dipendenza C++ di tokenizers,
-# algoritmo Unigram) la collega dinamicamente, e il collegamento finale del
-# binario passa dal driver C di rustc (gcc, non g++) — gli stessi flag
-# -static-libgcc/-static-libstdc++ che funzionano per Tesseract/Leptonica
-# (costruiti via CMake/g++) lì non hanno effetto, verificato con più
-# combinazioni (RUSTFLAGS, .cargo/config.toml, -C linker=g++, crt-static),
-# non solo assunto. Bundlata invece, accanto all'exe (non in lib/: è una
-# dipendenza di caricamento del PE, non qualcosa che libloading risolve).
-#
-# macOS resta fuori: manca il binario qdrant per quella piattaforma nel
-# manifest.
-#
-# Cache: Swatinem/rust-cache su tutti i job che compilano (chiave distinta
-# per job: debug / release-x86_64 / release-arm64 / release-windows-x86_64 —
-# il default dell'action non distingue per target/job, quindi senza chiave
-# esplicita job diversi potrebbero condividere cache di target/ in modo
-# scorretto). Non actions/cache "a mano" su target/: quel path aveva
-# riempito i 14GB del runner fino a far crashare il job "rust" (non un
-# warning innocuo — il runner è morto, log del job mai arrivati su GitHub).
-# rust-cache pota da sé gli artefatti obsoleti prima di salvare invece di
-# comprimere target/ indiscriminatamente.
-#
-# Cache tra release diverse (job "detect-deps-change" + "warm-cache-*"):
-# verificato nella documentazione ufficiale GitHub (non un'ipotesi) —
-# "Workflow runs also cannot restore caches created for different tag
-# names." Ogni tag (v0.1.0, v0.1.1, v0.1.2…) è uno scope di cache isolato,
-# MAI condiviso con un altro tag. L'UNICO fallback disponibile per un tag è
-# la cache del branch di default (main) — ma i job release-* girano SOLO
-# sui tag (if: startsWith(github.ref, 'refs/tags/v')), quindi main non ha
-# MAI popolato le chiavi release-*. Risultato: ogni tag con un nome MAI
-# usato prima parte obbligatoriamente a freddo (13-17 min), a prescindere
-# da quanto spazio di cache resta — non eviction, è lo scoping stesso di
-# GitHub. I job warm-cache-* replicano SOLO la compilazione (stessa chiave
-# cache, stessi RUSTFLAGS/env delle build release — necessario perché Cargo
-# include RUSTFLAGS nel fingerprint degli artefatti: chiave uguale ma flag
-# diversi non riuserebbe comunque gli oggetti già compilati), MAI il resto
-# (frontend/qdrant/packaging/upload, inutili per scaldare solo la cache) —
-# così un tag nuovo trova main già caldo e usa il fallback-al-branch-di-
-# default documentato da GitHub, invece di ripartire da zero. Gate su
-# Cargo.lock/Cargo.toml (non su ogni push a main): le dipendenze cambiano
-# raramente, ricompilare in --release ad ogni commit costerebbe più minuti
-# Actions di quanti ne risparmia. workflow_dispatch bypassa il gate:
-# bottone manuale per "riscalda ora" prima di tagliare una release, se si
-# sospetta che main sia rimasto indietro.
+# Each archive holds the binary, .env.example, frontend/dist (served
+# relative to the executable) and a minimal Tesseract + Leptonica build
+# that the binary loads at runtime for OCR (RPATH $ORIGIN on Linux). Base
+# system libraries (glibc, libssl…) are not bundled. The arm64 archive also
+# bundles a custom qdrant build (see manifest.toml). macOS is not built:
+# the manifest has no qdrant binary for it.
 
 on:
-  # push: SOLO su main (piu' i tag). I branch di lavoro non fanno scattare
-  # nulla da soli: ci pensa la loro PR, sotto. Cosi' un merge produce un run
-  # solo — quello del push su main — invece di due.
-  #
-  # tags: i tag di release (v0.1.0…) sono un ref a parte (refs/tags, non
-  # refs/heads) — push:branches non li intercetta affatto, serve elencarli
-  # esplicitamente. Nota: questo vale solo per i tag pushati DOPO che questo
-  # file (con questa riga) è già su main — un tag già pushato prima non
-  # riparte da solo, va ripushato per far scattare il trigger.
+  # Only main and v* tags: working branches are built by their pull request,
+  # so a merge runs once. Tags are a separate ref type and must be listed.
   push:
     branches: [main]
     tags: ["v*"]
 
-  # pull_request: perche' senza, il codice di un contributore esterno finiva
-  # su main senza essere MAI stato compilato — la validazione arrivava dopo
-  # il merge, cioe' troppo tardi. Con i fork GitHub chiede comunque
-  # l'approvazione manuale del primo run di ogni nuovo contributore: e'
-  # giusto che sia cosi' e non va aggirato.
-  #
-  # Nessun doppio run: i branch di lavoro non sono in push:branches, quindi
-  # un push su un branch con PR aperta fa scattare solo il run della PR.
+  # Contributors' code is built before it can reach main. GitHub asks for
+  # approval of a first-time contributor's run; that is intended.
   pull_request:
     branches: [main]
 
-  workflow_dispatch: {} # trigger manuale, utile anche solo per riverificare
+  workflow_dispatch: {}
 
-# github.ref distingue gia' una PR (refs/pull/N/merge) da main, quindi PR
-# diverse non si cancellano a vicenda; un nuovo push sulla stessa PR invece
-# si', che e' quello che si vuole.
+# A new push to the same pull request or branch cancels the run in progress.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -169,13 +51,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Swatinem/rust-cache invece di actions/cache "a mano" su target/ grezza:
-      # actions/cache con target/ intera aveva riempito i 14GB del runner
-      # fino a far crashare il job (vedi commit precedenti) — rust-cache
-      # pota da sé gli artefatti obsoleti (mtime > 1 settimana, incrementali,
-      # dipendenze non più usate) prima di salvare, invece di comprimere
-      # tutto indiscriminatamente. Anche più veloce: senza cache su target/,
-      # ogni push ricompilava ~300 crate da zero invece di solo i cambiati.
+      # rust-cache prunes stale artifacts before saving; caching all of
+      # target/ with actions/cache once filled the runner's disk.
       - uses: Swatinem/rust-cache@v2
         with:
           key: debug
@@ -183,17 +60,13 @@ jobs:
       - name: cargo build --locked
         run: cargo build --locked --verbose
 
-      # Il test OCR con fixture reali (bundled_libraries_path_resolution_and_ocr_roundtrip)
-      # fa skip gracioso qui: richiede PDFIUM_LIB_FOR_TEST/TESSERACT_LIB_FOR_TEST
-      # con asset scaricati per davvero (vedi doc del test in
-      # src/documents/ocr.rs) — non li scarichiamo in CI per restare leggeri
-      # sui minuti. Tutto il resto gira per davvero.
+      # The OCR round-trip test skips here: it needs the real pdfium and
+      # Tesseract libraries (see src/documents/ocr.rs), not downloaded in CI.
       - name: cargo test --locked
         run: cargo test --locked --verbose
 
-      # Non-bloccante: ci sono lint pre-esistenti non legati a questo setup CI
-      # (vedi cargo clippy in locale) — qui solo per visibilità, non per gate.
-      - name: cargo clippy (informativo)
+      # Informational, not a gate.
+      - name: cargo clippy (informational)
         run: cargo clippy --all-targets --locked || true
 
   frontend:
@@ -214,28 +87,22 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      # frontend/dist e' committato nel repository (lo serve ServeDir da un
-      # checkout, vedi api::mod::frontend_dist_dir), quindi puo' divergere dal
-      # sorgente senza che nessuno se ne accorga. Peggio: una PR esterna porta
-      # con se' un bundle minificato costruito su una macchina altrui, che
-      # nessuno puo' rileggere a occhio. Questo step lo ricostruisce e fallisce
-      # se non combacia — l'unica verifica che rende quel file affidabile.
-      - name: Il bundle committato corrisponde al sorgente?
+      # frontend/dist is committed (the binary serves it from a checkout), so
+      # it can drift from its source unnoticed, and a pull request can carry a
+      # minified bundle nobody can review. Rebuild it and fail on any change.
+      - name: Committed bundle matches the source
         working-directory: .
         run: |
           if ! git diff --exit-code --stat -- frontend/dist; then
-            echo "::error::frontend/dist non corrisponde a frontend/src." \
-                 "Esegui 'npm ci && npm run build' in frontend/ e committa il risultato."
+            echo "::error::frontend/dist does not match frontend/src." \
+                 "Run 'npm ci && npm run build' in frontend/ and commit the result."
             exit 1
           fi
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # Cache warm-up (solo su push a main, solo se cambiano le dipendenze) — vedi
-  # commento in cima al file ("Cache tra release diverse") per il perché.
-  # ─────────────────────────────────────────────────────────────────────────
+  # ── Cache warm-up (see the top of this file) ────────────────────────────
 
   detect-deps-change:
-    name: Rileva modifiche a Cargo.lock/Cargo.toml
+    name: Detect Cargo.lock/Cargo.toml changes
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
@@ -256,24 +123,17 @@ jobs:
           fi
 
   warm-cache-x86_64:
-    name: Riscalda cache — linux x86_64 (CPU)
+    name: Warm cache — linux x86_64 (CPU)
     needs: detect-deps-change
     if: needs.detect-deps-change.outputs.changed == 'true'
-    # Solo ottimizzazione per la prossima release — un fallimento qui non
-    # deve marcare come rosso l'intero run di main.
+    # Only an optimisation for the next release: must not turn main red.
     continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # shared-key (non key!) — key si AGGIUNGE alla chiave automatica per-job
-      # di rust-cache (github.job), non la sostituisce: con "key" la cache di
-      # warm-cache-x86_64 e quella di release-linux-x86_64 restavano su due
-      # chiavi diverse (…-warm-cache-x86_64-… vs …-release-linux-x86_64-…) e
-      # non si incontravano mai, anche a parità di stringa "key". Verificato
-      # nei log: stesso tempo di build a freddo su entrambi i job (~13min),
-      # nessun hit. shared-key SOSTITUISCE la chiave per-job — è la via
-      # ufficiale per condividere cache tra job con nomi diversi.
+      # shared-key, not key: key is appended to rust-cache's per-job key, so
+      # this job and its release-* twin would never share a cache.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-x86_64
@@ -282,7 +142,7 @@ jobs:
         run: cargo build --release --locked --verbose
 
   warm-cache-windows-x86_64:
-    name: Riscalda cache — windows x86_64 (CPU, cross da Linux)
+    name: Warm cache — windows x86_64 (CPU, cross from Linux)
     needs: detect-deps-change
     if: needs.detect-deps-change.outputs.changed == 'true'
     continue-on-error: true
@@ -294,7 +154,7 @@ jobs:
         with:
           shared-key: release-windows-x86_64
 
-      - name: Aggiungi target Windows (mingw)
+      - name: Add Windows target (mingw)
         run: |
           rustup target add x86_64-pc-windows-gnu
           sudo apt-get update
@@ -304,7 +164,7 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-gnu --locked --verbose
 
   warm-cache-arm64:
-    name: Riscalda cache — linux arm64 (CPU)
+    name: Warm cache — linux arm64 (CPU)
     needs: detect-deps-change
     if: needs.detect-deps-change.outputs.changed == 'true'
     continue-on-error: true
@@ -312,7 +172,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-arm64
@@ -320,26 +179,11 @@ jobs:
       - name: cargo build --release --locked
         run: cargo build --release --locked --verbose
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # Release (solo tag v*) — vedi commento in cima al file per il perché delle
-  # 3 varianti separate.
-  #
-  # Ogni job pubblica il proprio tarball DIRETTAMENTE come asset della
-  # GitHub Release (softprops/action-gh-release), non più via
-  # actions/upload-artifact + un job "publish-release" finale che li
-  # riscarica. Motivo: gli artifact di Actions hanno una quota di storage a
-  # parte (500MB su GitHub Free, ricalcolata ogni 6-12h) — con 4 tarball
-  # CUDA-bundled a centinaia di MB l'uno, uno o due tag bastavano a saturarla
-  # e bloccare l'upload (osservato in produzione sul tag v0.1.8: "Failed to
-  # CreateArtifact: Artifact storage quota has been hit"). Gli asset di una
-  # Release vivono in uno storage separato, senza questo tetto — pubblicare
-  # lì direttamente elimina il problema alla radice invece di rincorrere
-  # retention-days più corti o cancellazioni manuali. softprops/action-gh-
-  # release è idempotente sul tag: la prima chiamata crea la Release, le
-  # successive (dai job paralleli) aggiungono solo il proprio asset a quella
-  # già esistente — pattern comune per release multi-piattaforma, non serve
-  # serializzare i job con `needs`.
-  # ─────────────────────────────────────────────────────────────────────────
+  # ── Release (v* tags only) ──────────────────────────────────────────────
+  # Each job attaches its archive straight to the GitHub Release: Actions
+  # artifacts have their own storage quota, which a couple of releases used
+  # to exhaust. action-gh-release is idempotent per tag, so jobs run in
+  # parallel.
 
   release-linux-x86_64:
     name: Release — linux x86_64 (CPU)
@@ -350,9 +194,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Vedi commento nel job "rust" sul perché rust-cache invece di
-      # actions/cache su target/ grezza. shared-key, non key — vedi commento
-      # in warm-cache-x86_64 sul perché (key non condivide tra job diversi).
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-x86_64
@@ -363,7 +204,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+      - name: Build frontend (shipped in the archive)
         working-directory: frontend
         run: |
           npm ci
@@ -372,10 +213,10 @@ jobs:
       - name: cargo build --release --locked
         run: cargo build --release --locked --verbose
 
-      - name: Installa patchelf (per il RPATH di libtesseract)
+      - name: Install patchelf (RPATH for libtesseract)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
 
-      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
+      - name: Build minimal Tesseract 5.5.0 + Leptonica 1.85.0 (bundled for OCR)
         run: |
           set -e
           W=$(mktemp -d)
@@ -404,15 +245,12 @@ jobs:
           patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
           patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
 
-      - name: Impacchetta binario + lib OCR + frontend + checksum
+      - name: Package binary + OCR libraries + frontend + checksum
         run: |
           mkdir -p dist stage/frontend
           cp target/release/i3k-rag-engine stage/
           cp .env.example stage/
           cp -r frontend/dist stage/frontend/dist
-          # Versione nel nome del tarball: GITHUB_REF su un tag è
-          # "refs/tags/v0.1.3" — questo job gira solo su tag (if: sopra),
-          # quindi è sempre valorizzato qui.
           VERSION="${GITHUB_REF#refs/tags/}"
           tar czf "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" -C stage .
           sha256sum "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz" > "dist/i3k-rag-engine-${VERSION}-linux-x86_64.tar.gz.sha256"
@@ -431,7 +269,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-arm64
@@ -442,7 +279,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+      - name: Build frontend (shipped in the archive)
         working-directory: frontend
         run: |
           npm ci
@@ -451,24 +288,20 @@ jobs:
       - name: cargo build --release --locked
         run: cargo build --release --locked --verbose
 
-      # Bundlato, non scaricato al bootstrap come gli altri componenti — vedi
-      # commento sopra la entry qdrant/linux-aarch64 in manifest.toml: build
-      # custom col fix jemalloc page-size, non l'ufficiale. bootstrap.rs
-      # controlla già "il file di destinazione esiste E lo sha256 combacia"
-      # PRIMA di scaricare (ensure_component, src/bootstrap.rs) — bundlarlo
-      # qui in bin/qdrant fa sì che quel controllo passi subito, senza
-      # nessuna modifica alla logica di bootstrap.
-      - name: Scarica qdrant (build custom, fix jemalloc page-size) e bundlalo
+      # A custom qdrant build (jemalloc for 64K pages, see manifest.toml).
+      # Bootstrap skips its download because the bundled file's sha256
+      # already matches.
+      - name: Download and bundle qdrant (custom build, jemalloc page-size fix)
         run: |
           mkdir -p stage/bin
           curl -fsSL -o stage/bin/qdrant "https://www.i3k.dev/bin/qdrant-1.18.2-aarch64-linux-gnu-64kpage"
           echo "61c98880fd44d915ae20192a0c3e8554cdbd5f40562d67eeff86e60c3e04f375  stage/bin/qdrant" | sha256sum -c -
           chmod +x stage/bin/qdrant
 
-      - name: Installa patchelf (per il RPATH di libtesseract)
+      - name: Install patchelf (RPATH for libtesseract)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
 
-      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 minimali (per bundling OCR)
+      - name: Build minimal Tesseract 5.5.0 + Leptonica 1.85.0 (bundled for OCR)
         run: |
           set -e
           W=$(mktemp -d)
@@ -497,7 +330,7 @@ jobs:
           patchelf --set-rpath '$ORIGIN' stage/lib/libtesseract.so.5
           patchelf --set-rpath '$ORIGIN' stage/lib/libleptonica.so.6
 
-      - name: Impacchetta binario + lib OCR + frontend + qdrant + checksum
+      - name: Package binary + OCR libraries + frontend + qdrant + checksum
         run: |
           mkdir -p dist stage/frontend
           cp target/release/i3k-rag-engine stage/
@@ -521,18 +354,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # shared-key, non key — vedi commento in warm-cache-x86_64 sul perché.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-windows-x86_64
 
-      # Cross-compilazione da runner Linux: nessun runner Windows nativo
-      # necessario. posix, non la variante win32: std::thread di Rust lo
-      # richiede. patchelf non serve qui (Windows non ha RPATH ELF), resta
-      # solo per i job Linux — Ws2_32: il CMakeLists di Tesseract cerca
-      # -lWs2_32 (maiuscolo, convenzione MSVC/Windows), mingw fornisce solo
-      # libws2_32.a minuscolo.
-      - name: Aggiungi target Windows e mingw-w64
+      # Cross-compiled on Linux. The posix mingw variant, not win32: Rust's
+      # std::thread needs it. Tesseract's CMake links -lWs2_32, while mingw
+      # only ships libws2_32.a — hence the symlink.
+      - name: Add Windows target and mingw-w64
         run: |
           rustup target add x86_64-pc-windows-gnu
           sudo apt-get update
@@ -545,22 +374,18 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend (serve dentro il tarball, ServeDir::new è exe-relative)
+      - name: Build frontend (shipped in the archive)
         working-directory: frontend
         run: |
           npm ci
           npm run build
 
-      # Solo CPU: --features cuda richiede nvcc, non disponibile per il
-      # target mingw — vedi commento in cima al file sul perché non è una
-      # combinazione supportata. eullm resta indipendente: la entry
-      # windows-x86_64-cuda in manifest.toml dà comunque inferenza GPU per
-      # l'LLM su Windows, è solo l'embedding (dentro questo binario) a
-      # restare su CPU lì.
+      # CPU only: the cuda feature needs nvcc, unavailable for the mingw
+      # target. eullm's own CUDA build still gives Windows GPU inference.
       - name: cargo build --release --target x86_64-pc-windows-gnu --locked
         run: cargo build --release --target x86_64-pc-windows-gnu --locked --verbose
 
-      - name: Costruisci Tesseract 5.5.0 + Leptonica 1.85.0 per Windows (mingw, linking statico)
+      - name: Build Tesseract 5.5.0 + Leptonica 1.85.0 for Windows (mingw, static runtime)
         run: |
           set -e
           W=$(mktemp -d)
@@ -580,11 +405,8 @@ jobs:
           tar xzf "$W/leptonica.tar.gz" -C "$W"
           git clone --depth 1 --branch 5.5.0 https://github.com/tesseract-ocr/tesseract "$W/tesseract"
 
-          # Senza questi flag le due DLL cercano il runtime mingw a runtime
-          # (libgcc_s_seh-1.dll/libstdc++-6.dll/libwinpthread-1.dll), assente
-          # su un Windows pulito — verificato via objdump -p: con questi
-          # flag restano solo KERNEL32/msvcrt/GDI32/USER32 (di sistema) più
-          # la sibling libleptonica.dll.
+          # Without these flags both DLLs need the mingw runtime DLLs, which a
+          # clean Windows does not have.
           LINK_FLAGS="-static-libgcc -static-libstdc++ -static -lwinpthread -dynamic"
 
           cmake -S "$W/leptonica-1.85.0" -B "$W/build-lept" \
@@ -597,19 +419,9 @@ jobs:
           cmake --build "$W/build-lept" -j"$(nproc)"
           cmake --install "$W/build-lept"
 
-          # LEPT_TIFF_RESULT/LEPT_TIFF_COMPILE_SUCCESS: Tesseract's CMakeLists.txt
-          # (check_leptonica_tiff_support, cmake/CheckFunctions.cmake) probes
-          # whether the linked Leptonica has real TIFF support by compiling
-          # AND RUNNING a tiny test program via try_run(). Cross-compiling,
-          # the resulting .exe can't run on this Linux host — CMake's own
-          # try_run() then errors ("please set the following cache variables
-          # appropriately: LEPT_TIFF_RESULT") and fails the whole configure,
-          # regardless of how Tesseract's own logic would have handled the
-          # placeholder value it falls back to. Pre-seeding both cache
-          # variables skips the execution attempt entirely. 1 is not a
-          # guess: it is the exact value try_run() computes natively on the
-          # Linux Tesseract job for this identical Leptonica build (-DENABLE_
-          # TIFF=OFF there too) — verified in that job's CMakeCache.txt.
+          # Tesseract's configure try_run()s a program to probe Leptonica's
+          # TIFF support, which cannot run when cross-compiling. Pre-seed the
+          # result: 1, the value the Linux job computes for the same build.
           cmake -S "$W/tesseract" -B "$W/build-tess" \
             -DCMAKE_TOOLCHAIN_FILE="$W/toolchain.cmake" \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/out" \
@@ -625,31 +437,11 @@ jobs:
           cp "$W/build-tess/bin/libtesseract55.dll" stage/lib/
           cp "$W/build-lept/bin/libleptonica.dll" stage/lib/
 
-      # i3k-rag-engine.exe stesso dipende da libstdc++-6.dll (verificato con
-      # objdump -p): esaxx-rs, il crate C++ che tokenizers usa per
-      # l'algoritmo Unigram, lo collega dinamicamente, e a differenza di
-      # Tesseract/Leptonica — costruiti da noi via CMake, dove -static-
-      # libgcc/-static-libstdc++ funzionano davvero — qui il collegamento
-      # finale passa dal driver C di rustc (gcc, non g++), che quei flag non
-      # li applica allo stesso modo: verificato con un confronto diretto,
-      # non assunto — build minime isolate con lo stesso identico toolchain
-      # confermano che via g++ il flag funziona, via cargo/rustc no,
-      # indipendentemente da come lo si passa (RUSTFLAGS, .cargo/config.toml,
-      # -C linker=g++, crt-static: nessuna combinazione ha eliminato la
-      # dipendenza). Soluzione più semplice: bundlare la DLL, come già si fa
-      # con le redistributable CUDA su Linux. Va ACCANTO all'exe, non in
-      # lib/: a differenza di pdfium/Tesseract (caricate a runtime via
-      # libloading con path esplicito) questa è una dipendenza di caricamento
-      # del PE stesso, risolta da Windows PRIMA che main() parta — l'ordine
-      # di ricerca DLL di Windows controlla la cartella dell'eseguibile, non
-      # le sue sottocartelle.
-      #
-      # .zip, non .tar.gz — convenzione Windows. pdfium.dll NON è bundlato
-      # qui: arriva già dal manifest al primo avvio (bblanchon/pdfium-
-      # binaries), come su Linux. qdrant.exe/eullm.exe idem, entrambi già
-      # pinnati in manifest.toml per windows-x86_64 — non binari da
-      # costruire o scaricare in questo workflow.
-      - name: Impacchetta binario + runtime mingw + lib OCR + frontend + checksum
+      # The .exe itself needs libstdc++-6.dll (via esaxx-rs, a C++ dependency
+      # of tokenizers), and rustc's link step ignores -static-libstdc++, so
+      # the DLL ships next to the .exe, where Windows looks for it. pdfium,
+      # qdrant and eullm come from the manifest at first start.
+      - name: Package binary + mingw runtime + OCR libraries + frontend + checksum
         run: |
           mkdir -p dist stage/frontend
           cp target/x86_64-pc-windows-gnu/release/i3k-rag-engine.exe stage/
