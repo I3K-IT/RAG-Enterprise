@@ -1142,8 +1142,10 @@ function App() {
                     placeholder="••••••••"
                     required
                     minLength={6}
+                    // Matches the 6..128 server-side password policy.
+                    maxLength={128}
                   />
-                  <p className="text-xs text-slate-400 mt-1">Minimum 6 characters</p>
+                  <p className="text-xs text-slate-400 mt-1">6-128 characters</p>
                 </div>
 
                 <div>
@@ -1156,6 +1158,7 @@ function App() {
                     placeholder="••••••••"
                     required
                     minLength={6}
+                    maxLength={128}
                   />
                 </div>
 
@@ -1417,6 +1420,8 @@ function App() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Ask a question about your documents..."
                 disabled={querying || status !== 'ready'}
+                // Matches MAX_QUERY_CHARS server-side: longer questions are rejected with 400.
+                maxLength={4000}
                 className="flex-1 bg-slate-700 text-white placeholder-slate-400 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
               <button
