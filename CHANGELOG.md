@@ -22,7 +22,7 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
-## [0.1.46] - 2026-09-24
+## [0.1.46] - 2026-09-25
 
 ### Added
 
