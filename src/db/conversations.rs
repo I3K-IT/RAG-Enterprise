@@ -1,4 +1,4 @@
-//! Chat message persistence (`chat_messages` table) e metadata conversazioni (`conversations` table).
+//! Chat message persistence (`chat_messages` table) and conversation metadata (`conversations` table).
 //!
 //! MAX_MESSAGES_PER_USER = 100.
 

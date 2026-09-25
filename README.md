@@ -57,9 +57,9 @@ eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
 No separate GPU build or download is needed on any platform.
 
 ```sh
-mkdir i3k-rag-engine-v0.1.44-linux-x86_64
-tar -xzf i3k-rag-engine-v0.1.44-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.44-linux-x86_64
-cd i3k-rag-engine-v0.1.44-linux-x86_64
+mkdir i3k-rag-engine-v0.1.46-linux-x86_64
+tar -xzf i3k-rag-engine-v0.1.46-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.46-linux-x86_64
+cd i3k-rag-engine-v0.1.46-linux-x86_64
 
 printf 'AUTH__JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
 
@@ -100,10 +100,14 @@ nothing at that new path exists yet.
 
 ## What it does
 
-**Documents.** PDF (including scanned pages, via OCR), DOCX, XLSX, HTML, TXT,
-Markdown and CSV. Scanned PDFs are detected automatically — when a page yields
-too little text it is rasterised and passed through Tesseract in Italian and
-English.
+**Documents.** PDF (including scanned pages, via OCR); Word (DOCX, DOC),
+OpenDocument text (ODT) and RTF; spreadsheets (XLSX, XLSM, XLSB, XLS, ODS,
+CSV); presentations (PPTX, PPT, ODP), speaker notes included; HTML, Markdown,
+plain text and EPUB e-books; e-mail (EML, Outlook MSG), attached documents
+included; and pictures (PNG, JPEG, TIFF — multi-page scans included — BMP, GIF,
+WebP), read through OCR. Scanned PDFs are detected automatically — when a page
+yields too little text it is rasterised and passed through Tesseract in Italian
+and English, the same OCR pictures go through.
 
 **Retrieval.** Documents are split into overlapping chunks, embedded with
 [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (1024 dimensions, multilingual

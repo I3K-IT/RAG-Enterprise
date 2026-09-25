@@ -1,12 +1,8 @@
-//! Evidence extension point — I3K_RAG_Pro_Open_Core_Architecture.md
-//! (rag-enterprise-pro, private repo) section 6.6.
+//! Evidence extension point.
 //!
-//! Pure scaffolding, deliberately: the document is explicit that the
-//! claim -> fact -> NLI verification pipeline must NOT be built yet ("Non
-//! implementare ancora un sistema post-generation claim → fact → NLI.
-//! L'architettura di verification verrà definita separatamente.", and
-//! again in section 22's "cosa NON fare"). This trait exists only so the
-//! shape of the hook is visible; it has no real call site anywhere yet.
+//! Scaffolding only, deliberately: nothing checks an answer against its
+//! sources yet. This trait exists only so the shape of the hook is
+//! visible; it has no real call site anywhere.
 
 use anyhow::Result;
 use async_trait::async_trait;

@@ -1,13 +1,10 @@
-//! Query routing extension point — I3K_RAG_Pro_Open_Core_Architecture.md
-//! (rag-enterprise-pro, private repo) section 6.3.
+//! Query routing extension point.
 //!
-//! Scaffolding only, same treatment as knowledge.rs and evidence.rs: the
-//! real router (deciding between the SEMANTIC/STRUCTURED/COMBINED execution
-//! paths) is explicitly PHASE 9 in that document's section 24/17.2, well
-//! after this phase — building real routing logic now would be doing
-//! PHASE 9's work out of order. This trait exists only so the shape of the
-//! hook is visible; it has no real call site anywhere yet (query.rs always
-//! does a single vector search, unconditionally).
+//! Scaffolding only, same treatment as knowledge.rs and evidence.rs: there
+//! is only one execution path here, so there is nothing to route between.
+//! This trait exists only so the shape of the hook is visible; it has no
+//! real call site anywhere (query.rs always does a single vector search,
+//! unconditionally).
 //!
 //! `DefaultQueryPlanner` always returning `Semantic` is not a placeholder,
 //! though: it is Community's actual, complete current behavior (there is
@@ -16,9 +13,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-/// The three execution paths named in that document's sections 6.3/17.2.
-/// `Combined`, per section 17.2, "must be a real execution path if it is
-/// introduced" — not yet introduced anywhere, Community or Pro.
+/// The execution paths a planner can choose between. Only `Semantic` exists
+/// here; a `Combined` route would have to be a real execution path of its
+/// own, not a relabelled `Semantic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryRoute {
     Semantic,

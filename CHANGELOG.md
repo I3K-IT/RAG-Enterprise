@@ -22,6 +22,235 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
+## [0.1.46] - 2026-09-24
+
+### Added
+
+- **Backups can now prune old archives.** New `BACKUP__RETAIN_LAST`:
+  after each successful backup, archives beyond that many newest are
+  removed, oldest first. `0` (the default) disables pruning and keeps
+  the historical accumulate-forever behaviour — daily backups no
+  longer fill the disk unnoticed. Pruning only ever touches `backup_*`
+  names, never the archive the run has just written, and only warns on
+  failure, never failing the backup itself.
+
+- **`.doc` files are read — Word 6.0 through 2003.** The upload dialog
+  accepted them, but every real one failed: `.doc` went to the `.docx`
+  reader, which only understands the ZIP-based format. The binary
+  format is now read directly, with no external converter — body,
+  footnotes, headers and tables, the visible text of links and other
+  fields, Unicode, and for Word 6.0/95, which predates Unicode, the code
+  page named by the document's fonts. A file is read by what it
+  contains, so a `.docx` renamed to `.doc` still works. Password-protected
+  documents and those older than Word 6.0 are refused with a message
+  saying so.
+
+- **PowerPoint presentations are read — `.pptx` and `.ppt`.** Slides
+  come in the order the presentation shows them, not the order their
+  parts were saved in, each followed by the text of its SmartArt
+  diagrams and its speaker notes; a table stays one row per line. The
+  PowerPoint 97–2003 binary format is read directly, following
+  PowerPoint's own record of its last save, so text deleted in an
+  earlier session does not come back. Either kind is recognised by its
+  content, so one renamed to the other still works.
+
+- **OpenDocument text and presentations are read — `.odt`, `.odp`.**
+  LibreOffice's own formats. Text deleted under change tracking and
+  reviewers' comments are left out; a presentation's speaker notes are
+  kept. Password-protected files are refused with a message saying so.
+
+- **RTF documents are read, and so are `.doc` files that are really
+  RTF,** as Word writes them when asked to — until now such a `.doc`
+  was refused as "not supported yet". Any code page and Unicode, tables,
+  text boxes, headers and footers, and the visible result of links and
+  other fields; comments, hidden text, pictures and embedded objects
+  are skipped.
+
+- **EPUB e-books are read,** chapter by chapter in reading order,
+  without the table of contents. A book under DRM is refused with a
+  message saying so rather than indexed as noise.
+
+- **E-mails are read — `.eml` and Outlook's `.msg` — attachments
+  included.** Subject, sender, recipients, date and attachment names,
+  then the body — the plain-text one, or the HTML one, or Outlook's
+  compressed RTF when that is all there is — then each attached document
+  (PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, text, another
+  e-mail), read as it would be if uploaded on its own, then any message
+  forwarded as an attachment. Pictures are listed but not read: in
+  e-mail they are mostly logos and signatures. An attachment that cannot
+  be read is skipped, not the message. What one upload's messages may
+  have read, attachments and nested messages included, is capped at
+  512 MiB, as ZIP-based documents are. Messages saved in a legacy 8-bit
+  code page decode the way Outlook wrote them.
+
+- **Pictures are read through OCR — `.png`, `.jpg`/`.jpeg`,
+  `.tif`/`.tiff`, `.bmp`, `.gif`, `.webp`.** The same Tesseract, in
+  Italian and English, as scanned PDFs. Every page of a multi-page TIFF
+  is read, fax compression included, and cited by page like a PDF's; a
+  transparent background is laid over white, so dark text on it is not
+  read as black on black.
+
+- **`.xlsm`, `.xlsb` and `.ods` spreadsheets are read.** The reader
+  behind `.xlsx` already understood them; they were simply not accepted.
+  Macros in an `.xlsm` are never run — only cell values are read.
+
+- **`.env.example` is now checked against the settings the loader
+  reads.** A test keeps the template and a list of every
+  `SECTION__FIELD` key in step, in both directions: a key the template
+  assigns but the loader does not know — a typo, or a setting since
+  removed — fails the build, and so does a listed setting missing from
+  the template. It matters because unknown variables are ignored
+  silently, so a misspelled one looked configured while doing nothing.
+  The list is kept by hand next to the settings: a new setting still
+  has to be added to it to be covered.
+
+- **Regression coverage for four untested pure helpers.**
+  `expand_tilde` (data-dir resolution), `fmt_bytes`/`fmt_eta`
+  (bootstrap progress output) and `is_bad_request` (the 400-vs-500
+  split on restore failures) were deterministic and load-bearing but
+  had zero tests. Covered now, boundaries included. `l2_normalize`
+  was deliberately left out: it is dead code, and testing it would
+  cement it instead of questioning it.
+
+### Changed
+
+- **The benchmark report and its logs are fully English.**
+  Completes the translation pass: section headers, table labels,
+  mermaid slices, console lines and tracing messages that were still
+  Italian now match the rest of the report. Comments, output and log
+  strings only; no behavioral change.
+
+- **The application's last Italian text is now English.** In the web
+  UI: the admin panel's Qdrant and SQLite tabs, the chat's error and
+  timeout messages, the source list and the ingestion banner — and the
+  dates in that panel now follow the browser's locale instead of being
+  forced to Italian. In the server: the first-install banner that
+  prints the generated admin password, the `embedding_device` value
+  `/api/info` reports when the embedding lock is poisoned, the warning
+  logged when a CUDA embedding batch runs out of memory, and the doc
+  comments and log lines left over from earlier passes. Italian that is
+  there on purpose stays: the heading keywords the chunker matches in
+  Italian documents (`articolo`, `capitolo`, …), the multilingual
+  example inside the answer prompt, and Italian test fixtures.
+
+- **HTML pages keep all their visible text.** Text outside paragraphs,
+  headings, list items and table cells — in a `div`, a `blockquote`, a
+  `pre`, after a `<br>` — was dropped, and a list item holding a
+  paragraph was indexed twice. Every visible piece of text is now kept
+  once, in order, with a table row on one line; what a browser never
+  shows — scripts, styles, the page's `head` — still is not. The same
+  reader handles the chapters of an EPUB and the HTML body of an
+  e-mail. Since an unchanged `.html` file now extracts differently,
+  `EXTRACTION_CONFIG_VERSION` is 2: chunks ingested from now on carry
+  `pv2` in their provenance id.
+
+- **The chat history no longer stores a copy of every source's text.**
+  Each answer was saved together with the full text of every chunk it was
+  built from — up to 15 of them, 10–15 KB per question, kept for good —
+  although nothing ever displayed it: the web UI shows a source's file,
+  pages and score. Stored sources now keep only what locates the passage
+  (document, chunk, byte range, pages), so each question takes about a
+  quarter of the space. The live answer still carries the chunk text.
+  Messages already in the history are left as they are; for new ones,
+  `GET /api/chat/history` returns sources without `text`.
+
+### Fixed
+
+- **Two backups started in the same second no longer overwrite each
+  other.** Archive and work-dir names had one-second granularity, so a
+  double-clicked "Run Backup Now" (or a manual run landing on the cron
+  tick) silently replaced the first archive with the second. Names now
+  carry a short random suffix after the timestamp prefix the listing
+  sorts on.
+
+- **`--bench-live` reports every ingestion stage again.** Since 0.1.25
+  the live report showed 0 ms for text extraction and Qdrant upsert on
+  every real upload: a translation pass renamed the stage names the
+  report looks up, but not the names the upload handler records them
+  under, and the lookup fell back to zero without a word. Each row's
+  columns no longer added up to its own total, the averages understated
+  the real time, and neither stage could ever be named the bottleneck.
+  Stages are now an enum, so the two sides cannot disagree again.
+
+- **The `top_k` request field is honored instead of silently ignored.**
+  `POST /api/query` accepted `top_k` but always retrieved the
+  hardcoded 15. A value sent by an API client is now used, clamped to
+  `1..=50` so nothing fans out to Qdrant unbounded; absent still means
+  15. The web UI used to send `top_k: 5`, which the backend ignored —
+  it no longer sends it, so its answers keep the depth of 15 they have
+  always had instead of dropping to a third of their context.
+
+- **Downloads stream instead of buffering the whole file in RAM.**
+  `GET /api/documents/{id}/download` loaded the entire original (up to
+  the 1024 MB cap) before responding — the same peak the upload path
+  just stopped paying. The file now streams with a `Content-Length`
+  header; headers and 404 behavior are unchanged. A read failing
+  mid-stream truncates rather than 404s, inherent to streaming.
+
+- **An unknown role in the database now logs instead of silently
+  demoting.** `UserRow::role()` fell back to `User` on any unparsable
+  value, and the role is re-read from the row on login and on every
+  request — so a typo or a corrupt row could demote anyone, admin
+  included, with nothing in the log saying why. Still fail-closed
+  toward the least privilege, now with a warning naming the user and
+  the offending value.
+
+- **The upload dialog offers exactly what the server reads.** The file
+  picker's allow-list had drifted from `SUPPORTED_EXTENSIONS`: `.pptx`
+  was offered but refused after selection, while `.md` and `.csv` parsed
+  fine but were undiscoverable. The two lists now match — the formats
+  added above included — and a test keeps them matching.
+
+- **Legacy `.xls` spreadsheets upload again.** Since 0.1.41 every
+  Excel 97–2003 workbook was refused with "xlsx is not a readable zip
+  archive": the check against decompression bombs — which only ZIP
+  containers can be — ran on every spreadsheet, and a real `.xls` is
+  not a ZIP. It now runs only when the file actually is one, judged by
+  its content rather than its name, so an `.xlsx` renamed to `.xls` is
+  still inspected.
+
+- **A file that crashes its reader is refused cleanly.** When a
+  document reader panicked on an upload — calamine, the spreadsheet
+  library, does on some `.xlsb` files — the upload answered 500 "parse
+  task panicked". It now gets the usual 422 saying the file could not be
+  read, and `--bench` no longer crashes on such a file.
+
+- **A password-protected `.docx`, `.xlsx` or `.pptx` says so.** Office
+  encrypts such a file into an OLE container instead of a ZIP archive,
+  and it was refused as "not a readable zip archive". The message now
+  says the document is password-protected.
+
+- **OCR can no longer crash the server after it finishes.** Tesseract
+  was loaded for each scanned document and unloaded after it. The one
+  bundled here is built without OpenMP, but the Tesseract of a Linux
+  distribution — used when `TESSERACT_DYNAMIC_LIB_PATH` points to it, or
+  when the bundled one is missing — is not: unloading it from under its
+  worker threads crashed the process with SIGSEGV, now and then. It is
+  now loaded once and kept.
+
+---
+
+## [0.1.45] - 2026-09-17
+
+### Fixed
+
+- **Conversation titles are capped at 200 characters.** `PUT
+  /api/conversations/{id}` only rejected empty titles, so anything up
+  to the 2 MB JSON body limit was stored verbatim and returned on
+  every list call — while the UI only ever shows ~50 characters. Now
+  enforced up front via a tested `validate_title`, mirroring
+  `validate_query` (characters, not bytes).
+
+- **Startup now refuses a misconfigured eullm context sizing.**
+  `EULLM__NUM_CTX * EULLM__BATCH_SIZE` becomes `--ctx-size`, but neither
+  side was validated: `0` started eullm with no context or no slot, and
+  an absurd pair overflowed `u32` — panicking in debug, wrapping in
+  release into a garbage context a RAG prompt will not fit in. Both are
+  rejected fail-fast in `Settings::load`, following the existing
+  `validate_auth`/`validate_storage` pattern.
+
+---
+
 ## [0.1.44] - 2026-09-16
 
 ### Fixed
@@ -473,30 +702,26 @@ separate files is what stops two pull requests colliding in this one.
   `ChunkEnricher` a real ingestion uses.** `--bench <file>` used to
   always call `chunker::inject_heading_context` directly, regardless of
   what a caller's `ExtensionRegistry` actually registered — meaning a
-  Pro launcher's `--bench` could never measure its own real enricher
-  (e.g. Contextual Retrieval), only Community's default. `run()` and the
+  launcher that registered its own enricher could never measure it, only
+  the default. `run()` and the
   internal `run_ingestion()` now take a `&dyn ChunkEnricher` parameter;
   `run_with_extensions` passes `extensions.chunk_enricher.as_ref()` —
   already in scope exactly where `--bench` dispatches. This binary's own
   behavior is unchanged (`ExtensionRegistry::default()`'s enricher wraps
-  the same heading-injection as before); a Pro build now gets a
-  `--bench` that genuinely exercises whatever it registered. Needed for
-  `rag-enterprise-pro`'s Phase 7 (`I3K_RAG_Pro_Open_Core_Architecture.md`,
-  private repo, section 24): comparing Community baseline vs. Pro
-  baseline vs. Pro+Contextual Retrieval needs the same tool measuring
-  the real thing in each case, not three different measurements of the
-  same hardcoded default. 121 tests pass, clippy stays clean.
+  the same heading-injection as before); any other launcher now gets a
+  `--bench` that genuinely exercises whatever it registered, so results
+  across enrichers come from the same tool. 121 tests pass, clippy stays
+  clean.
 
 - **`BRANDING.clientName`/`.version` are now build-time configurable**
   (`VITE_BRANDING_NAME`/`VITE_BRANDING_VERSION`, defaulting to this
   repo's own `'i3k RAG Engine'`/`'Community'` — building without them
   set is unchanged). The version badge — previously shown only in small
   print in the app's footer — now also appears next to the product name
-  at login and in the main header. Added so a downstream build (e.g.
-  `rag-enterprise-pro`'s release CI, which builds this exact frontend
-  from the pinned Community rev) can show its own edition without
-  forking this file — not proprietary logic, just a configurable label,
-  same principle as `extensions::`'s generic hooks.
+  at login and in the main header. Added so a downstream build can show
+  its own edition without forking this file — not proprietary logic,
+  just a configurable label, same principle as `extensions::`'s generic
+  hooks.
 
 ---
 
@@ -510,13 +735,11 @@ separate files is what stops two pull requests colliding in this one.
   to live in `main()`. `src/main.rs` is now a thin launcher:
   `i3k_rag_engine::run().await`. Zero behavior change — same 113 tests
   pass, clippy stays clean, `--version` verified end-to-end through the
-  new wiring. This is Phase 1 of the open-core migration: it makes this
-  crate a reusable dependency for `I3K-IT/rag-enterprise-pro`, pinned to
-  an exact commit, per that repository's
-  `I3K_RAG_Pro_Open_Core_Architecture.md` (private — not this repo).
+  new wiring. Other binaries can now depend on this crate, pinned to an
+  exact commit.
 
-- **New `extensions::` module: generic extension points for a Pro
-  binary to register against.** Six traits (`ChunkEnricher`,
+- **New `extensions::` module: generic extension points another binary
+  can register against.** Six traits (`ChunkEnricher`,
   `StructuredKnowledgeProvider`, `QueryPlanner`, `RetrievalStrategy`,
   `Reranker`, `EvidenceLayer`), bundled into `ExtensionRegistry` and
   threaded through `AppState`. `ExtensionRegistry::default()` — what
@@ -527,21 +750,18 @@ separate files is what stops two pull requests colliding in this one.
   `Semantic`, Community's one real retrieval path today) or is a
   genuine no-op where Community has no such feature yet (reranking,
   evidence, structured knowledge). `api::router` also now takes an
-  optional second `pro_router` parameter, merged in when present, so a
-  Pro launcher can add its own routes against the same `AppState`
-  without this crate depending on Pro's code. No proprietary logic
-  lives here — see this repo's own rule on that. 115 tests pass (two
-  new), clippy stays clean. This is Phase 2 of the open-core migration;
-  see Phase 1's changelog entry above for context.
+  optional second parameter of extra routes, merged in when present, so
+  a launcher can add its own routes against the same `AppState` without
+  this crate depending on its code. No proprietary logic lives here —
+  see this repo's own rule on that. 115 tests pass (two new), clippy
+  stays clean.
 
 - **New `build_info() -> (&str, &str)`, exposing the version/commit
   `--version` already printed.** No behavior change for this binary —
   it's the same two values, now also reachable as a function. Added so
-  `rag-enterprise-pro`'s Pro launcher, which statically links this crate
-  via a pinned Git dependency (Phase 4 of the open-core migration), can
-  read Community's own version/commit at runtime for its own
-  `--version` output, without re-deriving it. 116 tests pass (one new),
-  clippy stays clean.
+  a binary that links this crate as a pinned Git dependency can report
+  the core's version/commit in its own `--version` output, without
+  re-deriving it. 116 tests pass (one new), clippy stays clean.
 
 - **New `ChunkPayload.retrieval_text`, and a real (if small) citation
   behavior change: stored/cited chunk text is now always the original,
@@ -557,20 +777,15 @@ separate files is what stops two pull requests colliding in this one.
   a user as if it were the source. `chunk_size` now matches `text`'s own
   length accordingly. `retrieval_text` is optional and
   `skip_serializing_if`, so points written before this field existed
-  keep deserializing unchanged. Required core change for
-  `rag-enterprise-pro`'s upcoming Contextual Retrieval (Phase 6): an
-  LLM-generated context blurb is not "real document content" the way an
-  injected heading is, so this distinction matters far more there — see
-  that repository's `I3K_RAG_Pro_Open_Core_Architecture.md` (private)
-  section 14, and section 18 on why this core change comes from
-  Community first. 121 tests pass (five new), clippy stays clean.
+  keep deserializing unchanged. The distinction matters even more for an
+  enricher that adds generated text, which is not document content at
+  all. 121 tests pass (five new), clippy stays clean.
 
 - **New `EullmClient::model_id() -> &str`.** The configured model name
   was write-only (set in the constructor, never read back). Needed so
-  `rag-enterprise-pro`'s Contextual Retrieval cache key — which must
-  include `model_id` per the architecture document's section 15 — can
-  read it from the same client instance doing the generation, instead
-  of duplicating the configured model name as a second source of truth.
+  a cache keyed on the model can read it from the same client instance
+  doing the generation, instead of duplicating the configured model name
+  as a second source of truth.
 
 ---
 

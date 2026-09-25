@@ -1,4 +1,15 @@
+pub mod codepage;
+pub mod eml;
+pub mod epub;
+pub mod html;
 pub mod metadata;
+pub mod msdoc;
+pub mod msg;
 pub mod ocr;
+pub mod odf;
 pub mod parser;
+pub mod ppt;
+pub mod pptx;
+pub mod rtf;
 pub mod storage;
+pub mod zipxml;

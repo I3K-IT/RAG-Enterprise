@@ -50,9 +50,9 @@ pub struct AppState {
     /// bench::LiveRecorder). None, the default, costs one Option check per
     /// request and no measurement overhead.
     pub live_bench: Option<Arc<LiveRecorder>>,
-    /// Extension points the Pro binary can register without forking this
+    /// Extension points another binary can register without forking this
     /// crate — see extensions::ExtensionRegistry. Always
-    /// ExtensionRegistry::default() in the Community binary itself.
+    /// ExtensionRegistry::default() in this crate's own binary.
     pub extensions: Arc<ExtensionRegistry>,
     /// Guards POST /api/auth/login, the one endpoint that does expensive work
     /// (an Argon2 verification) before knowing who is calling — see

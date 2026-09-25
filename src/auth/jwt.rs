@@ -25,8 +25,8 @@ pub fn create_token(
     expiry_minutes: u64,
 ) -> Result<String> {
     // Checked arithmetic: `Settings::load` already rejects an overflowing
-    // expiry, but Settings is also constructible programmatically (e.g. a Pro
-    // launcher or a test), so signing must never panic (debug) or wrap
+    // expiry, but Settings is also constructible programmatically (by another
+    // launcher, or a test), so signing must never panic (debug) or wrap
     // (release) on it — return an error instead.
     let ttl_secs = expiry_minutes
         .checked_mul(60)

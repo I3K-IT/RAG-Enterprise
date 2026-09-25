@@ -231,7 +231,7 @@ async fn prepare(
         chars = full_prompt.len(),
         chunks = sources.len(),
         history_pairs = history.len(),
-        "prompt costruito"
+        "prompt built"
     );
     Ok((full_prompt, sources, PrepareTimings { embed_query, search, prompt_build }))
 }
@@ -335,7 +335,7 @@ pub async fn query(
     }
 
     // Persist conversation
-    let sources_json = serde_json::to_string(&sources).unwrap_or_default();
+    let sources_json = crate::rag::sources::history_json(&sources);
     let _ = db::conversations::insert(&state.db, claims.user_id, "user", &req.query, None, conv_id).await;
     let _ = db::conversations::insert(
         &state.db,
@@ -487,7 +487,7 @@ pub async fn query_stream(
                 // event.
                 let total_generation = s.gen_start.elapsed();
                 if !s.acc.trim().is_empty() {
-                    let sources_json = serde_json::to_string(&s.sources).unwrap_or_default();
+                    let sources_json = crate::rag::sources::history_json(&s.sources);
                     let _ = db::conversations::insert(
                         &s.db, s.uid, "assistant", &s.acc, Some(&sources_json),
                         s.cid.as_deref(),

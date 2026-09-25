@@ -186,7 +186,7 @@ impl EmbeddingService {
         //   3. Download via hf_hub API (last resort, requires working network)
         let local = Path::new(model_id);
         let (config_path, tokenizer_path, weight_files) = if local.is_dir() {
-            tracing::info!(model_id, "carico embedding da directory locale");
+            tracing::info!(model_id, "loading the embedding model from a local directory");
             resolve_model_dir(local)?
         } else if let Some(cache_dir) = find_in_hf_local_cache(model_id) {
             tracing::info!(model_id, cache = %cache_dir.display(), "found in the local HF cache");
@@ -223,7 +223,7 @@ impl EmbeddingService {
             .map_err(|e| anyhow::anyhow!("tokenizer truncation: {e}"))?;
 
         tracing::info!(model_id, "loading embedding weights (~2.3 GB)…");
-        // bge-m3 = XLM-RoBERTa: weight keys prefissati con "roberta."
+        // bge-m3 = XLM-RoBERTa: weight keys are prefixed with "roberta."
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&weight_files, DType::F32, device)
                 .context("VarBuilder mmap")?
@@ -256,7 +256,7 @@ impl EmbeddingService {
         for chunk in texts.chunks(bs) {
             let mut rows = self.embed_batch(chunk).or_else(|e| {
                 if device_is_cuda(&self.device) {
-                    tracing::warn!("OOM CUDA, riprovo su CPU: {e:#}");
+                    tracing::warn!("CUDA out of memory, retrying on CPU: {e:#}");
                     self.embed_batch_on(chunk, &Device::Cpu)
                 } else {
                     Err(e)
@@ -313,17 +313,17 @@ impl EmbeddingService {
         // CLS pooling: [batch, seq_len, dim] → [batch, dim]
         let cls = hidden.narrow(1, 0, 1)?.squeeze(1)?;
 
-        // L2 normalizzazione lungo dim=1
+        // L2 normalisation along dim=1
         let norm = cls.sqr()?.sum_keepdim(1)?.sqrt()?;
         let normalized = cls.broadcast_div(&norm)?;
 
-        // Sposta su CPU e converti
+        // Move to the CPU and convert
         let cpu = normalized.to_device(&Device::Cpu)?;
         Ok(cpu.to_vec2::<f32>()?)
     }
 }
 
-/// L2-normalizza un vettore di embedding in place.
+/// L2-normalises an embedding vector in place.
 #[allow(dead_code)]
 pub fn l2_normalize(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -403,7 +403,7 @@ fn find_in_hf_local_cache(model_id: &str) -> Option<PathBuf> {
     // 1. HF hub layout: <cache>/models--BAAI--bge-m3/snapshots/<sha>/
     let model_slug = format!("models--{}", model_id.replace('/', "--"));
     let snapshots = hf_cache_base().join(&model_slug).join("snapshots");
-    tracing::debug!(path = %snapshots.display(), "ricerca snapshot HF locale");
+    tracing::debug!(path = %snapshots.display(), "looking for a local HF snapshot");
     if let Ok(rd) = std::fs::read_dir(&snapshots) {
         if let Some(p) = rd
             .flatten()
@@ -460,7 +460,7 @@ fn collect_local_safetensors(dir: &Path) -> Result<Vec<PathBuf>> {
     anyhow::bail!("no safetensors file found in {}", dir.display())
 }
 
-/// Directory dove bootstrap salva i file del modello embedding.
+/// Directory where bootstrap saves the embedding model's files.
 /// Uses I3K_DATA_DIR when set, otherwise ~/.eullm (the historical default).
 pub fn download_target_dir(model_id: &str) -> PathBuf {
     let basename = model_id.rsplit('/').next().unwrap_or(model_id);

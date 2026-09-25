@@ -35,7 +35,7 @@ pub async fn info(State(state): State<AppState>) -> impl IntoResponse {
                 guard.device_label(),
                 guard.device_status() != crate::clients::embeddings::DeviceStatus::CpuFallback,
             ),
-            Err(_) => ("cpu (lock poisoned — stato sconosciuto)", false),
+            Err(_) => ("cpu (lock poisoned — state unknown)", false),
         },
         None => ("eullm", true),
     };

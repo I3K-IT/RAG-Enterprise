@@ -1,17 +1,14 @@
-//! Generic extension points the Community core exposes for the Pro binary
-//! to implement, per `I3K_RAG_Pro_Open_Core_Architecture.md`
-//! (`rag-enterprise-pro`, a private repository — not this one) section 6.
+//! Generic extension points: interfaces a crate that depends on this one
+//! can implement and register, without forking it.
 //!
-//! Community ships only default implementations here — some genuinely
-//! no-op (reranking, evidence, structured knowledge — Community has no
-//! such features today), some not: ingestion's chunk enricher wraps
-//! Community's own already-shipped heading-injection logic, and query
-//! routing's default wraps Community's own single real retrieval path
-//! rather than standing in for a feature that doesn't exist yet. Either
-//! way, the absolute rule from that document's section 7 applies: **no
-//! proprietary Pro code or license logic in this crate, ever** — only
-//! interfaces and defaults that leave this binary's own behavior
-//! unchanged when nothing else is registered.
+//! This crate ships only default implementations — some genuinely no-op
+//! (reranking, evidence, structured knowledge: there are no such features
+//! here), some not: ingestion's chunk enricher wraps the heading injection
+//! this crate already ships, and query routing's default wraps its single
+//! real retrieval path rather than standing in for a feature that does not
+//! exist. Either way the rule is the same: **no proprietary code or license
+//! logic in this crate, ever** — only interfaces, and defaults that leave
+//! this binary's behavior unchanged when nothing else is registered.
 
 pub mod api;
 pub mod evidence;
@@ -30,7 +27,7 @@ pub use routing::{DefaultQueryPlanner, QueryPlanner, QueryRoute};
 
 use std::sync::Arc;
 
-/// Every per-request extension point the Pro binary can register, bundled
+/// Every per-request extension point a downstream binary can register, bundled
 /// into one struct stored in `AppState`. `ExtensionRegistry::default()` —
 /// what the Community binary itself always uses — must leave Community's
 /// existing behavior unchanged; that invariant is each default impl's job,

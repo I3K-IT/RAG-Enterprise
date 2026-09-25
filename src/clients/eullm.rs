@@ -182,8 +182,7 @@ impl EullmClient {
     }
 
     /// The configured model name — e.g. for a cache key that must miss
-    /// when the model changes (rag-enterprise-pro's Contextual Retrieval
-    /// cache, `I3K_RAG_Pro_Open_Core_Architecture.md` section 15).
+    /// when the model changes.
     pub fn model_id(&self) -> &str {
         &self.model
     }

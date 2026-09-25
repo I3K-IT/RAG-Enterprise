@@ -3,10 +3,8 @@ import axios from 'axios'
 import './index.css'
 
 // clientName/version are build-time configurable (VITE_BRANDING_*) so a
-// downstream build — e.g. rag-enterprise-pro's release CI, which builds this
-// same frontend from the pinned Community rev — can show its own edition
-// without forking this file. Defaults are this repo's own Community values;
-// building without those env vars set is unchanged from before.
+// downstream build can show its own name and edition without forking this
+// file. Without those variables the defaults below apply.
 const BRANDING = {
   clientLogo: null,
   clientName: import.meta.env.VITE_BRANDING_NAME || 'i3k RAG Engine',
@@ -53,8 +51,8 @@ function App() {
 
   // Backend status
   const [status, setStatus] = useState('checking')
-  // true se almeno un documento è in fase di ingestione pesante (extract/chunk/embed)
-  // in QUALSIASI sessione connessa — non solo la tua (vedi GET /health, polling ogni 30s).
+  // true while at least one document is in a heavy ingestion stage (extract/chunk/embed)
+  // in ANY connected session — not only yours (see GET /health, polled every 30s).
   const [ingestionInProgress, setIngestionInProgress] = useState(false)
 
   // Conversations (localStorage)
@@ -130,15 +128,15 @@ function App() {
   }, [isAuthenticated])
 
   useEffect(() => {
-    // Registrato una sola volta (niente dipendenza da `token`): legge il token
-    // da localStorage ad ogni richiesta, non da una closure. Se dipendesse da
-    // `token` via [token], questo effetto è dichiarato DOPO quello che lancia
-    // fetchConversationsFromApi/fetchDocuments su isAuthenticated (riga ~100) —
-    // React esegue gli effetti nell'ordine di dichiarazione nello stesso commit,
-    // quindi al login (isAuthenticated e token cambiano insieme) le prime
-    // richieste partirebbero con l'interceptor "vecchio" (token ancora null dal
-    // mount) → 401 → conversazioni e documenti restano vuoti. Leggere sempre da
-    // localStorage elimina il problema indipendentemente dall'ordine degli effetti.
+    // Registered once (no dependency on `token`): it reads the token from
+    // localStorage on every request, not from a closure. Were it to depend on
+    // `token` via [token], this effect is declared AFTER the one that fires
+    // fetchConversationsFromApi/fetchDocuments on isAuthenticated (line ~100) —
+    // React runs effects in declaration order within one commit, so at login
+    // (isAuthenticated and token change together) the first requests would go
+    // out through the "old" interceptor (token still null from mount) → 401 →
+    // conversations and documents stay empty. Always reading from localStorage
+    // removes the problem whatever order the effects run in.
     const reqInt = axios.interceptors.request.use(
       (config) => {
         const currentToken = localStorage.getItem('rag_auth_token')
@@ -300,12 +298,12 @@ function App() {
   }
 
   const handleQdrantDeleteDocument = async (docId, filename) => {
-    if (!window.confirm(`Eliminare tutti i vettori di "${filename}" da Qdrant?`)) return
+    if (!window.confirm(`Delete all vectors of "${filename}" from Qdrant?`)) return
     try {
       await axios.delete(`${API_URL}/api/admin/qdrant/document/${docId}`)
       fetchQdrantInfo()
     } catch (e) {
-      alert('Errore: ' + (e.response?.data?.error || e.message))
+      alert('Error: ' + (e.response?.data?.error || e.message))
     }
   }
 
@@ -374,7 +372,7 @@ function App() {
         await createNewConversation()
       }
     } catch (e) {
-      console.error('Errore caricamento conversazioni:', e)
+      console.error('Error loading conversations:', e)
       setConversations([])
       setMessages([])
     }
@@ -389,7 +387,7 @@ function App() {
       setMessages([])
       return conv.id
     } catch (e) {
-      console.error('Errore creazione conversazione:', e)
+      console.error('Error creating conversation:', e)
       return null
     }
   }
@@ -406,7 +404,7 @@ function App() {
       }))
       setMessages(msgs)
     } catch (e) {
-      console.error('Errore caricamento messaggi:', e)
+      console.error('Error loading messages:', e)
       setMessages([])
     }
   }
@@ -424,7 +422,7 @@ function App() {
         }
       }
     } catch (e) {
-      alert('Errore eliminazione: ' + (e.response?.data?.error || e.message))
+      alert('Delete error: ' + (e.response?.data?.error || e.message))
     }
   }
 
@@ -434,7 +432,7 @@ function App() {
       await axios.put(`${API_URL}/api/conversations/${convId}`, { title })
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c))
     } catch (e) {
-      console.error('Errore rinomina conversazione:', e)
+      console.error('Error renaming conversation:', e)
     }
   }
 
@@ -500,7 +498,7 @@ function App() {
     try {
       const response = await axios.post(`${API_URL}/api/documents/upload`, formData, {
         onUploadProgress: (evt) => {
-          // evt.total può mancare (chunked encoding): senza, il calcolo dà NaN
+          // evt.total can be missing (chunked encoding): without it the percentage is NaN
           if (evt.total) setUploadProgress(Math.round((evt.loaded * 100) / evt.total))
         }
       })
@@ -536,7 +534,7 @@ function App() {
     const updatedMessages = [...messages, userMessage]
     isNearBottomRef.current = true // the user's own message always scrolls into view
     setMessages(updatedMessages)
-    // Primo messaggio → rinomina la conversazione
+    // First message → rename the conversation
     if (updatedMessages.length === 1) updateConversationTitleApi(currentConversationId, query)
 
     setQuery('')
@@ -545,12 +543,12 @@ function App() {
 
     modelLoadingTimerRef.current = setTimeout(() => setIsModelLoading(true), 5000)
 
-    // SSE: il tempo alla prima parola non cambia (dipende dal prefill), ma
-    // l'utente vede il testo comparire progressivamente invece di aspettare
-    // l'intera risposta — decisivo su risposte lunghe. Il placeholder
-    // assistant viene aggiunto solo al primo token: fino ad allora resta
-    // visibile lo spinner "Searching..." già esistente (vedi condizione di
-    // render più sotto, ora basata sull'ultimo messaggio in coda).
+    // SSE: the time to the first word does not change (it depends on prefill),
+    // but the user sees the text appear progressively instead of waiting for
+    // the whole answer — decisive on long answers. The assistant placeholder
+    // is added only at the first token: until then the existing "Searching..."
+    // spinner stays visible (see the render condition further down, now based
+    // on the last message in the queue).
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 630000)
     let assistantPushed = false
@@ -596,13 +594,13 @@ function App() {
         try {
           const errJson = await response.json()
           errMsg = errJson.error || errMsg
-        } catch { /* corpo non JSON, tieni lo status */ }
+        } catch { /* body is not JSON: keep the status */ }
         throw new Error(errMsg)
       }
 
-      // Parser SSE minimale: eventi separati da riga vuota, payload sulla
-      // riga "data: {...}" (vedi query_stream in query.rs — un solo evento
-      // per riga, mai multi-riga, perché serde_json esegue l'escape di \n).
+      // Minimal SSE parser: events are separated by a blank line, the payload is
+      // on the "data: {...}" line (see query_stream in query.rs — one event per
+      // line, never multi-line, because serde_json escapes \n).
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -613,16 +611,16 @@ function App() {
         buffer += decoder.decode(value, { stream: true })
 
         const events = buffer.split('\n\n')
-        buffer = events.pop() // frammento incompleto, resta in buffer per il prossimo chunk
+        buffer = events.pop() // incomplete fragment: kept in the buffer for the next chunk
 
         for (const raw of events) {
           const dataLine = raw.split('\n').find(l => l.startsWith('data: '))
-          if (!dataLine) continue // keep-alive SSE o blocco senza payload
+          if (!dataLine) continue // SSE keep-alive, or a block with no payload
           let payload
           try {
             payload = JSON.parse(dataLine.slice('data: '.length))
           } catch {
-            continue // riga malformata (rete instabile): salta la riga, non lo stream
+            continue // malformed line (unstable network): skip the line, not the stream
           }
 
           if (payload.token !== undefined) {
@@ -645,7 +643,7 @@ function App() {
             } else {
               assistantPushed = true
               setMessages(prev => [...prev, {
-                role: 'assistant', content: `Errore: ${payload.error}`,
+                role: 'assistant', content: `Error: ${payload.error}`,
                 error: true, timestamp: new Date().toISOString(),
               }])
             }
@@ -659,7 +657,7 @@ function App() {
             } else {
               assistantPushed = true
               setMessages(prev => [...prev, {
-                role: 'assistant', content: '(risposta vuota)', sources: payload.sources || [],
+                role: 'assistant', content: '(empty answer)', sources: payload.sources || [],
                 error: true, timestamp: new Date().toISOString(),
               }])
             }
@@ -669,14 +667,14 @@ function App() {
 
       if (!assistantPushed) {
         setMessages(prev => [...prev, {
-          role: 'assistant', content: '(nessuna risposta ricevuta)', error: true, timestamp: new Date().toISOString(),
+          role: 'assistant', content: '(no answer received)', error: true, timestamp: new Date().toISOString(),
         }])
       }
     } catch (error) {
       const isTimeout = error.name === 'AbortError'
       const errorContent = isTimeout
-        ? 'Il modello ha impiegato troppo tempo. Riprova.'
-        : `Errore: ${error.message}`
+        ? 'The model took too long to answer. Please try again.'
+        : `Error: ${error.message}`
       if (assistantPushed) {
         setMessages(prev => {
           const next = [...prev]
@@ -979,19 +977,19 @@ function App() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-semibold text-white">Qdrant Vector Store</h3>
-                    <button onClick={fetchQdrantInfo} className="text-sm text-blue-400 hover:text-blue-300">Aggiorna</button>
+                    <button onClick={fetchQdrantInfo} className="text-sm text-blue-400 hover:text-blue-300">Refresh</button>
                   </div>
 
                   {loadingQdrant ? (
-                    <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                    <p className="text-center text-slate-400 py-8">Loading...</p>
                   ) : (
                     <>
                       {qdrantStats && (
                         <div className="grid grid-cols-3 gap-3">
                           {[
-                            ['Punti totali', qdrantStats.points_count ?? '—'],
-                            ['Vettori indicizzati', qdrantStats.indexed_vectors_count ?? '—'],
-                            ['Stato', qdrantStats.status ?? '—'],
+                            ['Total points', qdrantStats.points_count ?? '—'],
+                            ['Indexed vectors', qdrantStats.indexed_vectors_count ?? '—'],
+                            ['Status', qdrantStats.status ?? '—'],
                           ].map(([label, val]) => (
                             <div key={label} className="bg-slate-700 rounded-lg p-3 text-center">
                               <p className="text-xs text-slate-400">{label}</p>
@@ -1002,23 +1000,23 @@ function App() {
                       )}
 
                       {qdrantDocs.length === 0 ? (
-                        <p className="text-slate-400 text-sm text-center py-4">Nessun documento in Qdrant</p>
+                        <p className="text-slate-400 text-sm text-center py-4">No documents in Qdrant</p>
                       ) : (
                         <div className="space-y-2">
-                          <p className="text-sm text-slate-400">{qdrantDocs.length} document{qdrantDocs.length !== 1 ? 'i' : 'o'} nel vector store</p>
+                          <p className="text-sm text-slate-400">{qdrantDocs.length} document{qdrantDocs.length !== 1 ? 's' : ''} in the vector store</p>
                           <div className="max-h-80 overflow-y-auto space-y-2">
                             {qdrantDocs.map((doc) => (
                               <div key={doc.document_id} className="bg-slate-700 rounded-lg p-3 flex items-center justify-between gap-3">
                                 <div className="flex-1 min-w-0">
                                   <p className="text-white text-sm font-medium truncate">{doc.filename}</p>
                                   <p className="text-xs text-slate-400 font-mono truncate">{doc.document_id}</p>
-                                  <p className="text-xs text-slate-400">{doc.chunk_count} chunk · {doc.upload_date ? new Date(doc.upload_date).toLocaleString('it-IT') : '—'}</p>
+                                  <p className="text-xs text-slate-400">{doc.chunk_count} chunk{doc.chunk_count !== 1 ? 's' : ''} · {doc.upload_date ? new Date(doc.upload_date).toLocaleString() : '—'}</p>
                                 </div>
                                 <button
                                   onClick={() => handleQdrantDeleteDocument(doc.document_id, doc.filename)}
                                   className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition flex-shrink-0"
                                 >
-                                  Elimina vettori
+                                  Delete vectors
                                 </button>
                               </div>
                             ))}
@@ -1034,20 +1032,20 @@ function App() {
                         const orphansSqlite = sqliteDocs.filter(d => d.is_deleted === 0 && !qdrantIds.has(d.id))
                         if (orphansQdrant.length === 0 && orphansSqlite.length === 0) return (
                           <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 text-sm text-green-300">
-                            SQLite e Qdrant sono sincronizzati.
+                            SQLite and Qdrant are in sync.
                           </div>
                         )
                         return (
                           <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-3 space-y-2">
                             {orphansQdrant.length > 0 && (
                               <div>
-                                <p className="text-yellow-300 text-sm font-semibold">Orfani in Qdrant (non in SQLite):</p>
+                                <p className="text-yellow-300 text-sm font-semibold">Orphaned in Qdrant (not in SQLite):</p>
                                 {orphansQdrant.map(d => (
                                   <div key={d.document_id} className="flex items-center justify-between mt-1">
                                     <span className="text-xs text-slate-300 font-mono truncate">{d.filename} ({d.document_id.slice(0,8)}…)</span>
                                     <button onClick={() => handleQdrantDeleteDocument(d.document_id, d.filename)}
                                       className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded ml-2 flex-shrink-0">
-                                      Pulisci
+                                      Clean up
                                     </button>
                                   </div>
                                 ))}
@@ -1055,7 +1053,7 @@ function App() {
                             )}
                             {orphansSqlite.length > 0 && (
                               <div>
-                                <p className="text-yellow-300 text-sm font-semibold">In SQLite ma non in Qdrant:</p>
+                                <p className="text-yellow-300 text-sm font-semibold">In SQLite but not in Qdrant:</p>
                                 {orphansSqlite.map(d => (
                                   <p key={d.id} className="text-xs text-slate-300 font-mono mt-1 truncate">{d.filename} ({d.id.slice(0,8)}…)</p>
                                 ))}
@@ -1073,31 +1071,31 @@ function App() {
               {adminTab === 'sqlite' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-white">SQLite — tabella documenti</h3>
-                    <button onClick={fetchSqliteInfo} className="text-sm text-blue-400 hover:text-blue-300">Aggiorna</button>
+                    <h3 className="text-lg font-semibold text-white">SQLite — documents table</h3>
+                    <button onClick={fetchSqliteInfo} className="text-sm text-blue-400 hover:text-blue-300">Refresh</button>
                   </div>
 
                   {loadingSqlite ? (
-                    <p className="text-center text-slate-400 py-8">Caricamento...</p>
+                    <p className="text-center text-slate-400 py-8">Loading...</p>
                   ) : sqliteDocs.length === 0 ? (
-                    <p className="text-slate-400 text-sm text-center py-4">Nessun documento nel database</p>
+                    <p className="text-slate-400 text-sm text-center py-4">No documents in the database</p>
                   ) : (
                     <div className="max-h-[60vh] overflow-y-auto space-y-2">
-                      <p className="text-sm text-slate-400">{sqliteDocs.length} righe totali ({sqliteDocs.filter(d => d.is_deleted === 0).length} attive, {sqliteDocs.filter(d => d.is_deleted !== 0).length} cancellate)</p>
+                      <p className="text-sm text-slate-400">{sqliteDocs.length} rows in total ({sqliteDocs.filter(d => d.is_deleted === 0).length} active, {sqliteDocs.filter(d => d.is_deleted !== 0).length} deleted)</p>
                       {sqliteDocs.map((doc) => (
                         <div key={doc.id} className={`rounded-lg p-3 border ${doc.is_deleted ? 'bg-slate-700/50 border-slate-600 opacity-60' : 'bg-slate-700 border-slate-600'}`}>
                           <div className="flex items-center gap-2 mb-1">
                             <span className={`px-2 py-0.5 rounded text-xs font-bold ${doc.is_deleted ? 'bg-red-800 text-red-200' : 'bg-green-700 text-green-100'}`}>
-                              {doc.is_deleted ? 'ELIMINATO' : 'ATTIVO'}
+                              {doc.is_deleted ? 'DELETED' : 'ACTIVE'}
                             </span>
                             <span className="text-white text-sm font-medium truncate">{doc.filename}</span>
                           </div>
                           <div className="grid grid-cols-2 gap-x-4 text-xs text-slate-400 mt-1">
                             <span>ID: <span className="font-mono">{doc.id.slice(0,8)}…</span></span>
-                            <span>Tipo: {doc.doc_type}</span>
-                            <span>Pagine: {doc.page_count ?? '—'}</span>
-                            <span>Chunk: {doc.chunk_count}</span>
-                            <span className="col-span-2">Caricato: {doc.upload_date ? new Date(doc.upload_date).toLocaleString('it-IT') : '—'}</span>
+                            <span>Type: {doc.doc_type}</span>
+                            <span>Pages: {doc.page_count ?? '—'}</span>
+                            <span>Chunks: {doc.chunk_count}</span>
+                            <span className="col-span-2">Uploaded: {doc.upload_date ? new Date(doc.upload_date).toLocaleString() : '—'}</span>
                           </div>
                         </div>
                       ))}
@@ -1340,7 +1338,7 @@ function App() {
                       return (
                         <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
                           <p className="text-sm font-semibold text-slate-300">
-                            Fonti ({unique.length} {unique.length === 1 ? 'documento' : 'documenti'}):
+                            Sources ({unique.length} {unique.length === 1 ? 'document' : 'documents'}):
                           </p>
                           {unique.map((source, sidx) => (
                             <div key={sidx} className="bg-slate-600 rounded p-2 text-sm">
@@ -1356,9 +1354,9 @@ function App() {
                                 {source.page_start != null && (
                                   <span
                                     className="bg-slate-500 text-slate-100 px-2 py-1 rounded text-xs font-semibold flex-shrink-0"
-                                    title="Pagina nel documento originale"
+                                    title="Page in the original document"
                                   >
-                                    pag. {source.page_start}
+                                    p. {source.page_start}
                                     {source.page_end != null && source.page_end !== source.page_start
                                       ? `–${source.page_end}`
                                       : ''}
@@ -1407,7 +1405,7 @@ function App() {
           {ingestionInProgress && (
             <div className="border-t border-slate-700 bg-amber-900/40 text-amber-200 text-sm px-4 py-2 flex items-center gap-2">
               <span className="animate-spin">⏳</span>
-              <span>Ingestione documento in corso, attendi qualche secondo — le risposte potrebbero essere più lente del solito.</span>
+              <span>A document is being ingested — for a few seconds, answers may be slower than usual.</span>
             </div>
           )}
 
@@ -1446,7 +1444,7 @@ function App() {
                     onChange={handleFileUpload}
                     disabled={uploading}
                     className="hidden"
-                    accept=".pdf,.docx,.doc,.txt,.md,.csv,.xlsx,.xls,.html,.htm"
+                    accept=".pdf,.docx,.doc,.odt,.rtf,.txt,.md,.csv,.xlsx,.xls,.xlsm,.xlsb,.ods,.pptx,.ppt,.odp,.epub,.html,.htm,.eml,.msg,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.gif,.webp"
                   />
                   <button
                     onClick={() => fileInputRef.current?.click()}

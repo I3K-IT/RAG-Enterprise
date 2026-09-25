@@ -1,12 +1,9 @@
-//! Structured knowledge extension point — I3K_RAG_Pro_Open_Core_Architecture.md
-//! (rag-enterprise-pro, private repo) section 6.2.
+//! Structured knowledge extension point.
 //!
-//! Scaffolding only: Community has no structured-extraction pipeline
-//! (entities/events/amounts/relationships/domain profiles) today, so there
-//! is no real call site yet to ground an exact signature in — unlike
-//! `ingestion::ChunkEnricher`. Pro's structured-extraction module (section
-//! 17.1) is expected to be the first real implementation; this interface
-//! should be revisited against that work rather than treated as final.
+//! Scaffolding only: there is no structured-extraction pipeline here, so no
+//! real call site to ground an exact signature in — unlike
+//! `ingestion::ChunkEnricher`. The interface should be revisited against the
+//! first real implementation rather than treated as final.
 
 use anyhow::Result;
 use async_trait::async_trait;

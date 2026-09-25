@@ -30,11 +30,11 @@ fn frontend_dist_dir() -> std::path::PathBuf {
 
 /// Build the full axum Router with all routes and CORS middleware.
 ///
-/// `pro_router`, per extensions::api's doc comment, is the API extension
-/// point: a Pro launcher builds its own routes against this same
-/// `AppState` (`/license`, `/pro/...`, ...) and merges them in here.
-/// Community's own launcher (`lib::run`) always passes `None`.
-pub fn router(state: AppState, pro_router: Option<Router<AppState>>) -> Router {
+/// `extra_routes`, per extensions::api's doc comment, is the API extension
+/// point: a launcher builds its own routes against this same `AppState` and
+/// they are merged in here. This crate's own launcher (`lib::run`) always
+/// passes `None`.
+pub fn router(state: AppState, extra_routes: Option<Router<AppState>>) -> Router {
     let public = Router::new()
         .route("/health", get(health::health))
         .route("/info", get(health::info));
@@ -102,8 +102,8 @@ pub fn router(state: AppState, pro_router: Option<Router<AppState>>) -> Router {
         .merge(query_routes)
         .merge(conv_routes)
         .merge(admin_routes);
-    if let Some(pro_router) = pro_router {
-        app = app.merge(pro_router);
+    if let Some(extra_routes) = extra_routes {
+        app = app.merge(extra_routes);
     }
 
     // CORS only when someone asked for it. The previous
@@ -201,10 +201,9 @@ mod tests {
     /// for path params. The `{name}` syntax belongs to axum 0.8+: on 0.7 it is
     /// treated as a LITERAL segment and so never matches a real value. The only
     /// service that then catches those requests is the SPA fallback (ServeDir),
-    /// which
-    /// risponde 405 su DELETE/PUT e servirebbe silenziosamente index.html su GET.
-    /// Bug reale riscontrato in produzione (delete documenti/qdrant/conversazioni
-    /// answered them all with 405 — this test stops that recurring.
+    /// which answers 405 to DELETE/PUT and would silently serve index.html on
+    /// GET. A real bug, seen in production: deleting documents, Qdrant data and
+    /// conversations all answered 405 — this test stops that recurring.
     #[test]
     fn no_axum_08_style_path_params() {
         let src = include_str!("mod.rs");

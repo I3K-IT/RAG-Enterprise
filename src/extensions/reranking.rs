@@ -1,9 +1,7 @@
-//! Reranking extension point — I3K_RAG_Pro_Open_Core_Architecture.md
-//! (rag-enterprise-pro, private repo) section 6.5.
+//! Reranking extension point.
 //!
-//! Scaffolding only, not wired into api/query.rs — Community has no
-//! reranking today (it is a Pro feature, section 17.4: cross-encoder over
-//! BAAI/bge-reranker-base). Signature grounded in the real candidate type
+//! Scaffolding only, not wired into api/query.rs — there is no reranking
+//! here. Signature grounded in the real candidate type
 //! (`SearchHit`, same as retrieval.rs) so a future reranker can be dropped
 //! in against retrieval's real output rather than an invented type.
 
