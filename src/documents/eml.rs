@@ -21,12 +21,14 @@ use super::html::tidy;
 /// this deep.
 pub(crate) const MAX_DEPTH: usize = 8;
 
-/// How many bytes one upload's messages may have read — attached files,
-/// and in an Outlook file every stream — across all the messages nested in
-/// it. Nothing stops an Outlook file from pointing any number of streams at
-/// the same bytes, so without a bound a small file could have one attached
-/// document read, or one attached message opened, over and over. The same
-/// ceiling as for ZIP archives: far above any real mailbox export.
+/// How many bytes one upload's messages may have read — attached files and
+/// the text read from them, and in an Outlook file every stream and the
+/// RTF body it decompresses — across all the messages nested in it. Nothing
+/// stops an Outlook file from pointing any number of streams at the same
+/// bytes, so without a bound a small file could have one attached document
+/// read, or one attached message opened, over and over; and what is
+/// compressed, a document or a body, can expand far beyond the upload. The
+/// same ceiling as for ZIP archives: far above any real mailbox export.
 pub(crate) struct Budget {
     left: Cell<u64>,
     spent: Cell<bool>,
@@ -266,7 +268,11 @@ pub(crate) fn read_attachment(
         }
     };
     match read() {
-        Ok(text) => Some(text),
+        // A document's text is drawn from the budget too: a few kilobytes
+        // of ZIP can inflate to hundreds of megabytes, and a message can
+        // carry many. A message's text was drawn part by part as it was read.
+        Ok(text) if matches!(ext, "eml" | "msg") || budget.take(text.len() as u64) => Some(text),
+        Ok(_) => None,
         Err(e) => {
             tracing::warn!(attachment = name, error = %format!("{e:#}"), "attachment not read");
             None
@@ -446,6 +452,40 @@ mod tests {
         let budget = Budget::of(10);
         assert!(budget.take(4) && budget.take(6));
         assert!(!budget.take(1), "nothing is left");
+    }
+
+    #[test]
+    fn what_an_attached_document_inflates_to_is_drawn_from_the_budget() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("content.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            zip,
+            "<office:document-content><office:body><office:text><text:p>{}</text:p>\
+             </office:text></office:body></office:document-content>",
+            "Riga ripetuta. ".repeat(100_000)
+        )
+        .unwrap();
+        let odt = zip.finish().unwrap().into_inner();
+        assert!(odt.len() < 50_000, "{} bytes", odt.len());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mail.eml");
+        let eml = message(
+            "Inflated",
+            &[(Some("big.odt"), "application/octet-stream", &odt)],
+        );
+        std::fs::write(&path, eml).unwrap();
+        let text = extract_at(&path, dir.path(), 0, &Budget::of(1_000_000)).unwrap();
+        assert!(text.contains("Body of Inflated."), "{text}");
+        assert!(!text.contains("Attachment: big.odt"), "{text}");
+        let text = extract_at(&path, dir.path(), 0, &Budget::of(2_000_000)).unwrap();
+        assert!(
+            text.contains("Attachment: big.odt\nRiga ripetuta."),
+            "{}",
+            text.chars().take(200).collect::<String>()
+        );
     }
 
     #[test]

@@ -79,9 +79,10 @@ separate files is what stops two pull requests colliding in this one.
   forwarded as an attachment. Pictures are listed but not read: in
   e-mail they are mostly logos and signatures. An attachment that cannot
   be read is skipped, not the message. What one upload's messages may
-  have read, attachments and nested messages included, is capped at
-  512 MiB, as ZIP-based documents are. Messages saved in a legacy 8-bit
-  code page decode the way Outlook wrote them.
+  have read — attachments and the text they expand to, nested messages,
+  a compressed RTF body once decompressed — is capped at 512 MiB, as
+  ZIP-based documents are. Messages saved in a legacy 8-bit code page
+  decode the way Outlook wrote them.
 
 - **Pictures are read through OCR — `.png`, `.jpg`/`.jpeg`,
   `.tif`/`.tiff`, `.bmp`, `.gif`, `.webp`.** The same Tesseract, in
