@@ -103,11 +103,11 @@ nothing at that new path exists yet.
 **Documents.** PDF (including scanned pages, via OCR); Word (DOCX, DOC),
 OpenDocument text (ODT) and RTF; spreadsheets (XLSX, XLSM, XLSB, XLS, ODS,
 CSV); presentations (PPTX, PPT, ODP), speaker notes included; HTML, Markdown,
-plain text and EPUB e-books; e-mail (EML, Outlook MSG); and pictures (PNG,
-JPEG, TIFF — multi-page scans included — BMP, GIF, WebP), read through OCR.
-Scanned PDFs are detected automatically — when a page yields too little text
-it is rasterised and passed through Tesseract in Italian and English, the same
-OCR pictures go through.
+plain text and EPUB e-books; e-mail (EML, Outlook MSG), attached documents
+included; and pictures (PNG, JPEG, TIFF — multi-page scans included — BMP, GIF,
+WebP), read through OCR. Scanned PDFs are detected automatically — when a page
+yields too little text it is rasterised and passed through Tesseract in Italian
+and English, the same OCR pictures go through.
 
 **Retrieval.** Documents are split into overlapping chunks, embedded with
 [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (1024 dimensions, multilingual

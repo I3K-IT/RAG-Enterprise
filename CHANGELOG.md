@@ -70,13 +70,18 @@ separate files is what stops two pull requests colliding in this one.
   without the table of contents. A book under DRM is refused with a
   message saying so rather than indexed as noise.
 
-- **E-mails are read — `.eml` and Outlook's `.msg`.** Subject, sender,
-  recipients, date and attachment names, then the body — the plain-text
-  one, or the HTML one, or Outlook's compressed RTF when that is all
-  there is — then the attachments that are plain text, then any message
-  forwarded as an attachment. Other attachments are listed by name but
-  not read: upload them as documents of their own. Messages saved in a
-  legacy 8-bit code page decode the way Outlook wrote them.
+- **E-mails are read — `.eml` and Outlook's `.msg` — attachments
+  included.** Subject, sender, recipients, date and attachment names,
+  then the body — the plain-text one, or the HTML one, or Outlook's
+  compressed RTF when that is all there is — then each attached document
+  (PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, text, another
+  e-mail), read as it would be if uploaded on its own, then any message
+  forwarded as an attachment. Pictures are listed but not read: in
+  e-mail they are mostly logos and signatures. An attachment that cannot
+  be read is skipped, not the message. What one upload's messages may
+  have read, attachments and nested messages included, is capped at
+  512 MiB, as ZIP-based documents are. Messages saved in a legacy 8-bit
+  code page decode the way Outlook wrote them.
 
 - **Pictures are read through OCR — `.png`, `.jpg`/`.jpeg`,
   `.tif`/`.tiff`, `.bmp`, `.gif`, `.webp`.** The same Tesseract, in

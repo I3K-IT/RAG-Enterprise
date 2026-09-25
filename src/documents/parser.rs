@@ -71,6 +71,10 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "webp",
 ];
 
+/// The pictures among them, read through OCR.
+pub(crate) const PICTURE_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"];
+
 /// Whether `ext` (lowercase, no dot) is one this parser can read.
 pub fn is_supported_extension(ext: &str) -> bool {
     SUPPORTED_EXTENSIONS.contains(&ext)
@@ -79,9 +83,10 @@ pub fn is_supported_extension(ext: &str) -> bool {
 /// Extracts the text (and, for PDFs and pictures, the per-page spans within
 /// it).
 ///
-/// `data_dir` is the data root (`Settings.data.data_path()`), needed only by
-/// OCR — of scanned PDFs and of pictures — to find `{data_dir}/tessdata/`,
-/// where the manifest downloads it.
+/// `data_dir` is the data root (`Settings.data.data_path()`): OCR — of
+/// scanned PDFs and of pictures — finds `{data_dir}/tessdata/` there, where
+/// the manifest downloads it, and the documents attached to an e-mail are
+/// copied under `{data_dir}/tmp/` to be read.
 pub fn extract_text(path: &Path, data_dir: &Path) -> Result<ExtractedText> {
     let ext = path
         .extension()
@@ -133,9 +138,9 @@ fn read_by_extension(path: &Path, data_dir: &Path, ext: &str) -> Result<Extracte
         "pptx" | "ppt" => extract_presentation(path).map(|text| ExtractedText { text, ..Default::default() }),
         "epub" => super::epub::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
         "rtf" => super::rtf::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
-        "eml" => super::eml::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
-        "msg" => super::msg::extract_text(path).map(|text| ExtractedText { text, ..Default::default() }),
-        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "gif" | "webp" => super::ocr::ocr_picture(path, data_dir),
+        "eml" => super::eml::extract_text(path, data_dir).map(|text| ExtractedText { text, ..Default::default() }),
+        "msg" => super::msg::extract_text(path, data_dir).map(|text| ExtractedText { text, ..Default::default() }),
+        ext if PICTURE_EXTENSIONS.contains(&ext) => super::ocr::ocr_picture(path, data_dir),
         "html" | "htm" => extract_html(path).map(|text| ExtractedText { text, ..Default::default() }),
         _ => Err(anyhow::anyhow!("unsupported format: .{ext}")),
     }
@@ -341,7 +346,7 @@ fn extract_xlsx(path: &Path) -> Result<String> {
 ///
 /// 512 MiB is far above any genuine office document and far below what would
 /// hurt.
-const MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// `Err(total)` as soon as the running total passes the ceiling, `Ok(())`
 /// otherwise.
@@ -444,7 +449,7 @@ fn extract_html(path: &Path) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Pins SUPPORTED_EXTENSIONS to extract_text's own match. A list that
@@ -683,7 +688,7 @@ mod tests {
     /// Each page's text is padded well past the 500-char/50% native-text
     /// acceptance threshold in `extract_pdf`, so this genuinely stays on the
     /// pdf_oxide path and never falls through to OCR.
-    fn minimal_multi_page_pdf(page_texts: &[&str]) -> Vec<u8> {
+    pub(crate) fn minimal_multi_page_pdf(page_texts: &[&str]) -> Vec<u8> {
         let mut objects: Vec<String> = Vec::new();
         // 1: Catalog, 2: Pages, 3: Font, then N page objects, then N content objects.
         objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_string());

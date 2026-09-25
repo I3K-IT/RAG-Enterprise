@@ -7,7 +7,8 @@
 //! one, and is read in turn.
 //!
 //! The body is the plain-text one when there is one; otherwise the HTML
-//! body, or the RTF body, which Outlook keeps compressed.
+//! body, or the RTF body, which Outlook keeps compressed. Attached
+//! documents are read as an .eml's are (see eml.rs).
 
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -17,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use encoding_rs::{Encoding, UTF_8, WINDOWS_1252};
 
 use super::codepage;
-use super::eml::{mailbox, Letter, MAX_DEPTH};
+use super::eml::{attachment_extension, mailbox, read_attachment, Budget, Letter, MAX_DEPTH};
 
 // Property ids ([MS-OXPROPS]).
 const SUBJECT: u16 = 0x0037;
@@ -38,6 +39,7 @@ const DISPLAY_NAME: u16 = 0x3001;
 const EMAIL_ADDRESS: u16 = 0x3003;
 const ATTACH_DATA: u16 = 0x3701;
 const ATTACH_FILENAME: u16 = 0x3704;
+const ATTACH_METHOD: u16 = 0x3705;
 const ATTACH_LONG_FILENAME: u16 = 0x3707;
 const ATTACH_MIME_TAG: u16 = 0x370E;
 const SMTP_ADDRESS: u16 = 0x39FE;
@@ -49,13 +51,26 @@ const SENDER_SMTP_ADDRESS: u16 = 0x5D01;
 const PROPERTIES: &str = "__properties_version1.0";
 /// The storage an attachment keeps a whole message in.
 const EMBEDDED_MESSAGE: &str = "__substg1.0_3701000D";
+/// `PR_ATTACH_METHOD` of an attachment that is a whole message.
+const ATTACH_EMBEDDED_MSG: u32 = 5;
 /// Where the fixed-size properties start in the properties stream: after
 /// a header whose size depends on what the storage holds.
 const TOP_LEVEL_HEADER: usize = 32;
 const EMBEDDED_HEADER: usize = 24;
 const CHILD_HEADER: usize = 8;
 
-pub fn extract_text(path: &Path) -> Result<String> {
+pub fn extract_text(path: &Path, data_dir: &Path) -> Result<String> {
+    extract_at(path, data_dir, 0, &Budget::new())
+}
+
+/// `extract_text` for a message found `depth` messages deep, drawing on
+/// the `budget` of the upload it came in.
+pub(crate) fn extract_at(
+    path: &Path,
+    data_dir: &Path,
+    depth: usize,
+    budget: &Budget,
+) -> Result<String> {
     let file =
         std::fs::File::open(path).with_context(|| format!("opening msg {}", path.display()))?;
     // No stream in the container can legitimately be longer than the file.
@@ -73,8 +88,10 @@ pub fn extract_text(path: &Path) -> Result<String> {
     Msg {
         ole: &mut ole,
         limit,
+        data_dir,
+        budget,
     }
-    .read_message(Path::new("/"), TOP_LEVEL_HEADER, 0, &mut out)?;
+    .read_message(Path::new("/"), TOP_LEVEL_HEADER, depth, &mut out)?;
     out.retain(|part| !part.is_empty());
     Ok(out.join("\n\n"))
 }
@@ -82,6 +99,10 @@ pub fn extract_text(path: &Path) -> Result<String> {
 struct Msg<'a, F> {
     ole: &'a mut cfb::CompoundFile<F>,
     limit: u64,
+    /// Where attached documents are copied to be read.
+    data_dir: &'a Path,
+    /// Every stream read is drawn from it: streams can share their bytes.
+    budget: &'a Budget,
 }
 
 impl<F: Read + Seek> Msg<'_, F> {
@@ -109,6 +130,8 @@ impl<F: Read + Seek> Msg<'_, F> {
             .into_iter()
             .find_map(|id| self.string(dir, id, encoding).filter(|a| a.contains('@')));
         letter.from = mailbox(name.as_deref(), address.as_deref());
+        // Before the attachments, which could spend the budget.
+        letter.body = self.body(dir, &fixed, encoding)?;
 
         let mut forwarded = Vec::new();
         for (entry, is_storage) in self.entries(dir)? {
@@ -139,25 +162,37 @@ impl<F: Read + Seek> Msg<'_, F> {
                         self.string(&child, id, encoding)
                             .filter(|n| !n.trim().is_empty())
                     });
-                let plain_text = self
-                    .string(&child, ATTACH_MIME_TAG, encoding)
-                    .is_some_and(|t| t.eq_ignore_ascii_case("text/plain"))
-                    || name
-                        .as_deref()
-                        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".txt"));
-                if plain_text {
-                    if let Some(bytes) = self.binary(&child, ATTACH_DATA) {
-                        let text = decode_text(&bytes, encoding);
-                        letter
-                            .attached_text
-                            .push((name.clone().unwrap_or_else(|| "text".to_owned()), text));
+                let method = self
+                    .fixed_properties(&child, CHILD_HEADER)
+                    .get(&ATTACH_METHOD)
+                    .map(u32_of);
+                let embedded = child.join(EMBEDDED_MESSAGE);
+                // An embedded OLE object keeps its storage under the same
+                // name, so the method decides when it says anything.
+                if matches!(method, None | Some(ATTACH_EMBEDDED_MSG))
+                    && self.ole.is_storage(&embedded)
+                {
+                    if depth < MAX_DEPTH {
+                        forwarded.push(embedded);
+                    }
+                } else {
+                    // Only the data of what will be read is.
+                    let mime = self.string(&child, ATTACH_MIME_TAG, encoding);
+                    let ext = attachment_extension(name.as_deref(), mime.as_deref());
+                    if let Some((ext, bytes)) =
+                        ext.and_then(|ext| Some((ext, self.binary(&child, ATTACH_DATA)?)))
+                    {
+                        let label = name.clone().unwrap_or_else(|| format!("attachment.{ext}"));
+                        let text = if ext == "txt" {
+                            // In whatever encoding its author's system used.
+                            Some(decode_text(&bytes, encoding))
+                        } else {
+                            read_attachment(&label, &ext, &bytes, self.data_dir, depth, self.budget)
+                        };
+                        letter.attached_text.extend(text.map(|text| (label, text)));
                     }
                 }
                 letter.attachments.extend(name);
-                let embedded = child.join(EMBEDDED_MESSAGE);
-                if depth < MAX_DEPTH && self.ole.is_storage(&embedded) {
-                    forwarded.push(embedded);
-                }
             }
         }
         // Without recipient storages, the display lists are all there is.
@@ -177,7 +212,6 @@ impl<F: Read + Seek> Msg<'_, F> {
             letter.cc = display(self.string(dir, DISPLAY_CC, encoding));
         }
 
-        letter.body = self.body(dir, &fixed, encoding)?;
         out.push(letter.render());
         for message in forwarded {
             self.read_message(&message, EMBEDDED_HEADER, depth + 1, out)?;
@@ -265,6 +299,10 @@ impl<F: Read + Seek> Msg<'_, F> {
     }
 
     fn stream(&mut self, path: &Path) -> Option<Vec<u8>> {
+        let len = self.ole.entry(path).ok()?.len().min(self.limit);
+        if !self.budget.take(len) {
+            return None;
+        }
         let stream = self.ole.open_stream(path).ok()?;
         let mut bytes = Vec::new();
         stream.take(self.limit).read_to_end(&mut bytes).ok()?;
@@ -550,7 +588,7 @@ mod tests {
             ole.flush().unwrap();
         }
         assert_eq!(
-            extract_text(&path).unwrap(),
+            extract_text(&path, dir.path()).unwrap(),
             "Subject: Riunione di lunedì\nFrom: Mario Rossi <mario@example.com>\nTo: Anna <anna@example.com>\n\
              Cc: Luca <luca@example.com>\nDate: 2026-09-01T07:30:00Z\nAttachments: Original.msg, notes.txt\n\n\
              La riunione è alle 10.\n\nAttachment: notes.txt\nNotes in a file.\n\nSubject: Original\n\nThe original text."
@@ -566,9 +604,119 @@ mod tests {
             write(&mut ole, "/WordDocument", b"not mail");
             ole.flush().unwrap();
         }
-        assert!(extract_text(&path)
+        assert!(extract_text(&path, dir.path())
             .unwrap_err()
             .to_string()
             .contains("not an Outlook message"));
+    }
+
+    #[test]
+    fn a_spent_budget_skips_attachments_not_the_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mail.msg");
+        {
+            let mut ole = cfb::CompoundFile::create(std::fs::File::create(&path).unwrap()).unwrap();
+            write(&mut ole, "/__properties_version1.0", &properties(32, &[]));
+            write(&mut ole, "/__substg1.0_0037001F", &utf16("Big"));
+            write(&mut ole, "/__substg1.0_1000001F", &utf16("The body."));
+            ole.create_storage("/__attach_version1.0_#00000000")
+                .unwrap();
+            write(
+                &mut ole,
+                "/__attach_version1.0_#00000000/__substg1.0_3707001F",
+                &utf16("notes.txt"),
+            );
+            write(
+                &mut ole,
+                "/__attach_version1.0_#00000000/__substg1.0_37010102",
+                &[b'x'; 5000],
+            );
+            ole.flush().unwrap();
+        }
+        let text = extract_at(&path, dir.path(), 0, &Budget::of(1000)).unwrap();
+        assert!(text.contains("The body."), "{text}");
+        assert!(!text.contains("Attachment: notes.txt"), "{text}");
+        assert!(extract_text(&path, dir.path())
+            .unwrap()
+            .contains("Attachment: notes.txt"));
+    }
+
+    #[test]
+    fn attached_documents_are_read_but_not_pictures_or_ole_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mail.msg");
+        let odt = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/documents/testdata/book.odt"
+        ))
+        .unwrap();
+        {
+            let mut ole = cfb::CompoundFile::create(std::fs::File::create(&path).unwrap()).unwrap();
+            write(&mut ole, "/__properties_version1.0", &properties(32, &[]));
+            write(&mut ole, "/__substg1.0_0037001F", &utf16("Documents"));
+            // By value (method 1): a document, then a picture.
+            for (i, (name, data)) in [("book.odt", &odt[..]), ("logo.png", b"\x89PNG not really")]
+                .into_iter()
+                .enumerate()
+            {
+                let attachment = format!("/__attach_version1.0_#{i:08X}");
+                ole.create_storage(&attachment).unwrap();
+                write(
+                    &mut ole,
+                    &format!("{attachment}/__properties_version1.0"),
+                    &properties(8, &[(ATTACH_METHOD, 0x0003, 1)]),
+                );
+                write(
+                    &mut ole,
+                    &format!("{attachment}/__substg1.0_3707001F"),
+                    &utf16(name),
+                );
+                write(
+                    &mut ole,
+                    &format!("{attachment}/__substg1.0_37010102"),
+                    data,
+                );
+            }
+            // An embedded OLE object (method 6): its storage has the name
+            // an embedded message's has, and is not one.
+            let object = "/__attach_version1.0_#00000002";
+            ole.create_storage(object).unwrap();
+            write(
+                &mut ole,
+                &format!("{object}/__properties_version1.0"),
+                &properties(8, &[(ATTACH_METHOD, 0x0003, 6)]),
+            );
+            write(
+                &mut ole,
+                &format!("{object}/__substg1.0_3707001F"),
+                &utf16("Chart"),
+            );
+            ole.create_storage(format!("{object}/{EMBEDDED_MESSAGE}"))
+                .unwrap();
+            write(
+                &mut ole,
+                &format!("{object}/{EMBEDDED_MESSAGE}/CONTENTS"),
+                b"object data",
+            );
+            ole.flush().unwrap();
+        }
+        let text = extract_text(&path, dir.path()).unwrap();
+        assert!(
+            text.starts_with("Subject: Documents\nAttachments: book.odt, logo.png, Chart\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n\nAttachment: book.odt\nOpenDocument fixture\n"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Attachment: logo.png"),
+            "pictures are not read: {text}"
+        );
+        assert_eq!(
+            text.matches("Subject:").count(),
+            1,
+            "an OLE object is not a message: {text}"
+        );
     }
 }
