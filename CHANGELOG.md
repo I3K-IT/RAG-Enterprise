@@ -229,6 +229,19 @@ separate files is what stops two pull requests colliding in this one.
   worker threads crashed the process with SIGSEGV, now and then. It is
   now loaded once and kept.
 
+- **Form inputs now match the server-side limits.** The question box
+  had no cap while over-4000-character questions get a 400, and the
+  new-password fields stopped at a 6 minimum while over-128-character
+  passwords get a 400. Both now stop at the boundary (`maxLength`),
+  with the password hint stating the real 6-128 range.
+
+- **BUILD.md no longer shows a stale database default and documents
+  `DATA__DIR` for source builds.** The runtime table listed
+  `DATABASE__URL=sqlite://rag_users.db`, but the default has long been
+  `{DATA__DIR}/db/rag_users.db` — and nothing told a `cargo run`
+  developer that the data root defaults to `target/debug/`. Both fixed
+  where a source builder actually reads them.
+
 ### Security
 
 - **rustls 0.23.45, for RUSTSEC-2026-0285.** The rustls in use, 0.23.41,
