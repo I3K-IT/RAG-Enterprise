@@ -296,7 +296,9 @@ and can be set through the environment or a `.env` file:
 ```sh
 SERVER__HOST=127.0.0.1   # loopback by default; see the README before exposing
 SERVER__PORT=8000
-DATABASE__URL=sqlite://rag_users.db
+# Default: {DATA__DIR}/db/rag_users.db (see DATA__DIR below), not the CWD.
+# Only set this to move the DB somewhere DATA__DIR doesn't already cover.
+# DATABASE__URL=sqlite:///path/to/rag_users.db
 AUTH__JWT_SECRET=              # openssl rand -hex 32
 AUTH__ADMIN_DEFAULT_PASSWORD=change_this_password
 QDRANT__URL=http://localhost:6333
@@ -308,6 +310,15 @@ EMBEDDINGS__MODEL_ID=BAAI/bge-m3
 # silently degrading to CPU (ingestion takes minutes rather than seconds).
 EMBEDDINGS__REQUIRE_GPU=false
 RUST_LOG=info
+```
+
+`DATA__DIR` deserves a line of its own: it defaults to the directory
+holding the executable, so a binary run from `cargo run` (under
+`target/debug/`) scatters `bin/`, `models/`, `storage/`, `db/` and
+`uploads/` into the build tree. Point it at a work directory instead:
+
+```sh
+DATA__DIR=./data
 ```
 
 `AUTH__JWT_SECRET` and `AUTH__ADMIN_DEFAULT_PASSWORD` have no safe defaults:
