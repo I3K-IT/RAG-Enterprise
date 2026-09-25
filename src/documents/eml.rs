@@ -21,12 +21,14 @@ use super::html::tidy;
 /// this deep.
 pub(crate) const MAX_DEPTH: usize = 8;
 
-/// How many bytes one upload's messages may have read — attached files,
-/// and in an Outlook file every stream — across all the messages nested in
-/// it. Nothing stops an Outlook file from pointing any number of streams at
-/// the same bytes, so without a bound a small file could have one attached
-/// document read, or one attached message opened, over and over. The same
-/// ceiling as for ZIP archives: far above any real mailbox export.
+/// How many bytes one upload's messages may have read — attached files and
+/// the text read from them, and in an Outlook file every stream and the
+/// RTF body it decompresses — across all the messages nested in it. Nothing
+/// stops an Outlook file from pointing any number of streams at the same
+/// bytes, so without a bound a small file could have one attached document
+/// read, or one attached message opened, over and over; and what is
+/// compressed, a document or a body, can expand far beyond the upload. The
+/// same ceiling as for ZIP archives: far above any real mailbox export.
 pub(crate) struct Budget {
     left: Cell<u64>,
     spent: Cell<bool>,
@@ -257,17 +259,20 @@ pub(crate) fn read_attachment(
         return None;
     }
     let read = || -> Result<String> {
-        let dir = private_temp_dir(data_dir)?;
-        let copy = dir.path().join(format!("attachment.{ext}"));
-        std::fs::write(&copy, bytes).context("copying the attachment")?;
+        let copy = private_copy(data_dir, ext, bytes)?;
+        let copy = copy.path();
         match ext {
-            "eml" => extract_at(&copy, data_dir, depth + 1, budget),
-            "msg" => super::msg::extract_at(&copy, data_dir, depth + 1, budget),
-            _ => super::parser::extract_text(&copy, data_dir).map(|extracted| extracted.text),
+            "eml" => extract_at(copy, data_dir, depth + 1, budget),
+            "msg" => super::msg::extract_at(copy, data_dir, depth + 1, budget),
+            _ => super::parser::extract_text(copy, data_dir).map(|extracted| extracted.text),
         }
     };
     match read() {
-        Ok(text) => Some(text),
+        // A document's text is drawn from the budget too: a few kilobytes
+        // of ZIP can inflate to hundreds of megabytes, and a message can
+        // carry many. A message's text was drawn part by part as it was read.
+        Ok(text) if matches!(ext, "eml" | "msg") || budget.take(text.len() as u64) => Some(text),
+        Ok(_) => None,
         Err(e) => {
             tracing::warn!(attachment = name, error = %format!("{e:#}"), "attachment not read");
             None
@@ -275,22 +280,24 @@ pub(crate) fn read_attachment(
     }
 }
 
-/// A directory only this user can open, under `{data_dir}/tmp/` — not the
-/// system temp dir, which on most Linux installs is RAM (see
-/// `upload_tmp_path` in api/documents.rs) — removed when dropped.
-fn private_temp_dir(data_dir: &Path) -> Result<tempfile::TempDir> {
+/// `bytes` in a file only this user can read, named `attachment-….{ext}`
+/// in `{data_dir}/tmp/` and removed when dropped: where uploads are staged,
+/// so the sweep at startup also removes one a crash left behind — and not
+/// in the system temp dir, which on most Linux installs is RAM (see
+/// `upload_tmp_path` in api/documents.rs).
+fn private_copy(data_dir: &Path, ext: &str, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
+    use std::io::Write;
     let root = data_dir.join("tmp");
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("attachment-");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(std::fs::Permissions::from_mode(0o700));
-    }
-    builder
-        .tempdir_in(&root)
-        .with_context(|| format!("creating a directory in {}", root.display()))
+    let suffix = format!(".{ext}");
+    let mut copy = tempfile::Builder::new()
+        .prefix("attachment-")
+        .suffix(&suffix)
+        .tempfile_in(&root)
+        .with_context(|| format!("creating a file in {}", root.display()))?;
+    copy.write_all(bytes).context("copying the attachment")?;
+    copy.flush().context("copying the attachment")?;
+    Ok(copy)
 }
 
 #[cfg(test)]
@@ -403,6 +410,29 @@ mod tests {
     }
 
     #[test]
+    fn an_attachment_is_copied_to_a_private_file_where_uploads_are_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = private_copy(dir.path(), "pdf", b"%PDF-1.4").unwrap();
+        assert_eq!(copy.path().parent().unwrap(), dir.path().join("tmp"));
+        // A file: the sweep at startup removes files, not directories.
+        assert!(copy.path().is_file());
+        assert_eq!(
+            copy.path().extension().unwrap(),
+            "pdf",
+            "readers go by extension"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(copy.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let path = copy.path().to_owned();
+        drop(copy);
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn a_spent_budget_skips_attachments_not_the_message() {
         let dir = tempfile::tempdir().unwrap();
         let odt = std::fs::read(Path::new(TESTDATA).join("book.odt")).unwrap();
@@ -422,6 +452,40 @@ mod tests {
         let budget = Budget::of(10);
         assert!(budget.take(4) && budget.take(6));
         assert!(!budget.take(1), "nothing is left");
+    }
+
+    #[test]
+    fn what_an_attached_document_inflates_to_is_drawn_from_the_budget() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("content.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            zip,
+            "<office:document-content><office:body><office:text><text:p>{}</text:p>\
+             </office:text></office:body></office:document-content>",
+            "Riga ripetuta. ".repeat(100_000)
+        )
+        .unwrap();
+        let odt = zip.finish().unwrap().into_inner();
+        assert!(odt.len() < 50_000, "{} bytes", odt.len());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mail.eml");
+        let eml = message(
+            "Inflated",
+            &[(Some("big.odt"), "application/octet-stream", &odt)],
+        );
+        std::fs::write(&path, eml).unwrap();
+        let text = extract_at(&path, dir.path(), 0, &Budget::of(1_000_000)).unwrap();
+        assert!(text.contains("Body of Inflated."), "{text}");
+        assert!(!text.contains("Attachment: big.odt"), "{text}");
+        let text = extract_at(&path, dir.path(), 0, &Budget::of(2_000_000)).unwrap();
+        assert!(
+            text.contains("Attachment: big.odt\nRiga ripetuta."),
+            "{}",
+            text.chars().take(200).collect::<String>()
+        );
     }
 
     #[test]

@@ -38,6 +38,7 @@ pub fn read_entry(archive: &mut Archive, name: &str) -> Result<Option<String>> {
         .take(declared)
         .read_to_end(&mut bytes)
         .with_context(|| format!("reading {name}"))?;
+    // `decode` sniffs the byte-order mark before falling back to UTF-8.
     let (text, _, _) = encoding_rs::UTF_8.decode(&bytes);
     Ok(Some(text.into_owned()))
 }
@@ -144,6 +145,7 @@ fn percent_decode(s: &str) -> String {
 mod tests {
     use super::*;
     use quick_xml::Reader;
+    use std::io::Write;
 
     fn all_text(xml: &str) -> String {
         let mut reader = Reader::from_str(xml);
@@ -164,6 +166,35 @@ mod tests {
             "Tom & Jerry <3 été"
         );
         assert_eq!(all_text("<a><![CDATA[x < y]]></a>"), "x < y");
+    }
+
+    #[test]
+    fn a_utf16_entry_is_read_by_its_byte_order_mark() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-16"?><p>città €</p>"#;
+        let units = || xml.encode_utf16();
+        let le: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(units().flat_map(u16::to_le_bytes))
+            .collect();
+        let be: Vec<u8> = [0xFE, 0xFF]
+            .into_iter()
+            .chain(units().flat_map(u16::to_be_bytes))
+            .collect();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parts.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        for (name, bytes) in [("le.xml", &le), ("be.xml", &be)] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        let mut archive = open(&path, "ZIP").unwrap();
+        for name in ["le.xml", "be.xml"] {
+            let text = read_entry(&mut archive, name).unwrap().unwrap();
+            assert_eq!(text, xml, "{name}");
+            assert_eq!(all_text(&text), "città €", "{name}");
+        }
     }
 
     #[test]

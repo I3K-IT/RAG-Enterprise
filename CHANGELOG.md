@@ -22,7 +22,7 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
-## [0.1.46] - 2026-09-24
+## [0.1.46] - 2026-09-25
 
 ### Added
 
@@ -79,9 +79,10 @@ separate files is what stops two pull requests colliding in this one.
   forwarded as an attachment. Pictures are listed but not read: in
   e-mail they are mostly logos and signatures. An attachment that cannot
   be read is skipped, not the message. What one upload's messages may
-  have read, attachments and nested messages included, is capped at
-  512 MiB, as ZIP-based documents are. Messages saved in a legacy 8-bit
-  code page decode the way Outlook wrote them.
+  have read — attachments and the text they expand to, nested messages,
+  a compressed RTF body once decompressed — is capped at 512 MiB, as
+  ZIP-based documents are. Messages saved in a legacy 8-bit code page
+  decode the way Outlook wrote them.
 
 - **Pictures are read through OCR — `.png`, `.jpg`/`.jpeg`,
   `.tif`/`.tiff`, `.bmp`, `.gif`, `.webp`.** The same Tesseract, in
@@ -227,6 +228,15 @@ separate files is what stops two pull requests colliding in this one.
   when the bundled one is missing — is not: unloading it from under its
   worker threads crashed the process with SIGSEGV, now and then. It is
   now loaded once and kept.
+
+### Security
+
+- **rustls 0.23.45, for RUSTSEC-2026-0285.** The rustls in use, 0.23.41,
+  accepted TLS 1.3 handshake messages across encryption-level boundaries
+  (medium severity). It secures the binary's outgoing HTTPS — reqwest,
+  so the downloads at first run and the Qdrant client among them — and
+  sqlx's Postgres connections. Only rustls and rustls-webpki moved in
+  `Cargo.lock`; `cargo audit` reports no vulnerability.
 
 ---
 

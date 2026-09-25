@@ -280,7 +280,9 @@ impl<F: Read + Seek> Msg<'_, F> {
             return Ok(super::html::to_text(&html));
         }
         if let Some(compressed) = self.binary(dir, RTF_COMPRESSED) {
-            return super::rtf::text_of(&decompress_rtf(&compressed)?);
+            if let Some(rtf) = decompress_rtf(&compressed, self.budget)? {
+                return super::rtf::text_of(&rtf);
+            }
         }
         Ok(String::new())
     }
@@ -382,9 +384,10 @@ const LZFU: u32 = 0x7546_5A4C;
 const MELA: u32 = 0x414C_454D;
 
 /// Decompresses Outlook's compressed RTF ([MS-OXRTFCP]): LZ77 over a 4 KiB
-/// dictionary. The output stops at the size the header declares, so a
-/// crafted stream cannot make it grow further.
-fn decompress_rtf(data: &[u8]) -> Result<Vec<u8>> {
+/// dictionary. A stream can declare any size, and expand to eight times its
+/// own, so the output stops at the smaller of the two — drawn from `budget`
+/// before anything is written: `None` when not that much is left.
+fn decompress_rtf(data: &[u8], budget: &Budget) -> Result<Option<Vec<u8>>> {
     let header = |at: usize| {
         data.get(at..at + 4)
             .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")))
@@ -393,20 +396,28 @@ fn decompress_rtf(data: &[u8]) -> Result<Vec<u8>> {
         bail!("msg: the compressed RTF body is truncated");
     };
     let input = data.get(16..).unwrap_or_default();
-    let raw_size = raw_size as usize;
-    match kind {
-        MELA => return Ok(input[..raw_size.min(input.len())].to_vec()),
-        LZFU => {}
+    // A literal is one byte in and out; a reference two bytes in and at
+    // most 17 out, eight of them to a control byte.
+    let size = match kind {
+        MELA => input.len(),
+        LZFU => input.len().saturating_mul(8),
         _ => bail!("msg: the RTF body is compressed in an unknown way"),
+    }
+    .min(raw_size as usize);
+    if !budget.take(size as u64) {
+        return Ok(None);
+    }
+    if kind == MELA {
+        return Ok(Some(input[..size].to_vec()));
     }
     let mut dictionary = [0u8; 4096];
     dictionary[..RTF_PRELOAD.len()].copy_from_slice(RTF_PRELOAD);
     let mut write = RTF_PRELOAD.len();
-    let mut out = Vec::with_capacity(raw_size.min(input.len().saturating_mul(8)));
+    let mut out = Vec::with_capacity(size);
     let mut bytes = input.iter().copied();
     'stream: while let Some(control) = bytes.next() {
         for bit in 0..8 {
-            if out.len() >= raw_size {
+            if out.len() == size {
                 break 'stream;
             }
             if control & (1 << bit) == 0 {
@@ -425,7 +436,8 @@ fn decompress_rtf(data: &[u8]) -> Result<Vec<u8>> {
                 if offset == write {
                     break 'stream;
                 }
-                for i in 0..usize::from(reference & 0x0F) + 2 {
+                let run = (usize::from(reference & 0x0F) + 2).min(size - out.len());
+                for i in 0..run {
                     let byte = dictionary[(offset + i) % 4096];
                     out.push(byte);
                     dictionary[write] = byte;
@@ -434,8 +446,7 @@ fn decompress_rtf(data: &[u8]) -> Result<Vec<u8>> {
             }
         }
     }
-    out.truncate(raw_size);
-    Ok(out)
+    Ok(Some(out))
 }
 
 #[cfg(test)]
@@ -457,21 +468,53 @@ mod tests {
             0x32, 0x0a, 0xf3, 0x20, 0x68, 0x65, 0x6c, 0x09, 0x00, 0x20, 0x62, 0x77, 0x05, 0xb0,
             0x6c, 0x64, 0x7d, 0x0a, 0x80, 0x0f, 0xa0,
         ];
-        let rtf = decompress_rtf(&compressed).unwrap();
+        let rtf = decompress_rtf(&compressed, &Budget::new())
+            .unwrap()
+            .unwrap();
         assert_eq!(rtf, b"{\\rtf1\\ansi\\ansicpg1252\\pard hello world}\r\n");
         assert_eq!(super::super::rtf::text_of(&rtf).unwrap(), "hello world");
     }
 
-    #[test]
-    fn a_crafted_compressed_body_stays_within_its_declared_size() {
-        let mut data = vec![0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00];
+    /// A compressed RTF header declaring `raw_size`, then `chunks` control
+    /// bytes each followed by eight references of the longest run.
+    fn crafted_rtf(raw_size: u32, chunks: usize) -> Vec<u8> {
+        let mut data = vec![0x00, 0x00, 0x00, 0x00];
+        data.extend(raw_size.to_le_bytes());
         data.extend(LZFU.to_le_bytes());
         data.extend([0; 4]);
-        for _ in 0..1000 {
-            data.extend([0xFF, 0x00, 0x0F, 0x00, 0x0F, 0x00, 0x0F, 0x00, 0x0F]);
-        }
-        assert!(decompress_rtf(&data).unwrap().len() <= 16);
-        assert!(decompress_rtf(&data[..6]).is_err());
+        let chunk: Vec<u8> = std::iter::once(0xFF)
+            .chain([0x00, 0x0F].repeat(8))
+            .collect();
+        data.extend(chunk.repeat(chunks));
+        data
+    }
+
+    #[test]
+    fn a_crafted_compressed_body_stays_within_its_declared_size() {
+        let data = crafted_rtf(16, 1000);
+        let budget = Budget::of(1000);
+        assert_eq!(decompress_rtf(&data, &budget).unwrap().unwrap().len(), 16);
+        assert!(budget.take(1000 - 16), "only the declared size was taken");
+        assert!(decompress_rtf(&data[..6], &Budget::new()).is_err());
+    }
+
+    #[test]
+    fn a_compressed_body_is_drawn_from_the_budget_before_it_expands() {
+        // 17 bytes a chunk, each expanding to 136: eight times the input,
+        // whatever size the header claims. (Few enough chunks that the
+        // write position never meets the references' offset, 0, which
+        // would end the stream.)
+        let data = crafted_rtf(u32::MAX, 400);
+        let expands_to = 136 * 400;
+        let budget = Budget::of(expands_to);
+        let rtf = decompress_rtf(&data, &budget).unwrap().unwrap();
+        assert_eq!(rtf.len() as u64, expands_to);
+        assert!(!budget.take(1), "all of it was taken");
+        assert_eq!(
+            decompress_rtf(&data, &Budget::of(expands_to - 1)).unwrap(),
+            None,
+            "refused before anything is written"
+        );
     }
 
     fn utf16(text: &str) -> Vec<u8> {
