@@ -228,6 +228,15 @@ separate files is what stops two pull requests colliding in this one.
   worker threads crashed the process with SIGSEGV, now and then. It is
   now loaded once and kept.
 
+### Security
+
+- **rustls 0.23.45, for RUSTSEC-2026-0285.** The rustls in use, 0.23.41,
+  accepted TLS 1.3 handshake messages across encryption-level boundaries
+  (medium severity). It secures the binary's outgoing HTTPS — reqwest,
+  so the downloads at first run and the Qdrant client among them — and
+  sqlx's Postgres connections. Only rustls and rustls-webpki moved in
+  `Cargo.lock`; `cargo audit` reports no vulnerability.
+
 ---
 
 ## [0.1.45] - 2026-09-17
