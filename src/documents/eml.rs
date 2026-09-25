@@ -257,13 +257,12 @@ pub(crate) fn read_attachment(
         return None;
     }
     let read = || -> Result<String> {
-        let dir = private_temp_dir(data_dir)?;
-        let copy = dir.path().join(format!("attachment.{ext}"));
-        std::fs::write(&copy, bytes).context("copying the attachment")?;
+        let copy = private_copy(data_dir, ext, bytes)?;
+        let copy = copy.path();
         match ext {
-            "eml" => extract_at(&copy, data_dir, depth + 1, budget),
-            "msg" => super::msg::extract_at(&copy, data_dir, depth + 1, budget),
-            _ => super::parser::extract_text(&copy, data_dir).map(|extracted| extracted.text),
+            "eml" => extract_at(copy, data_dir, depth + 1, budget),
+            "msg" => super::msg::extract_at(copy, data_dir, depth + 1, budget),
+            _ => super::parser::extract_text(copy, data_dir).map(|extracted| extracted.text),
         }
     };
     match read() {
@@ -275,22 +274,24 @@ pub(crate) fn read_attachment(
     }
 }
 
-/// A directory only this user can open, under `{data_dir}/tmp/` — not the
-/// system temp dir, which on most Linux installs is RAM (see
-/// `upload_tmp_path` in api/documents.rs) — removed when dropped.
-fn private_temp_dir(data_dir: &Path) -> Result<tempfile::TempDir> {
+/// `bytes` in a file only this user can read, named `attachment-….{ext}`
+/// in `{data_dir}/tmp/` and removed when dropped: where uploads are staged,
+/// so the sweep at startup also removes one a crash left behind — and not
+/// in the system temp dir, which on most Linux installs is RAM (see
+/// `upload_tmp_path` in api/documents.rs).
+fn private_copy(data_dir: &Path, ext: &str, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
+    use std::io::Write;
     let root = data_dir.join("tmp");
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("attachment-");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(std::fs::Permissions::from_mode(0o700));
-    }
-    builder
-        .tempdir_in(&root)
-        .with_context(|| format!("creating a directory in {}", root.display()))
+    let suffix = format!(".{ext}");
+    let mut copy = tempfile::Builder::new()
+        .prefix("attachment-")
+        .suffix(&suffix)
+        .tempfile_in(&root)
+        .with_context(|| format!("creating a file in {}", root.display()))?;
+    copy.write_all(bytes).context("copying the attachment")?;
+    copy.flush().context("copying the attachment")?;
+    Ok(copy)
 }
 
 #[cfg(test)]
@@ -400,6 +401,29 @@ mod tests {
         );
         let left = std::fs::read_dir(dir.path().join("tmp")).unwrap().count();
         assert_eq!(left, 0, "the copies are removed");
+    }
+
+    #[test]
+    fn an_attachment_is_copied_to_a_private_file_where_uploads_are_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = private_copy(dir.path(), "pdf", b"%PDF-1.4").unwrap();
+        assert_eq!(copy.path().parent().unwrap(), dir.path().join("tmp"));
+        // A file: the sweep at startup removes files, not directories.
+        assert!(copy.path().is_file());
+        assert_eq!(
+            copy.path().extension().unwrap(),
+            "pdf",
+            "readers go by extension"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(copy.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let path = copy.path().to_owned();
+        drop(copy);
+        assert!(!path.exists());
     }
 
     #[test]
