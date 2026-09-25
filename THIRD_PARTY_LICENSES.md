@@ -69,7 +69,7 @@ honour the latter.
 ## Rust dependencies
 
 Dependencies compiled into the binary are listed in `Cargo.toml` and locked in
-`Cargo.lock`, with their licences in each crate's metadata. All 617 are
+`Cargo.lock`, with their licences in each crate's metadata. All 616 are
 permissive (MIT / Apache-2.0 / BSD / ISC / Zlib / Unicode-3.0) apart from four
 under MPL-2.0, whose section 3.3 explicitly permits combination under the
 (A)GPL. Two crates offer LGPL-2.1-or-later only as one arm of an `OR` with
