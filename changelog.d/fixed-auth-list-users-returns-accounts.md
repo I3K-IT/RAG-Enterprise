@@ -1,0 +1,1 @@
+`GET /api/auth/users` now lists the registered accounts instead of reporting an empty table. The response carries only the public fields, never password hashes.

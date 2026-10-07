@@ -76,6 +76,19 @@ pub async fn create(
     Ok(id)
 }
 
+/// Every account, oldest first. The rows carry password hashes, so callers
+/// that answer HTTP must project them down to the public fields first -
+/// see api::auth::list_users, which is currently the only caller.
+pub async fn list_all(pool: &SqlitePool) -> Result<Vec<UserRow>> {
+    let rows = sqlx::query_as::<_, UserRow>(
+        "SELECT id, username, email, password_hash, role, created_at, last_login, is_active
+         FROM users ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn find_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserRow>> {
     let row = sqlx::query_as::<_, UserRow>(
         "SELECT id, username, email, password_hash, role, created_at, last_login, is_active
@@ -228,5 +241,33 @@ mod tests {
         for role in ["owner", "", "ADMIN", "amdin"] {
             assert_eq!(row_with(role).role(), Role::User, "role={role:?}");
         }
+    }
+
+    /// A real file-backed pool, so this sees the migrated schema production
+    /// runs against.
+    async fn pool(dir: &std::path::Path) -> SqlitePool {
+        let url = format!("sqlite://{}", dir.join("test.db").display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_every_account_oldest_first() {
+        let d = tempfile::tempdir().unwrap();
+        let p = pool(d.path()).await;
+        create(&p, "alice", "alice@example.com", "hash-a", Role::Admin)
+            .await
+            .unwrap();
+        create(&p, "bob", "bob@example.com", "hash-b", Role::User)
+            .await
+            .unwrap();
+
+        let rows = list_all(&p).await.unwrap();
+        let names: Vec<&str> = rows.iter().map(|u| u.username.as_str()).collect();
+        assert_eq!(names, ["alice", "bob"]);
+        // The rows still carry their hashes here - it is the API layer's job,
+        // not this one's, to leave them behind. See PublicUser.
+        assert!(rows.iter().all(|u| !u.password_hash.is_empty()));
     }
 }
