@@ -440,6 +440,12 @@ function App() {
     setCurrentConversationId(convId)
     try {
       const res = await axios.get(`${API_URL}/api/conversations/${convId}/messages`)
+      // The user may have moved on while this was in flight. A late reply for
+      // another conversation must not replace the view: it belongs to a thread
+      // the user is no longer looking at, and showing it here would put one
+      // conversation's messages under another's name. Same guard as the
+      // streaming path's isActiveStream, for the same reason.
+      if (currentConversationIdRef.current !== convId) return
       const msgs = (res.data.messages || []).map(m => ({
         role: m.role,
         content: m.content,
