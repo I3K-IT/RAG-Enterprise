@@ -1122,7 +1122,7 @@ async fn ensure_component(comp: &Component, dest: &Path) -> Result<()> {
             tracing::info!("{}{ver}: present and verified", comp.name);
             return Ok(());
         }
-        tracing::warn!("{}: sha256 verification failed, downloading again", comp.name);
+        tracing::warn!("{}: the installed copy cannot be used, downloading it again", comp.name);
         tokio::fs::remove_file(dest).await.ok();
         remove_stamp(dest).await;
     }
@@ -1418,34 +1418,10 @@ async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
     if stamp_path.exists() {
         if let Ok(stamped) = tokio::fs::read_to_string(&stamp_path).await {
             if stamped.trim() == comp.sha256 {
-                // A stamp means "installed and ready", and for a binary that
-                // includes being runnable. `ensure_component` sets the stamp
-                // before it chmods, so a `chmod` that failed leaves a file that
-                // matches perfectly and cannot be run - and the next start
-                // would take this branch and declare it installed, never
-                // touching the permission again.
-                //
                 // Re-take the bit rather than rehash: the digest already agrees,
                 // and rehashing costs tens of seconds on the 2.1GB GGUF to learn
-                // what the stamp just said. This also repairs an install whose
-                // mode was lost afterwards - an unzip, a restore from backup.
-                if comp.exec && !is_executable(dest) {
-                    tracing::warn!(
-                        "{}: installed but not executable, restoring the permission",
-                        comp.name
-                    );
-                    if let Err(e) = set_executable(dest).await {
-                        // Not even that: a binary that cannot be run is not
-                        // installed, so let the caller provision it again.
-                        tracing::warn!(
-                            error = ?e,
-                            "{}: could not make it executable, treating it as not installed",
-                            comp.name
-                        );
-                        return Ok(false);
-                    }
-                }
-                return Ok(true);
+                // what the stamp just said.
+                return Ok(runnable(comp, dest).await);
             }
         }
     }
@@ -1464,7 +1440,7 @@ async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
 
     if got == expected {
         stamp_installed(dest, &got, &comp.name).await;
-        Ok(true)
+        Ok(runnable(comp, dest).await)
     } else {
         tracing::warn!(
             "{}: sha256 mismatch — expected {} got {}",
@@ -1474,6 +1450,32 @@ async fn verify_component(comp: &Component, dest: &Path) -> Result<bool> {
         );
         Ok(false)
     }
+}
+
+/// Whether a component whose digest checks out is also usable as installed.
+///
+/// A stamp means "installed and ready", and for a binary that includes being
+/// runnable - but the digest says nothing about the mode. `ensure_component`
+/// writes the stamp before it chmods, so a `chmod` that failed leaves a file
+/// that matches perfectly and cannot be run; an unzip or a restore from backup
+/// can lose the bit afterwards, with or without the stamp. Either way the
+/// permission is re-taken here, whichever path verified the digest.
+async fn runnable(comp: &Component, dest: &Path) -> bool {
+    if !comp.exec || is_executable(dest) {
+        return true;
+    }
+    tracing::warn!("{}: installed but not executable, restoring the permission", comp.name);
+    if let Err(e) = set_executable(dest).await {
+        // Not even that: a binary that cannot be run is not installed, so let
+        // the caller provision it again.
+        tracing::warn!(
+            error = ?e,
+            "{}: could not make it executable, treating it as not installed",
+            comp.name
+        );
+        return false;
+    }
+    true
 }
 
 fn stamp_path(dest: &Path) -> PathBuf {
@@ -3414,6 +3416,26 @@ mod executable_stamp_tests {
             !is_executable(&path),
             "and nothing may add a permission the manifest did not ask for"
         );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(stamp_path(&path));
+    }
+
+    /// The same repair when there is no stamp to take the fast path: the bit
+    /// can be lost together with the stamp (an unzip of the binary alone), and
+    /// the slow path verifies the digest just as well.
+    #[tokio::test]
+    async fn an_unstamped_binary_that_cannot_be_run_is_repaired_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = path_for("unstamped");
+        std::fs::write(&path, b"payload").expect("stage the component");
+        let comp = component(&sha256_file(&path).expect("hash the component"), true);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            verify_component(&comp, &path).await.expect("verify"),
+            "a digest that matches must not be called missing over the mode"
+        );
+        assert!(is_executable(&path), "and the file must end up runnable");
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(stamp_path(&path));
     }
