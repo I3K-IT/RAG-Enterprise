@@ -302,6 +302,29 @@ mod tests {
         assert_eq!(on, 1, "delete_conversation's child-before-parent order depends on this");
     }
 
+    /// `list_by_user` is newest-first; both its consumers present history
+    /// oldest-first (`build_history_pairs` reverses inline, `chat_history`
+    /// reverses before responding). This pins the database end of that
+    /// contract: three messages inserted in order must come back reversed,
+    /// and reversing them must recover insertion order.
+    #[tokio::test]
+    async fn list_by_user_is_newest_first_and_reverses_to_insertion_order() {
+        let d = tempfile::tempdir().unwrap();
+        let p = pool(d.path()).await;
+        for content in ["first", "second", "third"] {
+            insert(&p, 1, "user", content, None, None).await.unwrap();
+        }
+
+        let msgs = list_by_user(&p, 1, 100).await.unwrap();
+        let contents: Vec<&str> = msgs.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, ["third", "second", "first"]);
+
+        let mut chronological = msgs;
+        chronological.reverse();
+        let contents: Vec<&str> = chronological.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, ["first", "second", "third"]);
+    }
+
     #[tokio::test]
     async fn ownership_is_checked_against_the_user_not_just_the_id() {
         let d = tempfile::tempdir().unwrap();

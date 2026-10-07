@@ -537,7 +537,16 @@ pub async fn chat_history(State(state): State<AppState>, claims: Claims) -> Resp
     )
     .await
     {
-        Ok(msgs) => Json(json!({ "messages": msgs })).into_response(),
+        // Newest-first out of the database, oldest-first to the caller: the
+        // sibling endpoint (/api/conversations/{id}/messages) and the only
+        // other consumer of message lists (build_history_pairs, which reverses
+        // for the same reason) both present history chronologically. A client
+        // rendering this array as-is would otherwise show the conversation
+        // backwards.
+        Ok(mut msgs) => {
+            msgs.reverse();
+            Json(json!({ "messages": msgs })).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
