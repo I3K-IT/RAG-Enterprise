@@ -22,8 +22,9 @@ use qdrant_client::{
     Payload, Qdrant,
     qdrant::{
         Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder,
-        DeletePointsBuilder, Disabled, Distance, FieldType, Filter, PointStruct,
-        QuantizationSearchParamsBuilder, QueryPointsBuilder, SearchParamsBuilder,
+        DeletePointsBuilder, Disabled, Distance, FieldType, Filter, PointStruct, Range,
+        QuantizationSearchParamsBuilder, QueryPointsBuilder, ScrollPointsBuilder,
+        SearchParamsBuilder,
         TurboQuantBitSize, TurboQuantization, TurboQuantizationBuilder,
         UpdateCollectionBuilder, UpsertPointsBuilder, VectorParamsBuilder,
         VectorParamsDiffBuilder, VectorsConfig, VectorsConfigDiff, quantization_config,
@@ -339,6 +340,54 @@ impl VectorStore for QdrantStore {
         tracing::info!(document_id = %document_id, "Qdrant vectors deleted");
         Ok(())
     }
+
+    /// A filtered scroll on `document_id`, which has a payload index (see
+    /// ensure_document_id_index), so it reads only that document's points.
+    ///
+    /// The first `limit` chunks are chosen by the filter, `chunk_index <
+    /// limit`, not by the scroll's own limit: points have random UUIDs and a
+    /// scroll returns them in id order, so "any `limit` points" of a longer
+    /// document would be arbitrary chunks of it rather than its opening.
+    async fn document_chunks(&self, document_id: &str, limit: u64) -> Result<Vec<SearchHit>> {
+        let filter = Filter::must([
+            Condition::matches(DOCUMENT_ID_FIELD, document_id.to_owned()),
+            Condition::range(
+                "chunk_index",
+                Range { gte: Some(0.0), lt: Some(limit as f64), ..Default::default() },
+            ),
+        ]);
+        let resp = self
+            .client
+            .scroll(
+                ScrollPointsBuilder::new(&self.collection)
+                    .filter(filter)
+                    .limit(limit.min(u32::MAX as u64) as u32)
+                    .with_payload(true),
+            )
+            .await
+            .with_context(|| format!("qdrant document_chunks {document_id}"))?;
+        let mut hits: Vec<SearchHit> = resp
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                let raw: serde_json::Map<String, serde_json::Value> =
+                    point.payload.into_iter().map(|(k, v)| (k, v.into())).collect();
+                match serde_json::from_value::<ChunkPayload>(serde_json::Value::Object(raw)) {
+                    Ok(payload) => Some(SearchHit { similarity: 1.0, payload }),
+                    Err(e) => {
+                        tracing::warn!(
+                            document_id = %document_id,
+                            error = %e,
+                            "Qdrant: payload will not deserialize, chunk excluded"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        hits.sort_by_key(|h| h.payload.chunk_index);
+        Ok(hits)
+    }
 }
 
 /// The TurboQuant configuration a setting asks for, if any. The compressed
@@ -537,6 +586,13 @@ mod tests {
         settle(&client, coll).await;
         assert_eq!(layout(&client, coll).await, (None, false), "turned off again");
         assert!(!store.ensure_quantization().await, "and a restart changes nothing");
+
+        // A document asked for by name gives its OPENING chunks, in order,
+        // whatever order the scroll returns points in: 40 chunks, 8 asked.
+        let opening = store.document_chunks("doc-2", 8).await.unwrap();
+        assert_eq!(found(&opening), (0..8).map(|c| ("doc-2".to_owned(), c)).collect::<Vec<_>>());
+        assert!(opening.iter().all(|h| h.similarity == 1.0));
+        assert!(store.document_chunks("no-such-doc", 8).await.unwrap().is_empty());
 
         store.delete_document("doc-3").await.unwrap();
         let hits = store.search(queries[3].clone(), 5, None).await.unwrap();

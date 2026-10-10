@@ -25,7 +25,11 @@ use crate::auth::jwt::Claims;
 use crate::bench;
 use crate::clients::eullm::StreamItem;
 use crate::db;
-use crate::rag::{prompt, retrieval, sources::Source, vector_store::ChunkPayload};
+use crate::rag::{
+    prompt, references, retrieval,
+    sources::Source,
+    vector_store::{ChunkPayload, SearchHit},
+};
 use crate::state::AppState;
 
 /// Longest question this API will answer.
@@ -71,6 +75,65 @@ pub(crate) fn validate_query(question: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Chunks taken from one document a question names by article number: an
+/// article file is one to three chunks, so this is all of it.
+const MAX_CHUNKS_PER_REFERENCED: u64 = 8;
+
+/// The chunks of the documents a question names by article number
+/// (rag::references), in the order the question names them. A failure here
+/// is logged and costs only the lookup: the vector results still answer.
+///
+/// Its cost is bounded by the question's citations, not by what they match:
+/// `named_articles` returns at most `MAX_PARSED` of them, one database query
+/// each, whatever the question lists.
+async fn referenced_hits(state: &AppState, question: &str) -> Vec<SearchHit> {
+    let mut out = Vec::new();
+    let mut documents = 0;
+    for r in references::named_articles(question) {
+        let rows = match db::documents::find_active_by_filename_like(
+            &state.db,
+            &references::like_patterns(&r),
+            50,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, article = %r.number, "article lookup failed");
+                continue;
+            }
+        };
+        for doc in rows.iter().filter(|d| references::file_is(&d.filename, &r)) {
+            if documents >= references::MAX_REFERENCED {
+                return out;
+            }
+            documents += 1;
+            match state.qdrant.document_chunks(&doc.id, MAX_CHUNKS_PER_REFERENCED).await {
+                Ok(hits) => out.extend(hits),
+                Err(e) => tracing::warn!(error = %e, document_id = %doc.id, "article chunks not read"),
+            }
+        }
+    }
+    out
+}
+
+/// The referenced chunks first, then the vector results not already among
+/// them, cut at the depth the caller resolved.
+fn merge_referenced(referenced: Vec<SearchHit>, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
+    let mut out = referenced;
+    for h in hits {
+        let seen = out.iter().any(|o| {
+            o.payload.document_id == h.payload.document_id
+                && o.payload.chunk_index == h.payload.chunk_index
+        });
+        if !seen {
+            out.push(h);
+        }
+    }
+    out.truncate(top_k);
+    out
 }
 
 /// Text to feed the answering LLM for one retrieved chunk: the enriched
@@ -183,6 +246,13 @@ async fn prepare(
         .qdrant
         .search(query_vec, top_k, Some(retrieval::RELEVANCE_THRESHOLD))
         .await?;
+    // An article the question names by number is looked up by name and goes
+    // first: vector search ranks by meaning, and a number has almost none.
+    let referenced = referenced_hits(state, question).await;
+    if !referenced.is_empty() {
+        tracing::info!(chunks = referenced.len(), "articles named in the question looked up");
+    }
+    let hits = merge_referenced(referenced, hits, top_k as usize);
     let search = t.elapsed();
 
     // 3. Build sources and context string (not timed: the string join is
@@ -581,6 +651,31 @@ mod tests {
             provenance_id: None,
             retrieval_text: retrieval_text.map(str::to_owned),
         }
+    }
+
+    fn hit(document_id: &str, chunk_index: usize, similarity: f32) -> SearchHit {
+        let mut p = payload("t", None);
+        p.document_id = document_id.into();
+        p.chunk_index = chunk_index;
+        SearchHit { similarity, payload: p }
+    }
+
+    #[test]
+    fn a_named_article_goes_first_and_is_not_repeated() {
+        let referenced = vec![hit("art2875", 0, 1.0), hit("art2875", 1, 1.0)];
+        let found = vec![hit("art2475", 0, 0.7), hit("art2875", 1, 0.6), hit("art2645", 0, 0.5)];
+        let merged = merge_referenced(referenced, found, 15);
+        let order: Vec<_> =
+            merged.iter().map(|h| (h.payload.document_id.as_str(), h.payload.chunk_index)).collect();
+        assert_eq!(order, [("art2875", 0), ("art2875", 1), ("art2475", 0), ("art2645", 0)]);
+    }
+
+    #[test]
+    fn the_merge_keeps_the_depth_the_caller_asked_for() {
+        let referenced = vec![hit("a", 0, 1.0)];
+        let found = vec![hit("b", 0, 0.7), hit("c", 0, 0.6)];
+        assert_eq!(merge_referenced(referenced, found, 2).len(), 2);
+        assert_eq!(merge_referenced(Vec::new(), vec![hit("b", 0, 0.7)], 15).len(), 1);
     }
 
     #[test]
