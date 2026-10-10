@@ -296,39 +296,6 @@ pub async fn list_users(State(state): State<AppState>, claims: Claims) -> impl I
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The whole point of `PublicUser` existing as a separate shape: there is
-    /// deliberately no field for a hash to travel in, so serialising a row for
-    /// the admin panel cannot leak one even by accident.
-    #[test]
-    fn the_public_user_shape_cannot_carry_a_password_hash() {
-        let public = PublicUser {
-            id: 1,
-            username: "alice".to_owned(),
-            email: "alice@example.com".to_owned(),
-            role: "admin".to_owned(),
-        };
-        let body = serde_json::to_string(&public).expect("serialize");
-        assert!(
-            !body.to_ascii_lowercase().contains("password"),
-            "the shape must not name it: {body}"
-        );
-        assert!(
-            !body.to_ascii_lowercase().contains("hash"),
-            "nor carry it under another name: {body}"
-        );
-        // And it is exactly what the admin panel reads.
-        let value: serde_json::Value = serde_json::from_str(&body).expect("parse");
-        assert_eq!(value["id"], 1);
-        assert_eq!(value["username"], "alice");
-        assert_eq!(value["email"], "alice@example.com");
-        assert_eq!(value["role"], "admin");
-    }
-}
-
 pub async fn create_user(
     _state: State<AppState>,
     claims: Claims,
@@ -379,4 +346,37 @@ pub async fn delete_user(
         Json(json!({"error": "not implemented"})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of `PublicUser` existing as a separate shape: there is
+    /// deliberately no field for a hash to travel in, so serialising a row for
+    /// the admin panel cannot leak one even by accident.
+    #[test]
+    fn the_public_user_shape_cannot_carry_a_password_hash() {
+        let public = PublicUser {
+            id: 1,
+            username: "alice".to_owned(),
+            email: "alice@example.com".to_owned(),
+            role: "admin".to_owned(),
+        };
+        let body = serde_json::to_string(&public).expect("serialize");
+        assert!(
+            !body.to_ascii_lowercase().contains("password"),
+            "the shape must not name it: {body}"
+        );
+        assert!(
+            !body.to_ascii_lowercase().contains("hash"),
+            "nor carry it under another name: {body}"
+        );
+        // And it is exactly what the admin panel reads.
+        let value: serde_json::Value = serde_json::from_str(&body).expect("parse");
+        assert_eq!(value["id"], 1);
+        assert_eq!(value["username"], "alice");
+        assert_eq!(value["email"], "alice@example.com");
+        assert_eq!(value["role"], "admin");
+    }
 }
