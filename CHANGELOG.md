@@ -22,6 +22,90 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
+## [0.1.48] - 2026-10-10
+
+### Added
+
+- **A question that names an article by number now gets that article.**
+  Asked "Che cosa prevede l'art. 2875 del codice civile?", vector search
+  returned articles 2475, 2645-bis and 2645-ter — a number carries almost
+  no meaning for bge-m3 — and the model rightly answered that the article
+  was not among its sources. On a 472-question statute exam the article
+  asked was among the sources for 37% of questions. Now the article named
+  in the question (with its code, when the question names one: "c.c.",
+  "c.p.c.", "della Costituzione", "legge n. 241/1990"...) is looked up by
+  file name and placed before the passages found by meaning. It applies to
+  files named after the article they hold, as in the LEGAL_PACK ("Codice
+  civile, art. 2875 - Rubrica.txt"); a library named otherwise answers
+  exactly as before.
+
+### Fixed
+
+- **`GET /api/auth/users` lists the registered accounts.** It reported an
+  empty table. The response carries only the public fields, never password
+  hashes.
+
+- **A component binary that lost its executable bit is repaired at
+  startup.** A matching digest used to vouch for a binary that would not
+  launch; the executable bit is now restored and the start continues,
+  whether the digest is checked against its stamp or verified the slow way
+  (an install whose stamp and mode were both lost, such as an unzip of the
+  binary alone). The "downloading again" warning no longer blames the
+  sha256 when the reason was the permission.
+
+- **A stale instance that could not be stopped is reported at startup.**
+  On Linux the failure to signal it went unmentioned while the process
+  went on holding the port the next component needs to bind.
+
+- **A download piece that is not the piece asked for is refused.** It was
+  written at its offset over the pieces that follow it, so a server that
+  ignores `Range` could produce a silently corrupt file. The progress ETA
+  no longer wraps around when the downloaded byte count passes the total.
+
+- **A `206` answer with no usable `Content-Range` no longer becomes a
+  one-byte download.** The one byte the range probe asked for was written
+  out as the whole file; the download is now retried without a Range
+  header. This mattered most for the eullm self-update, which has no
+  pinned sha256: a one-byte "download" would have been installed as a
+  working binary.
+
+- **A bootstrap state file that could not be written is reported.** It was
+  lost in silence: a stamp left unwritten rehashes the component on every
+  start, and an unwritten `eullm.override.json` silently reverts an
+  approved eullm update on the next start, downloading the manifest's
+  pinned build back over it.
+
+- **An eullm update that cannot be made executable is discarded, not
+  installed.** The download is made runnable before it replaces the
+  working binary, so a failure there no longer leaves a file that cannot
+  be launched yet is stamped as verified and reported as `eullm updated`.
+  The installed version is left untouched.
+
+- **`GET /api/chat/history` returns messages oldest-first**, like its
+  sibling per-conversation endpoint and every other consumer of message
+  lists, instead of newest-first.
+
+- **A GPU embedding batch retried on the CPU is reported by `/info` as a
+  fallback.** The machine kept reading as a healthy GPU. The fallback
+  label no longer claims the failure happened at startup, and being parked
+  on the CPU between ingestion windows is still not treated as a
+  degradation.
+
+- **The retrieval extension point receives the search depth the request
+  resolved to**, instead of the default constant, so that registering the
+  stock strategy cannot change how many chunks a query returns.
+
+- **Switching conversations quickly no longer shows the previous thread's
+  messages.** A late reply for it replaced the messages on screen; the
+  load is now ignored unless its conversation is still the one being
+  viewed.
+
+- **A legacy binary document whose size cannot be read fails with the
+  reason**, instead of being treated as zero bytes and returning an empty
+  document.
+
+---
+
 ## [0.1.47] - 2026-10-02
 
 ### Added
