@@ -25,6 +25,14 @@ const SUFFIXES: &str = "bis|ter|quater|quinquies|sexies|septies|octies|novies|de
 /// "art. 54" with no code matches the art. 54 of every code in the library.
 pub const MAX_REFERENCED: usize = 4;
 
+/// How many article citations of one question are looked up at all: each is
+/// a database query, and a question may list as many numbers as it likes.
+pub const MAX_PARSED: usize = 8;
+
+/// How far after a citation its code is looked for, in characters: enough
+/// for "del codice del processo amministrativo" (39) and a little more.
+const CODE_WINDOW: usize = 50;
+
 /// How the codes are named in questions (normalised: lowercase, punctuation
 /// as spaces), longest first, mapped to the name their files start with.
 /// "c p" must come after "c p c", "c p p" and "c p a", which contain it.
@@ -113,31 +121,71 @@ fn normalise(text: &str) -> String {
     )
 }
 
-/// The code a question names, as its files are named.
-pub fn named_code(question: &str) -> Option<&'static str> {
-    let norm = normalise(question);
+/// The code a text names, as its files are named.
+pub fn named_code(text: &str) -> Option<&'static str> {
+    let norm = normalise(text);
     CODE_ALIASES
         .iter()
         .find(|(alias, _)| norm.contains(&format!(" {alias} ")))
         .map(|(_, name)| *name)
 }
 
-/// The articles a question names, in order, without repeats.
-pub fn named_articles(question: &str) -> Vec<ArticleRef> {
-    let code = named_code(question);
-    let mut out: Vec<ArticleRef> = Vec::new();
-    let mut push = |number: String| {
-        if !out.iter().any(|r| r.number == number) {
-            out.push(ArticleRef { number, code });
+/// Every code a text names, each once. An alias found is blanked before the
+/// shorter ones are looked for, so "c.p.c." is not also read as "c.p.".
+fn named_codes(text: &str) -> Vec<&'static str> {
+    let mut norm = normalise(text);
+    let mut out: Vec<&'static str> = Vec::new();
+    for (alias, name) in CODE_ALIASES {
+        let needle = format!(" {alias} ");
+        if norm.contains(&needle) {
+            norm = norm.replace(&needle, " # ");
+            if !out.contains(name) {
+                out.push(name);
+            }
         }
-    };
-    for m in ARTICLE.captures_iter(question) {
-        push(key(&m[1], m.get(2).map(|s| s.as_str())));
+    }
+    out
+}
+
+/// The articles a question names, in order, without repeats; at most
+/// `MAX_PARSED` of them, so a question listing hundreds of numbers costs no
+/// more lookups than one listing a few.
+///
+/// Each citation gets the code written after it, before the next citation
+/// ("l'art. 2043 c.c. e l'art. 575 c.p." is one of each); a citation
+/// followed by none gets the question's code when the question names only
+/// one ("del codice civile, l'art. 2043"), and no code otherwise.
+pub fn named_articles(question: &str) -> Vec<ArticleRef> {
+    let codes = named_codes(question);
+    let only = if codes.len() == 1 { Some(codes[0]) } else { None };
+    let matches: Vec<_> = ARTICLE.captures_iter(question).collect();
+    let mut out: Vec<ArticleRef> = Vec::new();
+    for (i, m) in matches.iter().enumerate() {
+        let whole = m.get(0).expect("whole match");
+        let next = matches
+            .get(i + 1)
+            .map(|n| n.get(0).expect("whole match").start())
+            .unwrap_or(question.len());
+        // The code is the words right after the citation ("c.c.", "del codice
+        // di procedura civile", "della legge n. 241/1990"), not anything said
+        // later in the sentence.
+        let after: String = question[whole.end()..next].chars().take(CODE_WINDOW).collect();
+        let code = named_code(&after).or(only);
+        let mut numbers = vec![key(&m[1], m.get(2).map(|s| s.as_str()))];
         if let Some(rest) = m.get(3) {
             for more in MORE.captures_iter(rest.as_str()) {
                 if more.get(3).is_none() {
-                    push(key(&more[1], more.get(2).map(|s| s.as_str())));
+                    numbers.push(key(&more[1], more.get(2).map(|s| s.as_str())));
                 }
+            }
+        }
+        for number in numbers {
+            let r = ArticleRef { number, code };
+            if !out.contains(&r) {
+                out.push(r);
+            }
+            if out.len() >= MAX_PARSED {
+                return out;
             }
         }
     }
@@ -210,6 +258,44 @@ mod tests {
             Some("Codice di procedura civile")
         );
         assert_eq!(named_code("art. 54 c.p."), Some("Codice penale"));
+    }
+
+    #[test]
+    fn each_citation_keeps_its_own_code() {
+        assert_eq!(
+            refs("Confronta l'art. 2043 c.c. e l'art. 575 c.p."),
+            vec![("2043".into(), Some("Codice civile")), ("575".into(), Some("Codice penale"))]
+        );
+        // the same number in two codes is two articles
+        assert_eq!(
+            refs("l'art. 54 c.p. e l'art. 54 della Costituzione"),
+            vec![("54".into(), Some("Codice penale")), ("54".into(), Some("Costituzione"))]
+        );
+        // a code named once, before the citations, applies to all of them
+        assert_eq!(
+            refs("Nel codice civile, gli artt. 1176 e 1375"),
+            vec![("1176".into(), Some("Codice civile")), ("1375".into(), Some("Codice civile"))]
+        );
+        // the code is the one written after the citation, not one named later
+        assert_eq!(
+            refs("l'art. 2043 riguarda il risarcimento del danno extracontrattuale e non \
+                  il codice penale; vedi l'art. 575 c.p. e l'art. 1 c.c."),
+            vec![
+                ("2043".into(), None),
+                ("575".into(), Some("Codice penale")),
+                ("1".into(), Some("Codice civile"))
+            ]
+        );
+        // two codes, and a citation followed by neither: no guess
+        assert_eq!(refs("art. 12 e poi l'art. 3 c.c. e l'art. 4 c.p.")[0].1, None);
+        assert_eq!(named_codes("art. 360 c.p.c. e art. 54 c.p."),
+                   vec!["Codice di procedura civile", "Codice penale"]);
+    }
+
+    #[test]
+    fn a_question_listing_many_numbers_is_cut_short() {
+        let many: String = (1..300).map(|n| format!("art. {n} ")).collect();
+        assert_eq!(named_articles(&many).len(), MAX_PARSED);
     }
 
     #[test]

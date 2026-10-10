@@ -84,6 +84,10 @@ const MAX_CHUNKS_PER_REFERENCED: u64 = 8;
 /// The chunks of the documents a question names by article number
 /// (rag::references), in the order the question names them. A failure here
 /// is logged and costs only the lookup: the vector results still answer.
+///
+/// Its cost is bounded by the question's citations, not by what they match:
+/// `named_articles` returns at most `MAX_PARSED` of them, one database query
+/// each, whatever the question lists.
 async fn referenced_hits(state: &AppState, question: &str) -> Vec<SearchHit> {
     let mut out = Vec::new();
     let mut documents = 0;
