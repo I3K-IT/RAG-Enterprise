@@ -455,6 +455,9 @@ function App() {
       setMessages(msgs)
     } catch (e) {
       console.error('Error loading messages:', e)
+      // Same guard as above: a late failure for a conversation the user has
+      // left must not empty the one they are looking at now.
+      if (currentConversationIdRef.current !== convId) return
       setMessages([])
     }
   }
