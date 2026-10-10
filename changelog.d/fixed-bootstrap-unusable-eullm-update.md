@@ -1,0 +1,1 @@
+An eullm update that cannot be made executable is now discarded instead of installed: the download is made runnable before it replaces the working binary, so a failure there no longer leaves a file that cannot be launched yet is stamped as verified and reported as `eullm updated`. The installed version is left untouched in that case.

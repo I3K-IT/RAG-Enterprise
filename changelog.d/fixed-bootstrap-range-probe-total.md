@@ -1,0 +1,1 @@
+A `206` answer that carries no usable `Content-Range` no longer results in the one byte the range probe asked for being written out as the whole download. The download is retried without a Range header instead, which matters most for the eullm self-update: it has no pinned sha256, so a one-byte "download" would have been installed as a working binary.

@@ -1,0 +1,1 @@
+`GET /api/chat/history` now returns messages oldest-first, like its sibling per-conversation endpoint and like every other consumer of message lists, instead of newest-first.

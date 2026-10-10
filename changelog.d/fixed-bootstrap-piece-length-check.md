@@ -1,0 +1,1 @@
+A download piece that is not the piece asked for is now refused instead of being written at the piece's offset over the pieces that follow it, so a server that ignores `Range` can no longer produce a silently corrupt file. The progress ETA no longer wraps around when the downloaded byte count passes the total.

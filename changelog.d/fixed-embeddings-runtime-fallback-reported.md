@@ -1,0 +1,1 @@
+A batch that runs out of GPU memory while embedding and is retried on the CPU is now reported by `/info` as a fallback, instead of leaving the machine reading as a healthy GPU. The fallback label no longer claims the failure happened at startup, and being parked on the CPU between ingestion windows is still not treated as a degradation.

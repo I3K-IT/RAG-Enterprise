@@ -1,0 +1,1 @@
+A component whose digest matches but that cannot be run is no longer accepted as installed: the executable bit is restored and the start continues, instead of the stamp permanently vouching for a binary that will not launch. Installations whose permission was lost after the fact are repaired by the same check.

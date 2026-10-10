@@ -1,0 +1,1 @@
+Fail with the reason when a legacy binary document's size cannot be read, instead of treating it as zero bytes and returning an empty document.

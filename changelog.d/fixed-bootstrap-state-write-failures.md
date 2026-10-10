@@ -1,0 +1,1 @@
+Report a bootstrap state file that could not be written, instead of losing it in silence: a stamp left unwritten rehashes the component on every start, and an unwritten `eullm.override.json` silently reverts an approved eullm update on the next start, downloading the manifest's pinned build back over it.

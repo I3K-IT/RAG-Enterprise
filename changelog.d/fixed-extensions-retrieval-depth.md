@@ -1,0 +1,1 @@
+The retrieval extension point now receives the search depth the request resolved to, instead of the default constant, so that registering the stock strategy cannot change how many chunks a query returns.
