@@ -101,6 +101,14 @@ pub trait VectorStore: Send + Sync {
     /// Deletes every vector belonging to one document.
     /// INVARIANT: call this BEFORE updating SQLite.
     async fn delete_document(&self, document_id: &str) -> Result<()>;
+
+    /// Up to `limit` chunks of one document, in chunk order, each with
+    /// similarity 1.0: the document was asked for by name, not found by
+    /// meaning (see rag::references). The default finds nothing, which is
+    /// what a store that cannot filter by document should answer.
+    async fn document_chunks(&self, _document_id: &str, _limit: u64) -> Result<Vec<SearchHit>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]

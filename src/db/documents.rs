@@ -58,6 +58,28 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<DocumentRow>> {
     Ok(rows)
 }
 
+/// Active documents whose file name matches either of two LIKE patterns: the
+/// narrowing step of the article lookup (rag::references::like_patterns),
+/// which then checks each name exactly. Bounded: one article number is the
+/// same number in every code of the library, never more.
+pub async fn find_active_by_filename_like(
+    pool: &SqlitePool,
+    patterns: &[String; 2],
+    limit: i64,
+) -> Result<Vec<DocumentRow>> {
+    let rows = sqlx::query_as::<_, DocumentRow>(
+        "SELECT id, filename, upload_date, page_count, doc_type, chunk_count, is_deleted
+         FROM documents WHERE is_deleted = 0 AND (filename LIKE ? OR filename LIKE ?)
+         ORDER BY filename LIMIT ?"
+    )
+    .bind(&patterns[0])
+    .bind(&patterns[1])
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn soft_delete(pool: &SqlitePool, document_id: &str) -> Result<bool> {
     let affected = sqlx::query(
         "UPDATE documents SET is_deleted = 1 WHERE id = ? AND is_deleted = 0"

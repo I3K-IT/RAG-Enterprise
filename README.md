@@ -112,7 +112,12 @@ and English, the same OCR pictures go through.
 **Retrieval.** Documents are split into overlapping chunks, embedded with
 [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (1024 dimensions, multilingual
 across 100+ languages) and stored in Qdrant. A question is embedded the same way
-and answered from the closest passages, with each source shown.
+and answered from the closest passages, with each source shown. A question that
+names an article by number — "art. 2875 del codice civile", "artt. 1176 e 1375
+c.c." — also gets that article's file directly, ahead of the passages found by
+meaning, when the library names its files after articles the way the LEGAL_PACK
+does ("Codice civile, art. 2875 - Rubrica.txt"): a number carries almost no
+meaning for an embedding, and a lawyer asks by number all the time.
 
 **Chat.** Conversations are kept, answers stream token by token, and history is
 carried into follow-up questions.
