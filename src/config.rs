@@ -1239,8 +1239,8 @@ mod tests {
 
     #[test]
     fn startup_validation_refuses_a_bad_extra_args() {
-        let mut eullm = EullmSettings::default();
-        eullm.extra_args = Some("--ctx-size 8192".into());
+        let mut eullm =
+            EullmSettings { extra_args: Some("--ctx-size 8192".into()), ..Default::default() };
         let err = validate_eullm(&eullm).unwrap_err().to_string();
         assert!(err.contains("use EULLM__NUM_CTX"), "{err}");
         eullm.extra_args = Some("--moe-cache auto".into());

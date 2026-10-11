@@ -77,6 +77,10 @@ pub fn router(state: AppState, extra_routes: Option<Router<AppState>>) -> Router
             get(admin::get_answer_instructions)
                 .put(admin::put_answer_instructions)
                 .delete(admin::delete_answer_instructions),
+        )
+        .route(
+            "/api/admin/settings/article-lookup",
+            get(admin::get_article_lookup).put(admin::put_article_lookup),
         );
 
     let query_routes = Router::new()

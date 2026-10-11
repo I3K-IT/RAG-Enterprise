@@ -48,6 +48,7 @@ function App() {
   const [answerText, setAnswerText] = useState('')
   const [answerSaved, setAnswerSaved] = useState(null)
   const [answerBusy, setAnswerBusy] = useState(false)
+  const [articleLookup, setArticleLookup] = useState(null)
 
   // Change password state
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
@@ -395,6 +396,24 @@ function App() {
       alert(`Save error: ${error.response?.data?.error || error.message}`)
     } finally {
       setAnswerBusy(false)
+    }
+  }
+
+  const fetchArticleLookup = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/settings/article-lookup`)
+      setArticleLookup(res.data.enabled)
+    } catch (error) {
+      console.error('Error loading the article lookup setting:', error)
+    }
+  }
+
+  const handleToggleArticleLookup = async () => {
+    try {
+      const res = await axios.put(`${API_URL}/api/admin/settings/article-lookup`, { enabled: !articleLookup })
+      setArticleLookup(res.data.enabled)
+    } catch (error) {
+      alert(`Save error: ${error.response?.data?.error || error.message}`)
     }
   }
 
@@ -1000,7 +1019,7 @@ function App() {
                   Backup
                 </button>
                 <button
-                  onClick={() => { setAdminTab('answers'); fetchAnswerInstructions() }}
+                  onClick={() => { setAdminTab('answers'); fetchAnswerInstructions(); fetchArticleLookup() }}
                   className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'answers' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
                 >
                   Answers
@@ -1227,6 +1246,27 @@ function App() {
                           </button>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="bg-slate-700 rounded-lg p-4 flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-white">Article lookup by number</h3>
+                        <p className="text-sm text-slate-400">
+                          For collections of legislation whose files are named after the article they hold
+                          ("…, art. N - …"): a question that names an article by number also gets that file,
+                          ahead of the passages found by meaning. On other documents it finds nothing and costs nothing.
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleToggleArticleLookup}
+                        disabled={articleLookup === null}
+                        role="switch"
+                        aria-checked={!!articleLookup}
+                        aria-label="Article lookup by number"
+                        className={`shrink-0 px-4 py-2 rounded-lg font-semibold text-sm transition ${articleLookup ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-slate-600 hover:bg-slate-500 text-slate-200'}`}
+                      >
+                        {articleLookup === null ? '…' : articleLookup ? 'On' : 'Off'}
+                      </button>
                     </div>
                   </div>
                 )

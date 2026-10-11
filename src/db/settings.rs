@@ -17,6 +17,10 @@ use sqlx::SqlitePool;
 /// The instructions the answering model is given (rag::prompt).
 pub const ANSWER_INSTRUCTIONS: &str = "answer_instructions";
 
+/// Whether a question naming an article by number also gets that article's
+/// file (rag::references). On unless an admin turns it off.
+pub const ARTICLE_LOOKUP_ENABLED: &str = "article_lookup_enabled";
+
 /// The stored value of `key`, if one was set.
 pub async fn get(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
     let value = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
@@ -24,6 +28,22 @@ pub async fn get(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
         .fetch_optional(pool)
         .await?;
     Ok(value)
+}
+
+/// An on/off setting: `default` when nothing is stored, or when what is
+/// stored is not "true" or "false" (it can only be written through
+/// `set_flag`, so that would be a hand edit).
+pub async fn flag(pool: &SqlitePool, key: &str, default: bool) -> Result<bool> {
+    Ok(match get(pool, key).await?.as_deref() {
+        Some("true") => true,
+        Some("false") => false,
+        _ => default,
+    })
+}
+
+/// Stores an on/off setting as "true" or "false".
+pub async fn set_flag(pool: &SqlitePool, key: &str, on: bool, updated_by: &str) -> Result<()> {
+    set(pool, key, if on { "true" } else { "false" }, updated_by).await
 }
 
 /// Stores `value` for `key`, replacing what was there.
@@ -99,5 +119,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(by.as_deref(), Some("admin"));
+    }
+
+    #[tokio::test]
+    async fn a_flag_is_its_default_until_set() {
+        let d = tempfile::tempdir().unwrap();
+        let p = pool(&d.path().join("s.db")).await;
+        assert!(flag(&p, ARTICLE_LOOKUP_ENABLED, true).await.unwrap());
+        set_flag(&p, ARTICLE_LOOKUP_ENABLED, false, "admin").await.unwrap();
+        assert!(!flag(&p, ARTICLE_LOOKUP_ENABLED, true).await.unwrap());
+        set_flag(&p, ARTICLE_LOOKUP_ENABLED, true, "admin").await.unwrap();
+        assert!(flag(&p, ARTICLE_LOOKUP_ENABLED, false).await.unwrap());
+        set(&p, ARTICLE_LOOKUP_ENABLED, "maybe", "hand edit").await.unwrap();
+        assert!(flag(&p, ARTICLE_LOOKUP_ENABLED, true).await.unwrap(), "unreadable means default");
     }
 }
