@@ -6,8 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 > **On the version numbers.** `1.0.0` to `1.2.1` are the Python stack,
 > preserved on the [`python-legacy`](../../tree/python-legacy) branch and no
-> longer developed. `0.1.x` is the Rust rewrite that replaced it: a new codebase,
-> which restarts the numbering at `0.1` because its storage layout and HTTP
+> longer developed. `0.x` is the Rust rewrite that replaced it: a new codebase,
+> which restarts the numbering below `1.0` because its storage layout and HTTP
 > surface are not settled yet. So the newer line carries the *lower* number —
 > see [Upgrading from 1.x](README.md#upgrading-from-1x).
 
@@ -19,6 +19,160 @@ Entries for the next release live in [`changelog.d/`](changelog.d/), one
 file per change, assembled into a version section here by
 `scripts/release-changelog.sh` when the version is cut. Keeping them in
 separate files is what stops two pull requests colliding in this one.
+
+---
+
+## [0.2.0] - 2026-10-11
+
+The prompt and the model request are now model-agnostic, and how the model
+answers is the admin's to set. This section also holds the changes of
+0.1.48, which was tagged with the version bump only.
+
+### Added
+
+- **The instructions the model answers with are the admin's to change.** The
+  prompt is now two parts: instructions — role, structure, citations,
+  language — which an admin edits from the new *Answers* tab of the admin
+  panel, and a frame the engine keeps — history, retrieved chunks,
+  question. Saved in the new `settings` table (migration 0003, included in
+  backups) and read for every question, so a change applies to the next one
+  without a restart; blank or reset means the built-in instructions.
+  `GET`/`PUT`/`DELETE /api/admin/settings/answer-instructions`, admin only,
+  up to 8,000 characters. `{context}` or `{question}` written in the
+  instructions stay text. Restoring a backup taken before this release
+  leaves the current instructions as they are.
+
+- **A question that names an article by number gets that article.** Asked "Che
+  cosa prevede l'art. 2875 del codice civile?", vector search returned
+  articles 2475, 2645-bis and 2645-ter — a number carries almost no meaning
+  for bge-m3 — and the model rightly answered that the article was not among
+  its sources; on a 472-question statute exam the article asked was among the
+  sources for 37% of questions. Now the article a question names (with its
+  code, when it names one: "c.c.", "c.p.c.", "della Costituzione", "legge n.
+  241/1990"...) is looked up by file name and placed before the passages found
+  by meaning. Meant for collections of legislation with one article per file,
+  named as it is cited ("Codice civile, art. 2875 - Rubrica.txt"); a library
+  named otherwise answers exactly as before.
+
+- **The article lookup can be turned off.** The lookup of an article named
+  by number — meant for collections of legislation whose files are named
+  after the article they hold — now has a switch in the *Answers* tab of
+  the admin panel (`GET`/`PUT /api/admin/settings/article-lookup`, admin
+  only, setting `article_lookup_enabled`). On by default. A question that
+  names no article skips it without reading the setting.
+
+- **`EULLM__EXTRA_ARGS` passes extra options to eullm.** Appended to `eullm
+  run` after the options RAG sets — e.g. `--moe-cache auto`, which takes a
+  large MoE model on a single GPU from about 20 to 51–56 tokens/s in our
+  tests. The value is split into arguments the way a shell would, quotes
+  included, but never run through a shell. An option RAG already sets
+  (`--ctx-size`, `--batch-size`, `--cache-type-k/v`, `--n-cpu-moe`,
+  `--embedding-model`, `--cli`) stops startup with the variable to use
+  instead, e.g. "--ctx-size is already set by RAG: use EULLM__NUM_CTX". The
+  full eullm command line is logged at startup.
+
+### Changed
+
+- **Answers use the chat format of the model eullm has loaded, so models
+  other than Qwen work.** The prompt used to be wrapped in Qwen's ChatML by
+  hand and sent raw: with a Ministral 8B that meant stray `</answer>` tags
+  in 74 answers out of 472 and a file cited in only 99. It now goes to
+  eullm's `/api/chat`, which applies the loaded model's own template, with
+  `think: false` to switch reasoning off; the `/no_think` line at the top of
+  the prompt and the empty reasoning block appended to it are gone, both
+  were Qwen conventions. A reasoning block or template marker that a model
+  emits anyway is still removed from the answer.
+
+- **eullm 0.7.50, and the update check finds its CUDA build again.** Every
+  eullm pin moves from 0.6.90 to 0.7.50; each asset was downloaded and its
+  sha256 and size checked against the release's checksums.txt. From 0.7.x
+  the CUDA builds are on CUDA 13.1 and named `-cuda-13.1` instead of
+  `-cuda-12.8`, so the update check at startup reported "no asset for this
+  platform" on every NVIDIA machine; it now looks for the new names. CUDA
+  13.1 needs NVIDIA driver 580 or later: on an older driver bootstrap now
+  says so and uses the CPU build, instead of installing a binary that
+  cannot start.
+
+### Fixed
+
+- **The admin users list shows the users.** `GET /api/auth/users` answered
+  with an empty list whatever the database held, so the admin panel always
+  read "No users found". It now lists the accounts, with their public fields
+  only — never a password hash.
+
+- **A binary that cannot be run is not taken as installed.** A component whose
+  digest matched but whose executable bit was missing — a chmod that failed
+  after the stamp was written, or a mode lost later to an unzip or a restore —
+  was accepted on every start and failed to launch. The permission is now
+  restored whichever way the digest was verified, and if it cannot be the
+  component is downloaded again; the warning no longer blames the sha256 when
+  the reason was the permission.
+
+- **A stale instance that could not be stopped is reported.** On Linux, a
+  leftover process that could not be signalled (another user's, for instance)
+  went unmentioned while it kept the port the next component needs. It is now
+  reported at startup; one that had already exited is not.
+
+- **A download piece that is not the piece asked for is refused.** A server
+  ignoring `Range` answers with the whole file, which used to be written at
+  the piece's offset over the pieces after it: a silently corrupt file. The
+  piece is now refused as soon as it runs past its length, without buffering
+  the rest, and the progress ETA no longer wraps around when the byte count
+  passes the total.
+
+- **A range probe is no longer mistaken for the file.** A `206` answer without
+  a usable `Content-Range` used to have the one byte the probe asked for
+  written out as the whole download. The download is now retried without
+  `Range`. This mattered most for the eullm update, which has no pinned
+  sha256: a one-byte "download" would have been installed as the binary.
+
+- **A bootstrap state file that could not be written is reported.** A stamp
+  left unwritten made the component be rehashed on every start, and an
+  unwritten `eullm.override.json` silently reverted an approved eullm update
+  on the next start, downloading the pinned build back over it. Both failures
+  are now logged with what they cost.
+
+- **An eullm update that cannot be made executable is discarded.** The
+  download is made executable before it replaces the working binary, so a
+  failure there leaves the installed version untouched, instead of a file that
+  cannot be launched, stamped as verified and announced as "eullm updated".
+
+- **Chat history is returned oldest-first.** `GET /api/chat/history` returned
+  messages newest-first, unlike the per-conversation endpoint and every other
+  consumer of message lists; it now returns them in chronological order.
+
+- **Citations name the file, not a placeholder.** The default instructions
+  said "Cite sources as [Filename]", and models copied it literally:
+  `[Filename]`, `[ibidem]`, a code name instead of a file — 27 wrong
+  citations out of 472 answers with qwen3-14b, 99 with a 4B model. The
+  instruction now says to cite the file name shown in square brackets
+  above each chunk, copied exactly, and never a placeholder or a name that
+  is not among them.
+
+- **A CPU fallback at request time shows in /info.** A batch that ran out of
+  GPU memory while embedding and was retried on the CPU left the machine
+  reading as a healthy GPU. `/info` now reports it as a fallback, without
+  claiming it happened at startup; being parked on the CPU between ingestion
+  windows is still not a degradation.
+
+- **The retrieval extension point gets the depth the request asked for.**
+  `RetrievalStrategy::retrieve` now receives the resolved `top_k`, instead of
+  the default strategy using the constant of 15, so plugging in the stock
+  strategy can no longer change how many chunks a query returns.
+
+- **Switching conversations quickly no longer shows the wrong thread.** A late
+  reply for the conversation you just left could replace the messages on
+  screen. A load is now ignored unless its conversation is still the one being
+  viewed.
+
+- **A conversation load that fails after you have moved on no longer empties
+  the one you are reading.** The guard added for late replies now covers
+  late failures too: switching threads while a slow load is in flight, then
+  having that load fail, used to clear the messages of the thread on screen.
+
+- **An unreadable file size is an error, not an empty document.** A legacy
+  binary document (.doc, .ppt, .msg) whose size could not be read was treated
+  as zero bytes and came back empty; it now fails with the reason.
 
 ---
 

@@ -1,1 +1,0 @@
-Switching conversations quickly no longer lets a late reply for the previous thread replace the messages on screen: the load is ignored unless its conversation is still the one being viewed.

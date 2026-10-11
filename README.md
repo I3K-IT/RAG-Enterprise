@@ -17,7 +17,7 @@ is no telemetry, and nothing is sent to an external API.
 > straight. This is one binary. It starts Qdrant and the inference engine
 > itself; there is nothing to compose and nothing to build.
 >
-> The rewrite restarts the numbering at `0.1`, so it is *lower*-numbered than
+> The rewrite restarts the numbering below `1.0`, so it is *lower*-numbered than
 > the `1.x` line it replaces: it is a new codebase whose storage layout and HTTP
 > surface are not settled yet. The Python version is preserved on the
 > [`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags — see
@@ -57,9 +57,9 @@ eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
 No separate GPU build or download is needed on any platform.
 
 ```sh
-mkdir i3k-rag-engine-v0.1.47-linux-x86_64
-tar -xzf i3k-rag-engine-v0.1.47-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.47-linux-x86_64
-cd i3k-rag-engine-v0.1.47-linux-x86_64
+mkdir i3k-rag-engine-v0.2.0-linux-x86_64
+tar -xzf i3k-rag-engine-v0.2.0-linux-x86_64.tar.gz -C i3k-rag-engine-v0.2.0-linux-x86_64
+cd i3k-rag-engine-v0.2.0-linux-x86_64
 
 printf 'AUTH__JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
 
@@ -240,7 +240,7 @@ query of a session and reports on shutdown.
 
 There is no automatic migration path, because the rewrite changes both the
 storage layout and the runtime model: `1.x` kept its state in Docker volumes
-shared between containers, `0.1.x` keeps it in one data directory next to the
+shared between containers, `0.x` keeps it in one data directory next to the
 binary.
 
 The two cannot run at the same time on one machine: they both want ports 8000,
