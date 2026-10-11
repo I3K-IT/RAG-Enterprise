@@ -81,6 +81,118 @@ const REP_TAIL: usize = 800;         // chars of accumulated text to examine
 const REP_PHRASE_MIN: usize = 50;    // minimum phrase length to search for
 const REP_COUNT: usize = 3;          // occurrences threshold → stop
 
+/// `clean_answer` for a stream: the same removals, applied piece by piece
+/// while the answer is still arriving. A marker can be split across pieces
+/// ("<thi" + "nk>"), so whatever could still be the start of one is held back
+/// until the next piece says what it is; `finish` releases what is left.
+/// What comes out is what the client sees and what is stored as the reply.
+#[derive(Default)]
+struct StreamCleaner {
+    /// Received, not yet released.
+    pending: String,
+    /// Inside a `<think>` block: dropped until `</think>`.
+    in_think: bool,
+    /// Something visible has been released: until then leading whitespace
+    /// (what a reasoning block leaves behind) is dropped, as `trim` does.
+    started: bool,
+}
+
+impl StreamCleaner {
+    const OPEN: &'static str = "<think>";
+    const CLOSE: &'static str = "</think>";
+    /// The longest `<|name|>` marker this looks for, as in special_token_re.
+    const MAX_TOKEN: usize = 2 + 32 + 2;
+
+    fn push(&mut self, piece: &str) -> String {
+        self.pending.push_str(piece);
+        let mut out = String::new();
+        loop {
+            if self.in_think {
+                if let Some(at) = self.pending.find(Self::CLOSE) {
+                    self.pending.drain(..at + Self::CLOSE.len());
+                    self.in_think = false;
+                    continue;
+                }
+                // Keep only what could be the start of the closing tag.
+                let keep = held_suffix(&self.pending, &[Self::CLOSE]);
+                self.pending.drain(..self.pending.len() - keep);
+                break;
+            }
+            let think = self.pending.find(Self::OPEN);
+            let token = self.pending.find("<|");
+            match (think, token) {
+                (Some(t), k) if k.is_none_or(|k| t < k) => {
+                    out.push_str(&self.pending[..t]);
+                    self.pending.drain(..t + Self::OPEN.len());
+                    self.in_think = true;
+                }
+                (_, Some(k)) => {
+                    out.push_str(&self.pending[..k]);
+                    self.pending.drain(..k);
+                    match special_token_re().find(&self.pending) {
+                        // ChatML's `<|im_start|>role` line waits for its
+                        // newline, so the role goes with the marker.
+                        _ if self.pending.starts_with("<|im_start|>") && !self.pending.contains('\n') => {
+                            break;
+                        }
+                        // A marker, whole, at the front: drop it.
+                        Some(m) if m.start() == 0 => {
+                            self.pending.drain(..m.end());
+                        }
+                        // Could still become one: wait for more.
+                        _ if self.pending.len() < Self::MAX_TOKEN
+                            && !self.pending[2..].contains(|c: char| {
+                                !(c.is_ascii_alphanumeric() || c == '_' || c == '|' || c == '>')
+                            }) =>
+                        {
+                            break;
+                        }
+                        // Not a marker after all: it is text.
+                        _ => {
+                            out.push_str("<|");
+                            self.pending.drain(..2);
+                        }
+                    }
+                }
+                _ => {
+                    let keep = held_suffix(&self.pending, &[Self::OPEN, "<|"]);
+                    out.push_str(&self.pending[..self.pending.len() - keep]);
+                    self.pending.drain(..self.pending.len() - keep);
+                    break;
+                }
+            }
+        }
+        self.release(out)
+    }
+
+    /// The end of the stream: what was held back is text, unless it is the
+    /// inside of a reasoning block that never closed.
+    fn finish(&mut self) -> String {
+        let rest = if self.in_think { String::new() } else { std::mem::take(&mut self.pending) };
+        self.pending.clear();
+        self.release(rest)
+    }
+
+    fn release(&mut self, mut out: String) -> String {
+        if !self.started {
+            out = out.trim_start().to_owned();
+            self.started = !out.is_empty();
+        }
+        out
+    }
+}
+
+/// How many bytes at the end of `text` could be the beginning of one of
+/// `markers`: those are held back until the next piece arrives.
+fn held_suffix(text: &str, markers: &[&str]) -> usize {
+    let longest = markers.iter().map(|m| m.len() - 1).max().unwrap_or(0);
+    (1..=longest.min(text.len()))
+        .rev()
+        .filter(|&n| text.is_char_boundary(text.len() - n))
+        .find(|&n| markers.iter().any(|m| m.starts_with(&text[text.len() - n..])))
+        .unwrap_or(0)
+}
+
 // ── Serde structs ─────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -397,6 +509,7 @@ impl EullmClient {
         let mut buf = Vec::<u8>::new();
         let mut accumulated = String::new();
         let mut token_count: usize = 0;
+        let mut cleaner = StreamCleaner::default();
 
         loop {
             let chunk = response.chunk().await.context("eullm chunk read")?;
@@ -429,7 +542,12 @@ impl EullmClient {
                     continue;
                 };
 
-                let piece = sc.message.content;
+                // What reaches the client and the stored reply is cleaned
+                // like a unary answer (see StreamCleaner).
+                let mut piece = cleaner.push(&sc.message.content);
+                if sc.done {
+                    piece.push_str(&cleaner.finish());
+                }
                 if !piece.is_empty() {
                     accumulated.push_str(&piece);
                     token_count += 1;
@@ -458,6 +576,12 @@ impl EullmClient {
                     return Ok(());
                 }
             }
+        }
+        // The connection ended without a `done` line: what the cleaner still
+        // holds is the end of the answer.
+        let rest = cleaner.finish();
+        if !rest.is_empty() {
+            let _ = tx.send(StreamItem::Token(rest)).await;
         }
         Ok(())
     }
@@ -588,6 +712,75 @@ mod tests {
         assert_eq!(clean_answer("<think>\nplan\n</think>\n\nThe answer."), "The answer.");
         assert_eq!(clean_answer("The answer.<|im_end|>"), "The answer.");
         assert_eq!(clean_answer("  plain  "), "plain");
+    }
+
+    /// Feeds `pieces` through a StreamCleaner the way the stream does.
+    fn cleaned(pieces: &[&str]) -> String {
+        let mut c = StreamCleaner::default();
+        let mut out: String = pieces.iter().map(|p| c.push(p)).collect();
+        out.push_str(&c.finish());
+        out
+    }
+
+    /// The stream must come out as clean_answer would have left it, however
+    /// the markers are cut across pieces.
+    #[test]
+    fn a_stream_is_cleaned_like_a_unary_answer() {
+        let cases: &[&[&str]] = &[
+            &["<think>\nplan\n</think>\n\nThe answer."],
+            &["<thi", "nk>pl", "an</th", "ink>", "\n\nThe ", "answer."],
+            &["The answer.", "<|im_", "end|>"],
+            &["The ", "answer.<", "|eot_id", "|>"],
+            &["<|im_start|>assi", "stant\nThe answer."],
+            &["  \n", "The answer."],
+        ];
+        for pieces in cases {
+            assert_eq!(cleaned(pieces), "The answer.", "{pieces:?}");
+        }
+        // And on the whole text the two agree.
+        let whole = "<think>x</think>\n\nOk <|im_end|>done.";
+        assert_eq!(cleaned(&[whole]), clean_answer(whole));
+    }
+
+    /// Text that only looks like the start of a marker is text, and comes out
+    /// whole - including when it is the very end of the stream.
+    #[test]
+    fn text_that_is_not_a_marker_is_left_alone() {
+        assert_eq!(cleaned(&["if a <", " b then c"]), "if a < b then c");
+        assert_eq!(cleaned(&["a <| b |> c"]), "a <| b |> c");
+        assert_eq!(cleaned(&["costs < 5 €, ", "città <thin", "gs>"]), "costs < 5 €, città <things>");
+        assert_eq!(cleaned(&["ends with <"]), "ends with <");
+        assert_eq!(cleaned(&["ends with <thi"]), "ends with <thi");
+        assert_eq!(cleaned(&["[file.pdf] è così.", " Fine."]), "[file.pdf] è così. Fine.");
+    }
+
+    /// A reasoning block that never closes is reasoning to the end.
+    #[test]
+    fn an_unclosed_reasoning_block_is_dropped() {
+        assert_eq!(cleaned(&["Answer.", "<think>and then", " more"]), "Answer.");
+    }
+
+    /// End to end: what a streamed answer forwards is cleaned, so the UI and
+    /// the stored reply never see a reasoning block or a template marker.
+    #[tokio::test]
+    async fn a_chat_stream_is_forwarded_clean() {
+        let (url, _server) = serve_once(concat!(
+            r#"{"message":{"role":"assistant","content":"<thi"},"done":false}"#, "\n",
+            r#"{"message":{"role":"assistant","content":"nk>hmm</think>\n\nRi"},"done":false}"#, "\n",
+            r#"{"message":{"role":"assistant","content":"sposta.<|im_"},"done":false}"#, "\n",
+            r#"{"message":{"role":"assistant","content":"end|>"},"done":true}"#, "\n",
+        ))
+        .await;
+        let (tx, mut rx) = mpsc::channel::<StreamItem>(8);
+        client_at(url).invoke_stream("Domanda?", tx).await.expect("a clean stream");
+        let mut text = String::new();
+        while let Some(item) = rx.recv().await {
+            match item {
+                StreamItem::Token(t) => text.push_str(&t),
+                StreamItem::Failed => panic!("failed"),
+            }
+        }
+        assert_eq!(text, "Risposta.");
     }
 
     /// The reply shapes of /api/chat, streaming and not.

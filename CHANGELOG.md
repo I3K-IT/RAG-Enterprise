@@ -22,6 +22,25 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
+## [0.2.1] - 2026-10-11
+
+### Fixed
+
+- **`EULLM__EXTRA_ARGS` no longer stops a service that does not start
+  eullm.** With `DATA__MANAGE_SUBPROCESSES=false` the value is never used,
+  yet a duplicated option or an unclosed quote in it refused startup. It is
+  now checked only when RAG starts eullm itself, and otherwise reported as
+  ignored.
+
+- **A streamed answer is cleaned like any other.** Since 0.2.0 a reasoning
+  block or a chat template marker that a model emits despite `think: false`
+  was removed from unary answers only: the streamed answer the interface
+  shows, and the reply stored with the conversation, kept them. The stream
+  is now cleaned piece by piece, holding back whatever could still be the
+  start of a marker split across pieces.
+
+---
+
 ## [0.2.0] - 2026-10-11
 
 The prompt and the model request are now model-agnostic, and how the model

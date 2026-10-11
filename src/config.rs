@@ -581,7 +581,7 @@ impl Settings {
 
         validate_storage(&s.storage)?;
 
-        validate_eullm(&s.eullm)?;
+        validate_eullm(&s.eullm, s.data.manage_subprocesses)?;
 
         Ok(s)
     }
@@ -736,7 +736,7 @@ fn validate_storage(storage: &StorageSettings) -> Result<()> {
 /// with a garbage context a RAG prompt will not fit in — or silently
 /// truncates answers. A zero on either side is a misconfiguration too:
 /// `--ctx-size 0` / `--batch-size 0` is never what an operator meant.
-fn validate_eullm(eullm: &EullmSettings) -> Result<()> {
+fn validate_eullm(eullm: &EullmSettings, manage_subprocesses: bool) -> Result<()> {
     if eullm.num_ctx == 0 {
         anyhow::bail!("EULLM__NUM_CTX must be greater than 0 — 0 leaves no context for any prompt.");
     }
@@ -749,8 +749,17 @@ fn validate_eullm(eullm: &EullmSettings) -> Result<()> {
         );
     }
     // Checked here, at startup, so a bad value stops this program with a
-    // message naming the variable, not eullm later with one of its own.
-    eullm_extra_args(eullm.extra_args.as_deref())?;
+    // message naming the variable, not eullm later with one of its own. Only
+    // when this program starts eullm: with an external eullm the value is
+    // never used, and must not keep the service from starting.
+    if manage_subprocesses {
+        eullm_extra_args(eullm.extra_args.as_deref())?;
+    } else if eullm.extra_args.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+        tracing::warn!(
+            "EULLM__EXTRA_ARGS is set but ignored: eullm is managed externally \
+             (DATA__MANAGE_SUBPROCESSES=false), so this program never starts it"
+        );
+    }
     Ok(())
 }
 
@@ -994,13 +1003,13 @@ mod tests {
 
     #[test]
     fn default_eullm_sizing_passes() {
-        assert!(validate_eullm(&EullmSettings::default()).is_ok());
+        assert!(validate_eullm(&EullmSettings::default(), true).is_ok());
     }
 
     #[test]
     fn zero_ctx_or_batch_size_fails() {
         for (num_ctx, batch_size) in [(0, 1), (1, 0), (0, 0)] {
-            let err = validate_eullm(&eullm_with(num_ctx, batch_size)).unwrap_err();
+            let err = validate_eullm(&eullm_with(num_ctx, batch_size), true).unwrap_err();
             assert!(
                 err.to_string().contains("EULLM__"),
                 "num_ctx={num_ctx} batch_size={batch_size}"
@@ -1013,10 +1022,10 @@ mod tests {
     /// the way into `--ctx-size`.
     #[test]
     fn overflowing_ctx_product_fails() {
-        let err = validate_eullm(&eullm_with(u32::MAX, 2)).unwrap_err();
+        let err = validate_eullm(&eullm_with(u32::MAX, 2), true).unwrap_err();
         assert!(err.to_string().contains("EULLM__NUM_CTX"));
         // The largest product that still fits stays valid.
-        assert!(validate_eullm(&eullm_with(u32::MAX, 1)).is_ok());
+        assert!(validate_eullm(&eullm_with(u32::MAX, 1), true).is_ok());
     }
 
     /// The default must stay loopback: a regression here silently re-exposes
@@ -1241,10 +1250,21 @@ mod tests {
     fn startup_validation_refuses_a_bad_extra_args() {
         let mut eullm =
             EullmSettings { extra_args: Some("--ctx-size 8192".into()), ..Default::default() };
-        let err = validate_eullm(&eullm).unwrap_err().to_string();
+        let err = validate_eullm(&eullm, true).unwrap_err().to_string();
         assert!(err.contains("use EULLM__NUM_CTX"), "{err}");
         eullm.extra_args = Some("--moe-cache auto".into());
-        assert!(validate_eullm(&eullm).is_ok());
+        assert!(validate_eullm(&eullm, true).is_ok());
+    }
+
+    /// With an external eullm the value is never used: neither a duplicated
+    /// option nor one that does not split may stop the service.
+    #[test]
+    fn extra_args_are_not_checked_when_eullm_is_external() {
+        for value in ["--ctx-size 8192", r#"--draft "/unclosed"#] {
+            let eullm = EullmSettings { extra_args: Some(value.into()), ..Default::default() };
+            assert!(validate_eullm(&eullm, false).is_ok(), "{value}");
+            assert!(validate_eullm(&eullm, true).is_err(), "{value}");
+        }
     }
 
 }
