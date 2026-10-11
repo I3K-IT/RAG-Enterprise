@@ -300,13 +300,25 @@ mod eullm_args_tests {
     }
 
     #[test]
+    fn the_driver_major_is_read_from_nvidia_smi() {
+        assert_eq!(nvidia_driver_major("580.95.05\n"), Some(580));
+        assert_eq!(nvidia_driver_major("570.172.08\n570.172.08\n"), Some(570));
+        assert_eq!(nvidia_driver_major("  581.15 \r\n"), Some(581));
+        assert_eq!(nvidia_driver_major(""), None);
+        assert_eq!(nvidia_driver_major("[N/A]\n"), None);
+        // The pinned CUDA builds need r580: the boundary is inclusive.
+        assert!(nvidia_driver_major("580.65.06").unwrap() >= EULLM_CUDA_MIN_DRIVER);
+        assert!(nvidia_driver_major("575.64.05").unwrap() < EULLM_CUDA_MIN_DRIVER);
+    }
+
+    #[test]
     fn asset_hint_is_exact_not_prefix() {
         // eullm's asset names are prefixes of one another: with a substring
         // match, the generic aarch64 target could latch onto the cix-p1 build
         // (SIGILL) or the cuda one. The hint must be the COMPLETE name and the
         // comparison must be equality.
         let generic = eullm_asset_hint(Some("linux-aarch64")).unwrap();
-        for other in ["eullm-linux-arm64-cix-p1", "eullm-linux-arm64-cuda-12.8"] {
+        for other in ["eullm-linux-arm64-cix-p1", "eullm-linux-arm64-cuda-13.1"] {
             assert_ne!(generic, other);
             assert!(
                 other.starts_with(generic),
@@ -317,9 +329,9 @@ mod eullm_args_tests {
         assert_eq!(eullm_asset_hint(Some("linux-aarch64-cix")), Some("eullm-linux-arm64-cix-p1"));
 
         // Same dangerous shape on x86_64: "eullm-linux-x64" is a literal
-        // prefix of "eullm-linux-x64-cuda-12.8" AND of "eullm-linux-x64-vulkan".
+        // prefix of "eullm-linux-x64-cuda-13.1" AND of "eullm-linux-x64-vulkan".
         let generic_x86 = eullm_asset_hint(Some("linux-x86_64")).unwrap();
-        for other in ["eullm-linux-x64-cuda-12.8", "eullm-linux-x64-vulkan"] {
+        for other in ["eullm-linux-x64-cuda-13.1", "eullm-linux-x64-vulkan"] {
             assert_ne!(generic_x86, other);
             assert!(other.starts_with(generic_x86));
         }
@@ -448,7 +460,7 @@ mod archive_extraction_tests {
     /// running eullm.exe needs beside it.
     ///
     /// Requires (locally only, not in CI):
-    ///   EULLM_WIN_CUDA_ZIP_FOR_TEST=/path/to/eullm-windows-x64-cuda-12.8.zip
+    ///   EULLM_WIN_CUDA_ZIP_FOR_TEST=/path/to/eullm-windows-x64-cuda-13.1.zip
     ///   (downloaded from github.com/eullm/eullm/releases)
     /// Skipped gracefully when unset.
     #[test]
@@ -624,12 +636,12 @@ fn cix_p1_isa_available() -> bool {
 /// Order matters: `select_components` takes the FIRST match per dest.
 ///
 /// Target scheme:
-///   linux-x86_64-cuda    — Linux x86_64 with an NVIDIA GPU (driver loaded)
+///   linux-x86_64-cuda    — Linux x86_64 with an NVIDIA GPU, driver 580 or later
 ///   linux-x86_64         — Linux x86_64 CPU-only / fallback
-///   linux-aarch64-cuda   — Linux ARM64 with an NVIDIA GPU (e.g. Orion + PCIe dGPU)
+///   linux-aarch64-cuda   — Linux ARM64 with an NVIDIA GPU, driver 580 or later (e.g. Orion + PCIe dGPU)
 ///   linux-aarch64-cix    — Linux ARM64 with the full Armv9.2 ISA (CIX P1)
 ///   linux-aarch64        — Linux ARM64 CPU-only / fallback
-///   windows-x86_64-cuda  — Windows x86_64 with an NVIDIA GPU
+///   windows-x86_64-cuda  — Windows x86_64 with an NVIDIA GPU, driver 580 or later
 ///   windows-x86_64       — Windows x86_64 CPU-only / fallback
 ///   darwin-arm64, darwin-x86_64, windows-arm64
 fn current_targets() -> Vec<&'static str> {
@@ -637,7 +649,7 @@ fn current_targets() -> Vec<&'static str> {
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        if nvidia_gpu_present() {
+        if nvidia_cuda_usable() {
             t.push("linux-x86_64-cuda");
         }
         t.push("linux-x86_64");
@@ -647,7 +659,7 @@ fn current_targets() -> Vec<&'static str> {
         // Same check as x86_64 — it also holds for ARM64 with a discrete
         // NVIDIA GPU over PCIe (e.g. a Radxa Orion O6 with an external card),
         // not just for Jetson-style SoCs.
-        if nvidia_gpu_present() {
+        if nvidia_cuda_usable() {
             t.push("linux-aarch64-cuda");
         }
         // Between -cuda and the generic one: if an NVIDIA GPU is present that
@@ -668,7 +680,7 @@ fn current_targets() -> Vec<&'static str> {
     t.push("darwin-x86_64");
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        if nvidia_gpu_present() {
+        if nvidia_cuda_usable() {
             t.push("windows-x86_64-cuda");
         }
         t.push("windows-x86_64");
@@ -679,8 +691,16 @@ fn current_targets() -> Vec<&'static str> {
     t
 }
 
-/// Whether an NVIDIA GPU with a working driver is present, on whichever OS
-/// this is running on.
+/// The oldest NVIDIA driver the pinned CUDA builds of eullm run on. From
+/// 0.7.x they are built against CUDA 13.1, which needs the r580 driver
+/// (August 2025); on an older one the binary fails to start with "CUDA
+/// driver version is insufficient", so such a machine must not be given it.
+const EULLM_CUDA_MIN_DRIVER: u32 = 580;
+
+/// Whether an NVIDIA GPU is present with a driver new enough for the CUDA
+/// build of eullm (see EULLM_CUDA_MIN_DRIVER), on whichever OS this is
+/// running on. An older driver is reported and answered with false, so the
+/// machine falls back to the CPU build instead of one that cannot start.
 ///
 /// Not `/dev/nvidia0` (Linux-only — the earlier version of this check): the
 /// driver installer puts `nvidia-smi` on PATH on every platform it supports,
@@ -693,12 +713,43 @@ fn current_targets() -> Vec<&'static str> {
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "windows", target_arch = "x86_64"),
 ))]
-fn nvidia_gpu_present() -> bool {
-    std::process::Command::new("nvidia-smi")
-        .arg("--query-gpu=name")
+fn nvidia_cuda_usable() -> bool {
+    let Some(out) = std::process::Command::new("nvidia-smi")
+        .arg("--query-gpu=driver_version")
         .arg("--format=csv,noheader")
         .output()
-        .is_ok_and(|o| o.status.success())
+        .ok()
+        .filter(|o| o.status.success())
+    else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    match nvidia_driver_major(&text) {
+        Some(major) if major >= EULLM_CUDA_MIN_DRIVER => true,
+        Some(major) => {
+            tracing::warn!(
+                driver = %text.lines().next().unwrap_or("").trim(),
+                "NVIDIA driver {major} is older than {EULLM_CUDA_MIN_DRIVER}, which the CUDA \
+                 build of eullm needs: using the CPU build. Update the driver to \
+                 {EULLM_CUDA_MIN_DRIVER} or later to run on the GPU"
+            );
+            false
+        }
+        None => {
+            tracing::warn!(
+                output = %text.trim(),
+                "nvidia-smi answered without a readable driver version: using the CPU build"
+            );
+            false
+        }
+    }
+}
+
+/// The major version of the first GPU's driver in `nvidia-smi
+/// --query-gpu=driver_version --format=csv,noheader` output ("580.95.05").
+/// Every GPU of one machine runs the same driver, so the first line is enough.
+fn nvidia_driver_major(output: &str) -> Option<u32> {
+    output.lines().next()?.trim().split('.').next()?.parse().ok()
 }
 
 /// Selects the components to download and verify.
@@ -933,7 +984,7 @@ const EULLM_BGE_M3_GGUF_SHA256: &str =
 
 /// Where `eullm pull EULLM_BGE_M3_GGUF_URL` lands the file, with
 /// EULLM_MODELS_DIR set to `{data_dir}/models` (see spawn_eullm). Verified
-/// against a real eullm 0.6.90 pull, not assumed: a URL pull derives the
+/// against a real eullm 0.6.90 pull and again on 0.7.50, not assumed: a URL pull derives the
 /// stored model name from the filename minus its extension
 /// (bge-m3-f16.gguf → "bge-m3-f16"), one directory per model containing a
 /// same-named .gguf, and eullm's own "Run with: eullm run bge-m3-f16"
@@ -1586,10 +1637,10 @@ const EULLM_UPDATE_CHECK_TIMEOUT_SECS: u64 = 10;
 /// eullm asset, and the check is skipped — never a silently wrong default.
 fn eullm_asset_hint(target: Option<&str>) -> Option<&'static str> {
     match target {
-        Some("linux-x86_64-cuda") => Some("eullm-linux-x64-cuda-12.8"),
+        Some("linux-x86_64-cuda") => Some("eullm-linux-x64-cuda-13.1"),
         Some("linux-x86_64-vulkan") => Some("eullm-linux-x64-vulkan"),
         Some("linux-x86_64") => Some("eullm-linux-x64"),
-        Some("linux-aarch64-cuda") => Some("eullm-linux-arm64-cuda-12.8"),
+        Some("linux-aarch64-cuda") => Some("eullm-linux-arm64-cuda-13.1"),
         Some("linux-aarch64-cix") => Some("eullm-linux-arm64-cix-p1"),
         Some("linux-aarch64") => Some("eullm-linux-arm64"),
         Some("windows-x86_64") => Some("eullm-windows-x64.exe"),
@@ -1793,7 +1844,7 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     };
     // Equality, NOT contains: eullm's asset names are prefixes of one another
     // ("eullm-linux-arm64" is a prefix of both "eullm-linux-arm64-cix-p1" and
-    // "eullm-linux-arm64-cuda-12.8"). With contains, a generic ARM64 machine
+    // "eullm-linux-arm64-cuda-13.1"). With contains, a generic ARM64 machine
     // could latch onto the cix-p1 build — compiled for Armv9.2, it SIGILLs on
     // any ARM64 lacking those extensions — depending on the order in which the
     // API happens to return the assets.
