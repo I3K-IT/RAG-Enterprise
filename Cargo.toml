@@ -76,6 +76,10 @@ csv = "1"
 
 # --- Chunking / text ---
 regex = "1"
+# EULLM__EXTRA_ARGS is split into arguments the way a shell would, without a
+# shell (config::eullm_extra_args). MIT OR Apache-2.0; already in the lock
+# as a build dependency of cc.
+shlex = "2.0.1"
 unicode-segmentation = "1"
 
 # --- Time / IDs ---

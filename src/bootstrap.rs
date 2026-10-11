@@ -239,7 +239,24 @@ mod eullm_args_tests {
             model_override: None,
             n_cpu_moe: None,
             reserve_embedding_model: false,
+            extra_args: None,
         }
+    }
+
+    /// EULLM__EXTRA_ARGS goes after everything this program sets, split the
+    /// way a shell would: quotes group, nothing is run.
+    #[test]
+    fn extra_args_are_appended_after_ours() {
+        let mut cfg = base_cfg();
+        cfg.extra_args = Some(r#"--moe-cache auto --draft "/models/a b.gguf" ; $(reboot)"#.into());
+        let args = eullm_args(&cfg);
+        assert_eq!(
+            args,
+            vec![
+                "--cli", "--ctx-size", "16384", "--batch-size", "1",
+                "--moe-cache", "auto", "--draft", "/models/a b.gguf", ";", "$(reboot)",
+            ]
+        );
     }
 
     /// A wrong flag here stops eullm from starting in production: no --fit
@@ -2344,6 +2361,14 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
     // when stdin AND stdout are both TTYs (fit.rs:851 in eullm's source).
     // spawn_eullm sets stdin to null, so that condition is false by
     // construction and the flag was a no-op.
+
+    // EULLM__EXTRA_ARGS last. Settings::load has already refused a value that
+    // does not split or repeats one of the options above, so this cannot fail
+    // on a configuration that got this far.
+    match crate::config::eullm_extra_args(cfg.extra_args.as_deref()) {
+        Ok(extra) => args.extend(extra),
+        Err(e) => tracing::warn!(error = %e, "EULLM__EXTRA_ARGS ignored"),
+    }
     args
 }
 
@@ -2380,6 +2405,15 @@ fn spawn_eullm(
     // eullm's own default (~/.eullm/models). Harmless when nothing ever asks
     // eullm for a store-resolved model: it only changes where it WOULD look.
     cmd.env("EULLM_MODELS_DIR", models_dir);
+
+    // The whole command line, quoted so it can be pasted into a shell: what
+    // EULLM__EXTRA_ARGS added is visible next to what this program set.
+    let shown: Vec<String> = std::iter::once(cmd.as_std().get_program())
+        .chain(cmd.as_std().get_args())
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let line = shlex::try_join(shown.iter().map(String::as_str)).unwrap_or_else(|_| shown.join(" "));
+    tracing::info!(command = %line, "starting eullm");
 
     cmd.kill_on_drop(true)
         .stdin(std::process::Stdio::null())
