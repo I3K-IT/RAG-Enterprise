@@ -842,7 +842,7 @@ fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
 pub struct ProcessGuard {
     _children: Vec<tokio::process::Child>,
     /// When the bootstrap started eullm, the exact GGUF path it used.
-    /// eullm accepts a direct GGUF path in the "model" field of /api/generate
+    /// eullm accepts a direct GGUF path in the "model" field of /api/chat (and /api/generate)
     /// (see its "Accepted formats: GGUF file path / ... / Registered name"
     /// error) — reusing the SAME path it was started with means no
     /// registration (`eullm import-ollama`) and no external state that could
@@ -2441,7 +2441,7 @@ struct EullmTagEntry {
 /// was launched with. Observed in production: started with
 /// "hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M", /api/tags reports it as
 /// "qwen_qwen3.6-35b-a3b-gguf-q4_k_m", and ONLY that canonical name is
-/// accepted in the "model" field of /api/generate. The original hf.co
+/// accepted in the "model" field of /api/chat. The original hf.co
 /// reference returns a 500 "Model ... not found", because the colon is eaten
 /// by an eullm-side normalisation meant for Ollama-style tags, which breaks
 /// hf.co's repo:quant syntax.

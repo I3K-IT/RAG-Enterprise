@@ -6,13 +6,12 @@
 //! Golden test: the same prompt must produce the same generated text from the
 //! same LLM.
 
-pub const QA_PROMPT: &str = r#"/no_think
-You are an expert research analyst. Answer based on the data below.
+pub const QA_PROMPT: &str = r#"You are an expert research analyst. Answer based on the data below.
 
 INSTRUCTIONS:
 1. STRUCTURE: Start with a direct answer, then provide detailed supporting information with dates, names, locations, context, and explanations.
 2. VERIFIED DATA FIRST: Use STRUCTURED DATA as verified facts (dates, event types). Use RETRIEVED CHUNKS for additional context and details.
-3. CITATIONS: Cite sources as [Filename] after each fact.
+3. CITATIONS: After each fact, cite its source by the file name shown in square brackets above the chunk it comes from, copied exactly, e.g. [annual-report-2025.pdf]. Cite only those file names; never write a placeholder, a shorthand such as “ibidem”, or a name that is not among them.
 4. SEMANTIC UNDERSTANDING: Recognize that terms may appear in different languages or synonyms (e.g., "attentato" = "attack" = "bombing").
 5. THOROUGH: Provide rich, detailed answers. Extract ALL relevant information from the chunks - don't summarize, elaborate. Include background, consequences, related events.
 6. LANGUAGE: Respond in the SAME LANGUAGE as the question.
@@ -154,7 +153,7 @@ mod tests {
         );
         assert!(out.contains("QUESTION: How much?"), "{out}");
         assert!(
-            out.starts_with("/no_think\nYou are an expert research analyst."),
+            out.starts_with("You are an expert research analyst."),
             "{out}"
         );
         assert!(out.ends_with("ANSWER:"), "{out}");

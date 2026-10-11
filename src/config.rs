@@ -211,7 +211,7 @@ pub struct EullmSettings {
     ///     both permanently. eullm measures free VRAM on every /api/embed
     ///     call and decides then whether bge-m3 fits alongside the chat model
     ///     or must evict it, reloading the chat model automatically on the
-    ///     next /api/generate — the same unload/reload dance this project
+    ///     next /api/chat — the same unload/reload dance this project
     ///     used to orchestrate by hand (POST /api/unload before, reload()
     ///     after — see documents::upload), now internal to eullm and
     ///     triggered by the ordinary act of calling it, no special
