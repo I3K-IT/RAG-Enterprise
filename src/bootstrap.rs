@@ -328,6 +328,42 @@ mod eullm_args_tests {
         assert!(nvidia_driver_major("575.64.05").unwrap() < EULLM_CUDA_MIN_DRIVER);
     }
 
+    /// Every name the update check looks for must be an asset of eullm's
+    /// latest release, or the check silently never fires for that target -
+    /// what happened on every CUDA machine when eullm renamed -cuda-12.8 to
+    /// -cuda-13.1. Needs the network, so run by hand before a release:
+    ///   cargo test --lib update_check_names -- --ignored
+    /// `/releases/latest/download/<name>` always redirects to the latest tag,
+    /// and only the end of the redirects tells: the file when the release has
+    /// it, 404 when it does not. No API token needed.
+    #[tokio::test]
+    #[ignore = "needs the network - run by hand before a release"]
+    async fn update_check_names_are_assets_of_the_latest_eullm_release() {
+        let client = reqwest::Client::builder()
+            .user_agent("rag-enterprise-dependency-check")
+            .build()
+            .unwrap();
+        let targets = [
+            "linux-x86_64-cuda",
+            "linux-x86_64-vulkan",
+            "linux-x86_64",
+            "linux-aarch64-cuda",
+            "linux-aarch64-cix",
+            "linux-aarch64",
+            "windows-x86_64",
+        ];
+        let mut missing = Vec::new();
+        for target in targets {
+            let name = eullm_asset_hint(Some(target)).expect("every listed target has a hint");
+            let url = format!("https://github.com/eullm/eullm/releases/latest/download/{name}");
+            let status = client.head(&url).send().await.expect("GitHub reachable").status();
+            if !status.is_success() {
+                missing.push(format!("{target}: {name} ({status})"));
+            }
+        }
+        assert!(missing.is_empty(), "not in eullm's latest release: {missing:?}");
+    }
+
     #[test]
     fn asset_hint_is_exact_not_prefix() {
         // eullm's asset names are prefixes of one another: with a substring
@@ -1866,7 +1902,15 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     // any ARM64 lacking those extensions — depending on the order in which the
     // API happens to return the assets.
     let Some(asset) = release.assets.iter().find(|a| a.name == hint) else {
-        tracing::warn!(latest = %latest_str, hint = %hint, "newer eullm release found but no asset for this platform, skipping");
+        // The names on offer go in the log: when eullm renames a build (as it
+        // did with -cuda-12.8 -> -cuda-13.1) this line is where it shows.
+        let offered: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+        tracing::warn!(
+            latest = %latest_str,
+            hint = %hint,
+            offered = %offered.join(", "),
+            "newer eullm release found but no asset for this platform, skipping"
+        );
         return;
     };
 
