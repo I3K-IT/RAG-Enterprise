@@ -294,7 +294,16 @@ async fn prepare(
     } else {
         vec![]
     };
-    let full_prompt = prompt::build_prompt(&context, question, &history);
+    // The administrator's instructions, read for every question so a change
+    // applies to the next one. A failed read costs only the customisation.
+    let instructions = match db::settings::get(&state.db, db::settings::ANSWER_INSTRUCTIONS).await {
+        Ok(saved) => saved,
+        Err(e) => {
+            tracing::warn!(error = %e, "answer instructions not read, using the default ones");
+            None
+        }
+    };
+    let full_prompt = prompt::build_prompt(&context, question, &history, instructions.as_deref());
     let prompt_build = t.elapsed();
 
     tracing::info!(

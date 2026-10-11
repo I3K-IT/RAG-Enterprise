@@ -714,7 +714,7 @@ mod tests {
         let c = EullmClient::new(url, model, 4096, 300, 1.1, 64, -1);
         let context = "[annual-report-2025.pdf]\nRevenue grew 12% in 2025, to 48 million euro.\n\n\
                        [board-minutes-march.docx]\nThe board approved a new plant in Turin.";
-        let prompt = crate::rag::prompt::build_prompt(context, "How much did revenue grow in 2025?", &[]);
+        let prompt = crate::rag::prompt::build_prompt(context, "How much did revenue grow in 2025?", &[], None);
 
         let unary = c.invoke(&prompt).await.expect("unary answer");
         let (tx, mut rx) = mpsc::channel::<StreamItem>(1024);

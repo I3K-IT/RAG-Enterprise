@@ -1,12 +1,19 @@
-//! RAG prompt templates.
+//! RAG prompt: the administrator's instructions plus a frame the code owns.
 //!
-//! The Enterprise prompt verbatim, used in the Community build with the same
-//! structure minus the structured_data_section, which is empty here.
+//! Two parts. The instructions say how to answer - role, structure, how to
+//! cite, language - and an administrator can replace them from the admin
+//! panel (db::settings::ANSWER_INSTRUCTIONS); until they do, or when what they
+//! saved is blank, DEFAULT_INSTRUCTIONS apply. The frame says what the answer
+//! is about - the history, the retrieved chunks, the question - and is not
+//! editable: retrieval fills it, and an answer without it has nothing to go
+//! on.
 //!
-//! Golden test: the same prompt must produce the same generated text from the
-//! same LLM.
+//! No chat template and no model-specific switch here: eullm applies the
+//! loaded model's own format, and thinking is turned off in the request
+//! (clients::eullm).
 
-pub const QA_PROMPT: &str = r#"You are an expert research analyst. Answer based on the data below.
+/// How to answer, until an administrator says otherwise.
+pub const DEFAULT_INSTRUCTIONS: &str = r#"You are an expert research analyst. Answer based on the data below.
 
 INSTRUCTIONS:
 1. STRUCTURE: Start with a direct answer, then provide detailed supporting information with dates, names, locations, context, and explanations.
@@ -15,7 +22,16 @@ INSTRUCTIONS:
 4. SEMANTIC UNDERSTANDING: Recognize that terms may appear in different languages or synonyms (e.g., "attentato" = "attack" = "bombing").
 5. THOROUGH: Provide rich, detailed answers. Extract ALL relevant information from the chunks - don't summarize, elaborate. Include background, consequences, related events.
 6. LANGUAGE: Respond in the SAME LANGUAGE as the question.
-7. NO INVENTION: Only use information present in the data. If inferring a connection, say "possibly related" or "may be connected".
+7. NO INVENTION: Only use information present in the data. If inferring a connection, say "possibly related" or "may be connected"."#;
+
+/// The longest instructions an administrator may save, in characters. Every
+/// question pays for them in context, before a single chunk is added.
+pub const MAX_INSTRUCTIONS_CHARS: usize = 8000;
+
+/// The part of the prompt the code owns. `{instructions}` is filled with a
+/// value like the other slots, so whatever the instructions contain -
+/// `{context}` and `{question}` included - stays text (see `render`).
+const FRAME: &str = r#"{instructions}
 
 {structured_data_section}
 
@@ -27,6 +43,15 @@ RETRIEVED CHUNKS:
 QUESTION: {question}
 
 ANSWER:"#;
+
+/// The instructions to use: `custom` when it has any text, the default
+/// otherwise.
+pub fn effective_instructions(custom: Option<&str>) -> &str {
+    match custom.map(str::trim) {
+        Some(text) if !text.is_empty() => text,
+        _ => DEFAULT_INSTRUCTIONS,
+    }
+}
 
 /// Format the history section (last 3 exchanges, 800-char truncation per message).
 /// Mirrors the history formatting of the Python implementation.
@@ -57,12 +82,19 @@ fn truncate(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
 
-/// Build the full prompt string.
-pub fn build_prompt(context: &str, question: &str, history: &[(String, String)]) -> String {
+/// Build the full prompt string. `instructions` is what the administrator
+/// saved, if anything; blank or absent means DEFAULT_INSTRUCTIONS.
+pub fn build_prompt(
+    context: &str,
+    question: &str,
+    history: &[(String, String)],
+    instructions: Option<&str>,
+) -> String {
     let history_section = format_history(history);
     render(
-        QA_PROMPT,
+        FRAME,
         &[
+            ("{instructions}", effective_instructions(instructions)),
             ("{structured_data_section}", ""),
             ("{history_section}", &history_section),
             ("{context}", context),
@@ -144,7 +176,7 @@ mod tests {
     /// substitution below cannot quietly change the prompt.
     #[test]
     fn the_prompt_is_the_template_with_its_four_slots_filled() {
-        let out = build_prompt("[report.pdf]\nRevenue grew.", "How much?", &[]);
+        let out = build_prompt("[report.pdf]\nRevenue grew.", "How much?", &[], None);
         assert!(!out.contains("{structured_data_section}"), "{out}");
         assert!(!out.contains("{history_section}"), "{out}");
         assert!(
@@ -159,12 +191,72 @@ mod tests {
         assert!(out.ends_with("ANSWER:"), "{out}");
     }
 
+    /// The 0.1.48 template, verbatim. With nothing saved the prompt must be
+    /// exactly this, minus the two changes 0.2.0 made on purpose: no
+    /// `/no_think` line (thinking is switched off in the request now) and
+    /// the new citation instruction.
+    const PROMPT_0_1_48: &str = "/no_think\nYou are an expert research analyst. Answer based on the data below.\n\nINSTRUCTIONS:\n1. STRUCTURE: Start with a direct answer, then provide detailed supporting information with dates, names, locations, context, and explanations.\n2. VERIFIED DATA FIRST: Use STRUCTURED DATA as verified facts (dates, event types). Use RETRIEVED CHUNKS for additional context and details.\n3. CITATIONS: Cite sources as [Filename] after each fact.\n4. SEMANTIC UNDERSTANDING: Recognize that terms may appear in different languages or synonyms (e.g., \"attentato\" = \"attack\" = \"bombing\").\n5. THOROUGH: Provide rich, detailed answers. Extract ALL relevant information from the chunks - don't summarize, elaborate. Include background, consequences, related events.\n6. LANGUAGE: Respond in the SAME LANGUAGE as the question.\n7. NO INVENTION: Only use information present in the data. If inferring a connection, say \"possibly related\" or \"may be connected\".\n\n{structured_data_section}\n\n{history_section}\n\nRETRIEVED CHUNKS:\n{context}\n\nQUESTION: {question}\n\nANSWER:";
+
+    #[test]
+    fn with_nothing_saved_the_prompt_is_the_old_one_but_for_the_citation_line() {
+        let history = vec![("Earlier?".to_owned(), "Yes.".to_owned())];
+        let old = render(
+            PROMPT_0_1_48,
+            &[
+                ("{structured_data_section}", ""),
+                ("{history_section}", &format_history(&history)),
+                ("{context}", "[a.pdf]\nText."),
+                ("{question}", "Why?"),
+            ],
+        );
+        let expected = old
+            .strip_prefix("/no_think\n")
+            .unwrap()
+            .replace(
+                "3. CITATIONS: Cite sources as [Filename] after each fact.",
+                DEFAULT_INSTRUCTIONS.lines().find(|l| l.starts_with("3. CITATIONS")).unwrap(),
+            );
+        assert_eq!(build_prompt("[a.pdf]\nText.", "Why?", &history, None), expected);
+    }
+
+    #[test]
+    fn custom_instructions_replace_the_default_and_the_frame_stays_in_order() {
+        let history = vec![("Earlier?".to_owned(), "Yes.".to_owned())];
+        let out = build_prompt("[a.pdf]\nText.", "Why?", &history, Some("Answer in one line."));
+        assert!(out.starts_with("Answer in one line.\n\n"), "{out}");
+        assert!(!out.contains("expert research analyst"), "{out}");
+        let order = ["Answer in one line.", "CONVERSATION HISTORY:", "RETRIEVED CHUNKS:\n[a.pdf]\nText.", "QUESTION: Why?", "ANSWER:"];
+        let mut at = 0;
+        for part in order {
+            let found = out[at..].find(part).unwrap_or_else(|| panic!("{part:?} missing or out of order in {out}"));
+            at += found + part.len();
+        }
+        assert!(out.ends_with("ANSWER:"), "{out}");
+    }
+
+    #[test]
+    fn placeholders_written_in_the_instructions_stay_text() {
+        let out = build_prompt("the-evidence", "the-question?", &[], Some("Quote {context} and {question} literally."));
+        assert!(out.starts_with("Quote {context} and {question} literally."), "{out}");
+        assert_eq!(out.matches("the-evidence").count(), 1, "{out}");
+        assert_eq!(out.matches("the-question?").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn blank_instructions_mean_the_default() {
+        for blank in [Some(""), Some("   "), Some("\n\t \n"), None] {
+            assert_eq!(effective_instructions(blank), DEFAULT_INSTRUCTIONS, "{blank:?}");
+            assert!(build_prompt("c", "q", &[], blank).starts_with("You are an expert research analyst."));
+        }
+        assert_eq!(effective_instructions(Some("  Be brief.  ")), "Be brief.");
+    }
+
     /// The bug: evidence is untrusted input, and it is substituted before the
     /// question. A chain of `replace` calls rewrote the token inside it.
     #[test]
     fn a_placeholder_inside_a_retrieved_chunk_is_left_alone() {
         let chunk = "To render a field use {context}, then {question}.";
-        let out = build_prompt(chunk, "What is the revenue?", &[]);
+        let out = build_prompt(chunk, "What is the revenue?", &[], None);
         assert!(
             out.contains("To render a field use {context}, then {question}."),
             "the chunk was rewritten: {out}"
@@ -183,7 +275,7 @@ mod tests {
             "How do I use {context}?".to_owned(),
             "It is filled in already.".to_owned(),
         )];
-        let out = build_prompt("Revenue grew.", "And now?", &history);
+        let out = build_prompt("Revenue grew.", "And now?", &history, None);
         assert!(out.contains("User: How do I use {context}?"), "{out}");
         assert!(out.contains("Assistant: It is filled in already."), "{out}");
     }
@@ -192,7 +284,7 @@ mod tests {
     /// template must not be re-scanned either.
     #[test]
     fn a_value_containing_an_earlier_key_is_not_resubstituted() {
-        let out = build_prompt("see {history_section}", "q", &[]);
+        let out = build_prompt("see {history_section}", "q", &[], None);
         assert!(out.contains("see {history_section}"), "{out}");
         assert!(!out.contains("CONVERSATION HISTORY"), "{out}");
     }

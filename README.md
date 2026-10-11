@@ -122,6 +122,14 @@ meaning for an embedding, and a lawyer asks by number all the time.
 **Chat.** Conversations are kept, answers stream token by token, and history is
 carried into follow-up questions.
 
+**Answers.** How the model answers — its role, the structure of an answer, how
+it cites, the language — is the admin's to set, from the *Answers* tab of the
+admin panel (up to 8,000 characters); the retrieved passages, the history and
+the question are added after those instructions by the engine. A change applies
+from the next question, and *Restore defaults* brings the built-in instructions
+back. Prompts go to the model in its own chat format, so models other than Qwen
+answer cleanly too.
+
 **Users.** JWT authentication with three roles — user, super user, admin —
 governing who may upload and delete.
 
