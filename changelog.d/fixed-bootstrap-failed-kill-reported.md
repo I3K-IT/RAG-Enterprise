@@ -1,1 +1,0 @@
-A stale instance that could not be signalled on Linux is now reported at startup, instead of the failure going unmentioned while the process goes on holding the port the next component needs to bind.

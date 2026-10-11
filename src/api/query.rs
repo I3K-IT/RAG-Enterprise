@@ -90,8 +90,22 @@ const MAX_CHUNKS_PER_REFERENCED: u64 = 8;
 /// each, whatever the question lists.
 async fn referenced_hits(state: &AppState, question: &str) -> Vec<SearchHit> {
     let mut out = Vec::new();
+    // A question that names no article costs nothing more: not even the read
+    // of the switch below.
+    let named = references::named_articles(question);
+    if named.is_empty() {
+        return out;
+    }
+    // The admin can turn the lookup off (db::settings::ARTICLE_LOOKUP_ENABLED);
+    // on by default. An unreadable setting leaves it on, as it was before the
+    // switch existed.
+    match db::settings::flag(&state.db, db::settings::ARTICLE_LOOKUP_ENABLED, true).await {
+        Ok(true) => {}
+        Ok(false) => return out,
+        Err(e) => tracing::warn!(error = %e, "article lookup setting not read, leaving it on"),
+    }
     let mut documents = 0;
-    for r in references::named_articles(question) {
+    for r in named {
         let rows = match db::documents::find_active_by_filename_like(
             &state.db,
             &references::like_patterns(&r),
@@ -294,7 +308,16 @@ async fn prepare(
     } else {
         vec![]
     };
-    let full_prompt = prompt::build_prompt(&context, question, &history);
+    // The administrator's instructions, read for every question so a change
+    // applies to the next one. A failed read costs only the customisation.
+    let instructions = match db::settings::get(&state.db, db::settings::ANSWER_INSTRUCTIONS).await {
+        Ok(saved) => saved,
+        Err(e) => {
+            tracing::warn!(error = %e, "answer instructions not read, using the default ones");
+            None
+        }
+    };
+    let full_prompt = prompt::build_prompt(&context, question, &history, instructions.as_deref());
     let prompt_build = t.elapsed();
 
     tracing::info!(

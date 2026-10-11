@@ -239,7 +239,24 @@ mod eullm_args_tests {
             model_override: None,
             n_cpu_moe: None,
             reserve_embedding_model: false,
+            extra_args: None,
         }
+    }
+
+    /// EULLM__EXTRA_ARGS goes after everything this program sets, split the
+    /// way a shell would: quotes group, nothing is run.
+    #[test]
+    fn extra_args_are_appended_after_ours() {
+        let mut cfg = base_cfg();
+        cfg.extra_args = Some(r#"--moe-cache auto --draft "/models/a b.gguf" ; $(reboot)"#.into());
+        let args = eullm_args(&cfg);
+        assert_eq!(
+            args,
+            vec![
+                "--cli", "--ctx-size", "16384", "--batch-size", "1",
+                "--moe-cache", "auto", "--draft", "/models/a b.gguf", ";", "$(reboot)",
+            ]
+        );
     }
 
     /// A wrong flag here stops eullm from starting in production: no --fit
@@ -309,6 +326,42 @@ mod eullm_args_tests {
         // The pinned CUDA builds need r580: the boundary is inclusive.
         assert!(nvidia_driver_major("580.65.06").unwrap() >= EULLM_CUDA_MIN_DRIVER);
         assert!(nvidia_driver_major("575.64.05").unwrap() < EULLM_CUDA_MIN_DRIVER);
+    }
+
+    /// Every name the update check looks for must be an asset of eullm's
+    /// latest release, or the check silently never fires for that target -
+    /// what happened on every CUDA machine when eullm renamed -cuda-12.8 to
+    /// -cuda-13.1. Needs the network, so run by hand before a release:
+    ///   cargo test --lib update_check_names -- --ignored
+    /// `/releases/latest/download/<name>` always redirects to the latest tag,
+    /// and only the end of the redirects tells: the file when the release has
+    /// it, 404 when it does not. No API token needed.
+    #[tokio::test]
+    #[ignore = "needs the network - run by hand before a release"]
+    async fn update_check_names_are_assets_of_the_latest_eullm_release() {
+        let client = reqwest::Client::builder()
+            .user_agent("rag-enterprise-dependency-check")
+            .build()
+            .unwrap();
+        let targets = [
+            "linux-x86_64-cuda",
+            "linux-x86_64-vulkan",
+            "linux-x86_64",
+            "linux-aarch64-cuda",
+            "linux-aarch64-cix",
+            "linux-aarch64",
+            "windows-x86_64",
+        ];
+        let mut missing = Vec::new();
+        for target in targets {
+            let name = eullm_asset_hint(Some(target)).expect("every listed target has a hint");
+            let url = format!("https://github.com/eullm/eullm/releases/latest/download/{name}");
+            let status = client.head(&url).send().await.expect("GitHub reachable").status();
+            if !status.is_success() {
+                missing.push(format!("{target}: {name} ({status})"));
+            }
+        }
+        assert!(missing.is_empty(), "not in eullm's latest release: {missing:?}");
     }
 
     #[test]
@@ -842,7 +895,7 @@ fn resolve_dest(dest: &str, data_dir: &Path) -> PathBuf {
 pub struct ProcessGuard {
     _children: Vec<tokio::process::Child>,
     /// When the bootstrap started eullm, the exact GGUF path it used.
-    /// eullm accepts a direct GGUF path in the "model" field of /api/generate
+    /// eullm accepts a direct GGUF path in the "model" field of /api/chat (and /api/generate)
     /// (see its "Accepted formats: GGUF file path / ... / Registered name"
     /// error) — reusing the SAME path it was started with means no
     /// registration (`eullm import-ollama`) and no external state that could
@@ -1849,7 +1902,15 @@ async fn maybe_update_eullm(pinned: &Component, dest: &Path, data_dir: &Path) {
     // any ARM64 lacking those extensions — depending on the order in which the
     // API happens to return the assets.
     let Some(asset) = release.assets.iter().find(|a| a.name == hint) else {
-        tracing::warn!(latest = %latest_str, hint = %hint, "newer eullm release found but no asset for this platform, skipping");
+        // The names on offer go in the log: when eullm renames a build (as it
+        // did with -cuda-12.8 -> -cuda-13.1) this line is where it shows.
+        let offered: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+        tracing::warn!(
+            latest = %latest_str,
+            hint = %hint,
+            offered = %offered.join(", "),
+            "newer eullm release found but no asset for this platform, skipping"
+        );
         return;
     };
 
@@ -2344,6 +2405,14 @@ fn eullm_args(cfg: &EullmSettings) -> Vec<String> {
     // when stdin AND stdout are both TTYs (fit.rs:851 in eullm's source).
     // spawn_eullm sets stdin to null, so that condition is false by
     // construction and the flag was a no-op.
+
+    // EULLM__EXTRA_ARGS last. Settings::load has already refused a value that
+    // does not split or repeats one of the options above, so this cannot fail
+    // on a configuration that got this far.
+    match crate::config::eullm_extra_args(cfg.extra_args.as_deref()) {
+        Ok(extra) => args.extend(extra),
+        Err(e) => tracing::warn!(error = %e, "EULLM__EXTRA_ARGS ignored"),
+    }
     args
 }
 
@@ -2380,6 +2449,15 @@ fn spawn_eullm(
     // eullm's own default (~/.eullm/models). Harmless when nothing ever asks
     // eullm for a store-resolved model: it only changes where it WOULD look.
     cmd.env("EULLM_MODELS_DIR", models_dir);
+
+    // The whole command line, quoted so it can be pasted into a shell: what
+    // EULLM__EXTRA_ARGS added is visible next to what this program set.
+    let shown: Vec<String> = std::iter::once(cmd.as_std().get_program())
+        .chain(cmd.as_std().get_args())
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let line = shlex::try_join(shown.iter().map(String::as_str)).unwrap_or_else(|_| shown.join(" "));
+    tracing::info!(command = %line, "starting eullm");
 
     cmd.kill_on_drop(true)
         .stdin(std::process::Stdio::null())
@@ -2441,7 +2519,7 @@ struct EullmTagEntry {
 /// was launched with. Observed in production: started with
 /// "hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M", /api/tags reports it as
 /// "qwen_qwen3.6-35b-a3b-gguf-q4_k_m", and ONLY that canonical name is
-/// accepted in the "model" field of /api/generate. The original hf.co
+/// accepted in the "model" field of /api/chat. The original hf.co
 /// reference returns a 500 "Model ... not found", because the colon is eaten
 /// by an eullm-side normalisation meant for Ollama-style tags, which breaks
 /// hf.co's repo:quant syntax.

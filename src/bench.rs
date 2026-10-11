@@ -479,7 +479,9 @@ async fn run_inference(
         .join("\n\n---\n\n");
 
     let t = Instant::now();
-    let full_prompt = prompt::build_prompt(&context, query, &[]);
+    // The default instructions: a benchmark measures the engine, not one
+    // install's customisation.
+    let full_prompt = prompt::build_prompt(&context, query, &[], None);
     let prompt_build = t.elapsed();
 
     tracing::info!("starting eullm generation");

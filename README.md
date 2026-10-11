@@ -17,7 +17,7 @@ is no telemetry, and nothing is sent to an external API.
 > straight. This is one binary. It starts Qdrant and the inference engine
 > itself; there is nothing to compose and nothing to build.
 >
-> The rewrite restarts the numbering at `0.1`, so it is *lower*-numbered than
+> The rewrite restarts the numbering below `1.0`, so it is *lower*-numbered than
 > the `1.x` line it replaces: it is a new codebase whose storage layout and HTTP
 > surface are not settled yet. The Python version is preserved on the
 > [`python-legacy`](../../tree/python-legacy) branch and in the `1.x` tags — see
@@ -57,9 +57,9 @@ eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
 No separate GPU build or download is needed on any platform.
 
 ```sh
-mkdir i3k-rag-engine-v0.1.47-linux-x86_64
-tar -xzf i3k-rag-engine-v0.1.47-linux-x86_64.tar.gz -C i3k-rag-engine-v0.1.47-linux-x86_64
-cd i3k-rag-engine-v0.1.47-linux-x86_64
+mkdir i3k-rag-engine-v0.2.0-linux-x86_64
+tar -xzf i3k-rag-engine-v0.2.0-linux-x86_64.tar.gz -C i3k-rag-engine-v0.2.0-linux-x86_64
+cd i3k-rag-engine-v0.2.0-linux-x86_64
 
 printf 'AUTH__JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
 
@@ -112,15 +112,28 @@ and English, the same OCR pictures go through.
 **Retrieval.** Documents are split into overlapping chunks, embedded with
 [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (1024 dimensions, multilingual
 across 100+ languages) and stored in Qdrant. A question is embedded the same way
-and answered from the closest passages, with each source shown. A question that
-names an article by number — "art. 2875 del codice civile", "artt. 1176 e 1375
-c.c." — also gets that article's file directly, ahead of the passages found by
-meaning, when the library names its files after articles the way the LEGAL_PACK
-does ("Codice civile, art. 2875 - Rubrica.txt"): a number carries almost no
-meaning for an embedding, and a lawyer asks by number all the time.
+and answered from the closest passages, with each source shown.
+
+**Article lookup, for collections of legislation.** A number carries almost no
+meaning for an embedding, so a question naming an article — "art. 2875 del
+codice civile", "artt. 1176 e 1375 c.c." — would get its neighbours rather than
+the article. When the library holds one article per file, named the way it is
+cited ("Codice civile, art. 2875 - Rubrica.txt"), the article named in the
+question is looked up by file name and placed ahead of the passages found by
+meaning. It only acts when a question names an article and a file follows that
+convention, so on other documents it finds nothing and costs nothing. On by
+default; an admin can turn it off from the *Answers* tab.
 
 **Chat.** Conversations are kept, answers stream token by token, and history is
 carried into follow-up questions.
+
+**Answers.** How the model answers — its role, the structure of an answer, how
+it cites, the language — is the admin's to set, from the *Answers* tab of the
+admin panel (up to 8,000 characters); the retrieved passages, the history and
+the question are added after those instructions by the engine. A change applies
+from the next question, and *Restore defaults* brings the built-in instructions
+back. Prompts go to the model in its own chat format, so models other than Qwen
+answer cleanly too.
 
 **Users.** JWT authentication with three roles — user, super user, admin —
 governing who may upload and delete.
@@ -227,7 +240,7 @@ query of a session and reports on shutdown.
 
 There is no automatic migration path, because the rewrite changes both the
 storage layout and the runtime model: `1.x` kept its state in Docker volumes
-shared between containers, `0.1.x` keeps it in one data directory next to the
+shared between containers, `0.x` keeps it in one data directory next to the
 binary.
 
 The two cannot run at the same time on one machine: they both want ports 8000,

@@ -43,6 +43,13 @@ function App() {
   const [sqliteDocs, setSqliteDocs] = useState([])
   const [loadingSqlite, setLoadingSqlite] = useState(false)
 
+  // Answer instructions (admin "Answers" tab): what is in the text area, and
+  // what the server last said is in effect.
+  const [answerText, setAnswerText] = useState('')
+  const [answerSaved, setAnswerSaved] = useState(null)
+  const [answerBusy, setAnswerBusy] = useState(false)
+  const [articleLookup, setArticleLookup] = useState(null)
+
   // Change password state
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' })
@@ -359,6 +366,67 @@ function App() {
       alert(`Backup error: ${error.response?.data?.error || error.message}`)
     } finally {
       setBackupRunning(false)
+    }
+  }
+
+  // ============================================================================
+  // ADMIN — ANSWER INSTRUCTIONS
+  // ============================================================================
+
+  const applyAnswerState = (data) => {
+    setAnswerSaved(data)
+    setAnswerText(data.instructions || '')
+  }
+
+  const fetchAnswerInstructions = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/settings/answer-instructions`)
+      applyAnswerState(res.data)
+    } catch (error) {
+      console.error('Error loading answer instructions:', error)
+    }
+  }
+
+  const handleSaveAnswerInstructions = async () => {
+    setAnswerBusy(true)
+    try {
+      const res = await axios.put(`${API_URL}/api/admin/settings/answer-instructions`, { instructions: answerText })
+      applyAnswerState(res.data)
+    } catch (error) {
+      alert(`Save error: ${error.response?.data?.error || error.message}`)
+    } finally {
+      setAnswerBusy(false)
+    }
+  }
+
+  const fetchArticleLookup = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/settings/article-lookup`)
+      setArticleLookup(res.data.enabled)
+    } catch (error) {
+      console.error('Error loading the article lookup setting:', error)
+    }
+  }
+
+  const handleToggleArticleLookup = async () => {
+    try {
+      const res = await axios.put(`${API_URL}/api/admin/settings/article-lookup`, { enabled: !articleLookup })
+      setArticleLookup(res.data.enabled)
+    } catch (error) {
+      alert(`Save error: ${error.response?.data?.error || error.message}`)
+    }
+  }
+
+  const handleResetAnswerInstructions = async () => {
+    if (!window.confirm('Replace the instructions with the default ones? The current text will be lost.')) return
+    setAnswerBusy(true)
+    try {
+      const res = await axios.delete(`${API_URL}/api/admin/settings/answer-instructions`)
+      applyAnswerState(res.data)
+    } catch (error) {
+      alert(`Reset error: ${error.response?.data?.error || error.message}`)
+    } finally {
+      setAnswerBusy(false)
     }
   }
 
@@ -951,6 +1019,12 @@ function App() {
                   Backup
                 </button>
                 <button
+                  onClick={() => { setAdminTab('answers'); fetchAnswerInstructions(); fetchArticleLookup() }}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'answers' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                  Answers
+                </button>
+                <button
                   onClick={() => { setAdminTab('qdrant'); fetchQdrantInfo() }}
                   className={`px-4 py-2 rounded-lg font-semibold transition ${adminTab === 'qdrant' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
                 >
@@ -1120,6 +1194,83 @@ function App() {
                   </div>
                 </div>
               )}
+
+              {/* TAB ANSWERS */}
+              {adminTab === 'answers' && (() => {
+                const max = answerSaved?.max_chars || 8000
+                const count = [...answerText].length
+                const tooLong = count > max
+                const unchanged = answerSaved && answerText === answerSaved.instructions
+                return (
+                  <div className="space-y-4">
+                    <div className="bg-slate-700 rounded-lg p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold text-white">Answer instructions</h3>
+                        <span className={`text-xs px-2 py-1 rounded ${answerSaved?.is_default ? 'bg-slate-600 text-slate-300' : 'bg-blue-600 text-white'}`}>
+                          {answerSaved?.is_default ? 'Default' : 'Customised'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-400">
+                        How the model should answer: its role, the structure of the answer, how to cite, the language.
+                        A change applies from the next question.
+                      </p>
+                      <textarea
+                        value={answerText}
+                        onChange={(e) => setAnswerText(e.target.value)}
+                        rows={16}
+                        disabled={!answerSaved || answerBusy}
+                        className="w-full bg-slate-800 text-white text-sm font-mono rounded-lg p-3 border border-slate-600 focus:border-blue-500 focus:outline-none"
+                      />
+                      <p className="text-xs text-slate-400">
+                        The text of the retrieved documents, the conversation history and the question are added
+                        automatically. Each passage is preceded by its file name in square brackets.
+                      </p>
+                      <div className="flex items-center justify-between">
+                        <span className={`text-xs ${tooLong ? 'text-red-400' : 'text-slate-400'}`}>
+                          {count.toLocaleString()} / {max.toLocaleString()} characters
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleResetAnswerInstructions}
+                            disabled={!answerSaved || answerBusy || answerSaved.is_default}
+                            className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 text-white rounded-lg transition text-sm"
+                          >
+                            Restore defaults
+                          </button>
+                          <button
+                            onClick={handleSaveAnswerInstructions}
+                            disabled={!answerSaved || answerBusy || tooLong || unchanged}
+                            className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white rounded-lg transition font-semibold text-sm"
+                          >
+                            {answerBusy ? 'Saving...' : 'Save'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-700 rounded-lg p-4 flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-white">Article lookup by number</h3>
+                        <p className="text-sm text-slate-400">
+                          For collections of legislation whose files are named after the article they hold
+                          ("…, art. N - …"): a question that names an article by number also gets that file,
+                          ahead of the passages found by meaning. On other documents it finds nothing and costs nothing.
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleToggleArticleLookup}
+                        disabled={articleLookup === null}
+                        role="switch"
+                        aria-checked={!!articleLookup}
+                        aria-label="Article lookup by number"
+                        className={`shrink-0 px-4 py-2 rounded-lg font-semibold text-sm transition ${articleLookup ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-slate-600 hover:bg-slate-500 text-slate-200'}`}
+                      >
+                        {articleLookup === null ? '…' : articleLookup ? 'On' : 'Off'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* TAB QDRANT */}
               {adminTab === 'qdrant' && (

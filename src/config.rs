@@ -211,13 +211,70 @@ pub struct EullmSettings {
     ///     both permanently. eullm measures free VRAM on every /api/embed
     ///     call and decides then whether bge-m3 fits alongside the chat model
     ///     or must evict it, reloading the chat model automatically on the
-    ///     next /api/generate — the same unload/reload dance this project
+    ///     next /api/chat — the same unload/reload dance this project
     ///     used to orchestrate by hand (POST /api/unload before, reload()
     ///     after — see documents::upload), now internal to eullm and
     ///     triggered by the ordinary act of calling it, no special
     ///     coordination required on this side.
     #[serde(default)]
     pub reserve_embedding_model: bool,
+    /// Extra options for `eullm run`, appended after the ones this program
+    /// sets (`EULLM__EXTRA_ARGS`), e.g. `--moe-cache auto`. Split into
+    /// arguments the way a shell would - quotes group, a backslash escapes -
+    /// but never run through a shell, so `;`, `$(...)` and the like are just
+    /// characters. An option this program already sets is refused at startup
+    /// with the variable that controls it, rather than passed twice and left
+    /// for eullm to reject (see eullm_extra_args). Only used when
+    /// DATA__MANAGE_SUBPROCESSES=true.
+    #[serde(default)]
+    pub extra_args: Option<String>,
+}
+
+/// The options `eullm run` gets from this program, and the setting each one
+/// comes from: passing one of them again in EULLM__EXTRA_ARGS would give
+/// eullm two values for it.
+const EULLM_ARGS_SET_BY_RAG: &[(&str, &str)] = &[
+    ("--ctx-size", "EULLM__NUM_CTX (the total is NUM_CTX * EULLM__BATCH_SIZE)"),
+    ("-c", "EULLM__NUM_CTX (the total is NUM_CTX * EULLM__BATCH_SIZE)"),
+    ("--batch-size", "EULLM__BATCH_SIZE"),
+    ("--cache-type-k", "EULLM__CACHE_TYPE_K"),
+    ("--cache-type-v", "EULLM__CACHE_TYPE_V"),
+    ("--n-cpu-moe", "EULLM__N_CPU_MOE"),
+    (
+        "--embedding-model",
+        "EMBEDDINGS__INGESTION_EMBEDDING=eullm with EULLM__RESERVE_EMBEDDING_MODEL=true",
+    ),
+    ("--cli", "nothing: it is always passed"),
+];
+
+/// `EULLM__EXTRA_ARGS` as the arguments to append to `eullm run`: split like
+/// a shell would, and refused - with the setting to use instead - when it
+/// repeats an option this program sets itself.
+pub fn eullm_extra_args(extra: Option<&str>) -> Result<Vec<String>> {
+    let Some(text) = extra.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let args = shlex::split(text).ok_or_else(|| {
+        anyhow::anyhow!(
+            "EULLM__EXTRA_ARGS could not be split into arguments - an unclosed quote or a \
+             trailing backslash? Value: {text}"
+        )
+    })?;
+    for arg in &args {
+        // "--ctx-size=4096" and "-c4096" are the same option as "--ctx-size 4096".
+        let name = arg.split('=').next().unwrap_or(arg);
+        let name = if name.starts_with("-c") && !name.starts_with("--") && name.len() > 2 {
+            "-c"
+        } else {
+            name
+        };
+        if let Some((option, setting)) = EULLM_ARGS_SET_BY_RAG.iter().find(|(o, _)| *o == name) {
+            anyhow::bail!(
+                "EULLM__EXTRA_ARGS: {option} is already set by RAG: use {setting} instead."
+            );
+        }
+    }
+    Ok(args)
 }
 
 /// How bge-m3 embedding happens — always bge-m3, but through a different
@@ -407,6 +464,7 @@ impl Default for EullmSettings {
             model_override: None,
             n_cpu_moe: None,
             reserve_embedding_model: false,
+            extra_args: None,
         }
     }
 }
@@ -690,6 +748,9 @@ fn validate_eullm(eullm: &EullmSettings) -> Result<()> {
             "EULLM__NUM_CTX * EULLM__BATCH_SIZE overflows u32: lower at least one of them."
         );
     }
+    // Checked here, at startup, so a bad value stops this program with a
+    // message naming the variable, not eullm later with one of its own.
+    eullm_extra_args(eullm.extra_args.as_deref())?;
     Ok(())
 }
 
@@ -1061,6 +1122,7 @@ mod tests {
         "EULLM__MODEL_OVERRIDE",
         "EULLM__N_CPU_MOE",
         "EULLM__RESERVE_EMBEDDING_MODEL",
+        "EULLM__EXTRA_ARGS",
         "EMBEDDINGS__MODEL_ID",
         "EMBEDDINGS__REQUIRE_GPU",
         "EMBEDDINGS__INGESTION_EMBEDDING",
@@ -1131,4 +1193,58 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn no_extra_args_is_no_arguments() {
+        assert!(eullm_extra_args(None).unwrap().is_empty());
+        assert!(eullm_extra_args(Some("   ")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn extra_args_are_split_like_a_shell_would() {
+        assert_eq!(
+            eullm_extra_args(Some("--moe-cache auto  --mlock")).unwrap(),
+            vec!["--moe-cache", "auto", "--mlock"]
+        );
+        assert_eq!(
+            eullm_extra_args(Some(r#"--draft '/models/my model.gguf'"#)).unwrap(),
+            vec!["--draft", "/models/my model.gguf"]
+        );
+        let err = eullm_extra_args(Some(r#"--draft "/models/unclosed"#)).unwrap_err().to_string();
+        assert!(err.contains("EULLM__EXTRA_ARGS"), "{err}");
+    }
+
+    /// An option this program sets is refused, naming the variable to use -
+    /// in every spelling eullm would accept.
+    #[test]
+    fn an_option_rag_already_sets_is_refused_with_its_variable() {
+        for (value, variable) in [
+            ("--ctx-size 32768", "EULLM__NUM_CTX"),
+            ("--moe-cache auto --ctx-size=32768", "EULLM__NUM_CTX"),
+            ("-c 32768", "EULLM__NUM_CTX"),
+            ("-c32768", "EULLM__NUM_CTX"),
+            ("--batch-size 4", "EULLM__BATCH_SIZE"),
+            ("--cache-type-k q8_0", "EULLM__CACHE_TYPE_K"),
+            ("--cache-type-v q4_0", "EULLM__CACHE_TYPE_V"),
+            ("--n-cpu-moe 10", "EULLM__N_CPU_MOE"),
+            ("--embedding-model bge-m3", "EULLM__RESERVE_EMBEDDING_MODEL"),
+        ] {
+            let err = eullm_extra_args(Some(value)).unwrap_err().to_string();
+            assert!(err.contains("is already set by RAG"), "{value}: {err}");
+            assert!(err.contains(variable), "{value}: {err}");
+        }
+        // Options merely starting like one of ours are not ours.
+        assert!(eullm_extra_args(Some("--cpu-moe --cli-color never")).is_ok());
+    }
+
+    #[test]
+    fn startup_validation_refuses_a_bad_extra_args() {
+        let mut eullm =
+            EullmSettings { extra_args: Some("--ctx-size 8192".into()), ..Default::default() };
+        let err = validate_eullm(&eullm).unwrap_err().to_string();
+        assert!(err.contains("use EULLM__NUM_CTX"), "{err}");
+        eullm.extra_args = Some("--moe-cache auto".into());
+        assert!(validate_eullm(&eullm).is_ok());
+    }
+
 }

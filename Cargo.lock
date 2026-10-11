@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "i3k-rag-engine"
-version = "0.1.48"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2301,6 +2301,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "shlex",
  "sqlx",
  "tar",
  "tempfile",

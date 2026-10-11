@@ -6,6 +6,11 @@
 //! GET    /api/admin/qdrant/documents        → unique documents in Qdrant
 //! DELETE /api/admin/qdrant/document/{id}   → delete all vectors for a document
 //! GET    /api/admin/sqlite/documents        → all rows (soft-deleted included)
+//! GET    /api/admin/settings/answer-instructions → { instructions, is_default, default, max_chars }
+//! PUT    /api/admin/settings/answer-instructions ← { instructions } → same shape (400 past max_chars)
+//! DELETE /api/admin/settings/answer-instructions → back to the default instructions
+//! GET    /api/admin/settings/article-lookup → { enabled, default }
+//! PUT    /api/admin/settings/article-lookup ← { enabled } → same shape
 
 use anyhow::Context;
 use axum::{
@@ -19,6 +24,7 @@ use serde_json::json;
 use crate::auth::{jwt::Claims, rbac::Role};
 use crate::backup::service;
 use crate::db;
+use crate::rag::prompt;
 use crate::state::AppState;
 
 /// A 4xx tells the caller what they got wrong, so its message travels.
@@ -363,6 +369,151 @@ pub async fn sqlite_documents(State(state): State<AppState>, claims: Claims) -> 
     }
 }
 
+// ── /api/admin/settings/answer-instructions ──────────────────────────────────
+//
+// The instructions the answering model is given (rag::prompt). The handlers
+// only unwrap the request: the work is in the functions below them, which
+// take the pool and the caller, so it is tested without a running server.
+
+#[derive(serde::Deserialize)]
+pub struct AnswerInstructionsBody {
+    instructions: String,
+}
+
+pub async fn get_answer_instructions(State(state): State<AppState>, claims: Claims) -> Response {
+    read_answer_instructions(&state.db, &claims).await
+}
+
+pub async fn put_answer_instructions(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(body): Json<AnswerInstructionsBody>,
+) -> Response {
+    save_answer_instructions(&state.db, &claims, &body.instructions).await
+}
+
+pub async fn delete_answer_instructions(State(state): State<AppState>, claims: Claims) -> Response {
+    reset_answer_instructions(&state.db, &claims).await
+}
+
+async fn read_answer_instructions(pool: &sqlx::SqlitePool, claims: &Claims) -> Response {
+    if let Some(r) = require_admin(claims) {
+        return r;
+    }
+    answer_instructions_state(pool).await
+}
+
+async fn save_answer_instructions(pool: &sqlx::SqlitePool, claims: &Claims, text: &str) -> Response {
+    if let Some(r) = require_admin(claims) {
+        return r;
+    }
+    let chars = text.chars().count();
+    if chars > prompt::MAX_INSTRUCTIONS_CHARS {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "the instructions are {chars} characters long; the limit is {}",
+                prompt::MAX_INSTRUCTIONS_CHARS
+            ),
+        );
+    }
+    // Blank is not a setting: it would be the default anyway, so the row is
+    // removed and a later release's default reaches this install too.
+    let result = if text.trim().is_empty() {
+        db::settings::reset(pool, db::settings::ANSWER_INSTRUCTIONS).await.map(|_| ())
+    } else {
+        db::settings::set(pool, db::settings::ANSWER_INSTRUCTIONS, text, &claims.username).await
+    };
+    if let Err(e) = result {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, format!("saving the answer instructions: {e:#}"));
+    }
+    tracing::info!(admin = %claims.username, chars, "answer instructions changed");
+    answer_instructions_state(pool).await
+}
+
+async fn reset_answer_instructions(pool: &sqlx::SqlitePool, claims: &Claims) -> Response {
+    if let Some(r) = require_admin(claims) {
+        return r;
+    }
+    if let Err(e) = db::settings::reset(pool, db::settings::ANSWER_INSTRUCTIONS).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, format!("resetting the answer instructions: {e:#}"));
+    }
+    tracing::info!(admin = %claims.username, "answer instructions reset to the default");
+    answer_instructions_state(pool).await
+}
+
+/// What GET answers, and PUT and DELETE after their change: the instructions
+/// in effect, whether they are the default, the default itself (for the
+/// panel's reset), and the limit (for its counter).
+async fn answer_instructions_state(pool: &sqlx::SqlitePool) -> Response {
+    let saved = match db::settings::get(pool, db::settings::ANSWER_INSTRUCTIONS).await {
+        Ok(saved) => saved,
+        Err(e) => {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, format!("reading the answer instructions: {e:#}"))
+        }
+    };
+    let is_default = saved.as_deref().is_none_or(|t| t.trim().is_empty());
+    Json(json!({
+        "instructions": saved.filter(|_| !is_default).unwrap_or_else(|| prompt::DEFAULT_INSTRUCTIONS.to_owned()),
+        "is_default": is_default,
+        "default": prompt::DEFAULT_INSTRUCTIONS,
+        "max_chars": prompt::MAX_INSTRUCTIONS_CHARS,
+    }))
+    .into_response()
+}
+
+// ── /api/admin/settings/article-lookup ───────────────────────────────────────
+//
+// The switch for rag::references: a question naming an article by number also
+// gets that article's file. On by default, and it only ever matches files
+// named after an article, so on other libraries it finds nothing either way.
+
+#[derive(serde::Deserialize)]
+pub struct ArticleLookupBody {
+    enabled: bool,
+}
+
+pub async fn get_article_lookup(State(state): State<AppState>, claims: Claims) -> Response {
+    read_article_lookup(&state.db, &claims).await
+}
+
+pub async fn put_article_lookup(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(body): Json<ArticleLookupBody>,
+) -> Response {
+    save_article_lookup(&state.db, &claims, body.enabled).await
+}
+
+const ARTICLE_LOOKUP_DEFAULT: bool = true;
+
+async fn read_article_lookup(pool: &sqlx::SqlitePool, claims: &Claims) -> Response {
+    if let Some(r) = require_admin(claims) {
+        return r;
+    }
+    article_lookup_state(pool).await
+}
+
+async fn save_article_lookup(pool: &sqlx::SqlitePool, claims: &Claims, enabled: bool) -> Response {
+    if let Some(r) = require_admin(claims) {
+        return r;
+    }
+    if let Err(e) =
+        db::settings::set_flag(pool, db::settings::ARTICLE_LOOKUP_ENABLED, enabled, &claims.username).await
+    {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, format!("saving the article lookup switch: {e:#}"));
+    }
+    tracing::info!(admin = %claims.username, enabled, "article lookup switched");
+    article_lookup_state(pool).await
+}
+
+async fn article_lookup_state(pool: &sqlx::SqlitePool) -> Response {
+    match db::settings::flag(pool, db::settings::ARTICLE_LOOKUP_ENABLED, ARTICLE_LOOKUP_DEFAULT).await {
+        Ok(enabled) => Json(json!({ "enabled": enabled, "default": ARTICLE_LOOKUP_DEFAULT })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("reading the article lookup switch: {e:#}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::collection_info_response;
@@ -550,5 +701,124 @@ mod tests {
     fn a_wrapped_caller_error_is_still_a_caller_error() {
         let wrapped = bad("invalid archive name: \"x\"").context("restoring backup");
         assert!(is_bad_request(&wrapped), "{wrapped:#}");
+    }
+
+    // ── answer instructions ──────────────────────────────────────────────
+
+    use super::*;
+    use crate::auth::{jwt::Claims, rbac::Role};
+    use axum::{http::StatusCode, response::Response};
+
+    async fn settings_pool(path: &std::path::Path) -> sqlx::SqlitePool {
+        let url = format!("sqlite://{}", path.display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        pool
+    }
+
+    fn caller(role: Role) -> Claims {
+        Claims { user_id: 1, username: "someone".into(), role, exp: u64::MAX }
+    }
+
+    async fn body_of(r: Response) -> (StatusCode, serde_json::Value) {
+        let status = r.status();
+        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn only_an_admin_reads_or_changes_the_answer_instructions() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = settings_pool(&d.path().join("a.db")).await;
+        for role in [Role::User, Role::SuperUser] {
+            let who = caller(role);
+            assert_eq!(read_answer_instructions(&pool, &who).await.status(), StatusCode::FORBIDDEN);
+            assert_eq!(save_answer_instructions(&pool, &who, "x").await.status(), StatusCode::FORBIDDEN);
+            assert_eq!(reset_answer_instructions(&pool, &who).await.status(), StatusCode::FORBIDDEN);
+        }
+        assert_eq!(
+            db::settings::get(&pool, db::settings::ANSWER_INSTRUCTIONS).await.unwrap(),
+            None,
+            "a refused change must not be saved"
+        );
+    }
+
+    #[tokio::test]
+    async fn instructions_past_the_limit_are_refused_and_the_limit_itself_is_not() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = settings_pool(&d.path().join("a.db")).await;
+        let admin = caller(Role::Admin);
+        let too_long: String = "à".repeat(prompt::MAX_INSTRUCTIONS_CHARS + 1);
+        let (status, body) = body_of(save_answer_instructions(&pool, &admin, &too_long).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"].as_str().unwrap().contains("8000"), "{body}");
+        // Characters, not bytes: 8000 accented letters are 16000 bytes and fit.
+        let at_limit: String = "à".repeat(prompt::MAX_INSTRUCTIONS_CHARS);
+        assert_eq!(save_answer_instructions(&pool, &admin, &at_limit).await.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn saved_instructions_survive_a_restart_and_delete_brings_the_default_back() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("a.db");
+        let admin = caller(Role::Admin);
+        {
+            let pool = settings_pool(&path).await;
+            let (_, before) = body_of(read_answer_instructions(&pool, &admin).await).await;
+            assert_eq!(before["is_default"], true);
+            assert_eq!(before["instructions"], prompt::DEFAULT_INSTRUCTIONS);
+            assert_eq!(before["default"], prompt::DEFAULT_INSTRUCTIONS);
+            assert_eq!(before["max_chars"], prompt::MAX_INSTRUCTIONS_CHARS);
+
+            let (status, saved) = body_of(save_answer_instructions(&pool, &admin, "Answer in one line.").await).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(saved["is_default"], false);
+            assert_eq!(saved["instructions"], "Answer in one line.");
+            pool.close().await;
+        }
+        let pool = settings_pool(&path).await;
+        let (_, after) = body_of(read_answer_instructions(&pool, &admin).await).await;
+        assert_eq!(after["instructions"], "Answer in one line.", "the restart lost it");
+        assert_eq!(after["is_default"], false);
+
+        let (status, reset) = body_of(reset_answer_instructions(&pool, &admin).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(reset["is_default"], true);
+        assert_eq!(reset["instructions"], prompt::DEFAULT_INSTRUCTIONS);
+        assert_eq!(db::settings::get(&pool, db::settings::ANSWER_INSTRUCTIONS).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn saving_blank_instructions_is_the_default() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = settings_pool(&d.path().join("a.db")).await;
+        let admin = caller(Role::Admin);
+        save_answer_instructions(&pool, &admin, "Custom.").await;
+        let (status, body) = body_of(save_answer_instructions(&pool, &admin, "  \n\t ").await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["is_default"], true);
+        assert_eq!(db::settings::get(&pool, db::settings::ANSWER_INSTRUCTIONS).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn the_article_lookup_switch_is_on_by_default_and_admin_only() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = settings_pool(&d.path().join("a.db")).await;
+        let admin = caller(Role::Admin);
+        let (_, state) = body_of(read_article_lookup(&pool, &admin).await).await;
+        assert_eq!(state["enabled"], true);
+        assert_eq!(state["default"], true);
+
+        let (status, off) = body_of(save_article_lookup(&pool, &admin, false).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(off["enabled"], false);
+        assert!(!db::settings::flag(&pool, db::settings::ARTICLE_LOOKUP_ENABLED, true).await.unwrap());
+
+        for role in [Role::User, Role::SuperUser] {
+            let who = caller(role);
+            assert_eq!(read_article_lookup(&pool, &who).await.status(), StatusCode::FORBIDDEN);
+            assert_eq!(save_article_lookup(&pool, &who, true).await.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(!db::settings::flag(&pool, db::settings::ARTICLE_LOOKUP_ENABLED, true).await.unwrap());
     }
 }

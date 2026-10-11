@@ -325,7 +325,7 @@ async fn load_embedding(
 /// accepts it directly (see ProcessGuard), with no registration needed.
 ///
 /// If it was started with a model_override instead — an hf.co reference, say —
-/// that reference is NOT accepted verbatim by /api/generate: eullm normalises
+/// that reference is NOT accepted verbatim by /api/chat: eullm normalises
 /// it into a different canonical name for its own internal registry. Observed:
 /// "hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M" at startup becomes
 /// "qwen_qwen3.6-35b-a3b-gguf-q4_k_m" in /api/tags, and the original returns a

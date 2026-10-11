@@ -2134,6 +2134,49 @@ mod tests {
         assert_eq!(role, "user");
     }
 
+    /// The settings table (migration 0003) on the real schema, both ways: a
+    /// backup taken before it existed restores into a binary that has it,
+    /// leaving the table and the setting in it alone; a backup that has it
+    /// brings its value back.
+    #[tokio::test]
+    async fn the_settings_table_restores_from_old_and_new_backups() {
+        use crate::db::settings::{self, ANSWER_INSTRUCTIONS};
+        let d = tempfile::tempdir().unwrap();
+        let live = pool_at(&d.path().join("live.db")).await;
+        crate::db::migrate(&live).await.unwrap();
+
+        // A backup from before 0.2.0: the same schema without `settings`.
+        let old_src = pool_at(&d.path().join("old-src.db")).await;
+        crate::db::migrate(&old_src).await.unwrap();
+        sqlx::query("DROP TABLE settings").execute(&old_src).await.unwrap();
+        let old_backup = d.path().join("old-backup.db");
+        sqlx::query(&format!("VACUUM INTO '{}'", old_backup.display()))
+            .execute(&old_src).await.unwrap();
+
+        settings::set(&live, ANSWER_INSTRUCTIONS, "Live text.", "admin").await.unwrap();
+        let (tables, _) = restore_sqlite(&live, &old_backup).await.unwrap();
+        assert!(!tables.contains(&"settings".to_string()), "{tables:?}");
+        assert_eq!(
+            settings::get(&live, ANSWER_INSTRUCTIONS).await.unwrap().as_deref(),
+            Some("Live text."),
+            "an archive without the table must leave it as it is"
+        );
+
+        // A backup taken with the setting in place, then changed: restoring
+        // brings the archived value back.
+        settings::set(&live, ANSWER_INSTRUCTIONS, "Archived text.", "admin").await.unwrap();
+        let new_backup = d.path().join("new-backup.db");
+        sqlx::query(&format!("VACUUM INTO '{}'", new_backup.display()))
+            .execute(&live).await.unwrap();
+        settings::set(&live, ANSWER_INSTRUCTIONS, "Changed later.", "admin").await.unwrap();
+        let (tables, _) = restore_sqlite(&live, &new_backup).await.unwrap();
+        assert!(tables.contains(&"settings".to_string()), "{tables:?}");
+        assert_eq!(
+            settings::get(&live, ANSWER_INSTRUCTIONS).await.unwrap().as_deref(),
+            Some("Archived text.")
+        );
+    }
+
     #[tokio::test]
     async fn a_table_dropped_from_the_schema_is_skipped_not_fatal() {
         let d = tempfile::tempdir().unwrap();
