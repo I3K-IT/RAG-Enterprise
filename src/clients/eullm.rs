@@ -41,21 +41,28 @@ fn special_token_re() -> &'static Regex {
     })
 }
 
-// Strips residual <think>...</think> from model output.
+// The same cleanup on a whole text, in one pass: what StreamCleaner must
+// agree with, kept as the tests' reference now that every answer, unary
+// included, is read as a stream.
+#[cfg(test)]
 static THINK_RE: OnceLock<Regex> = OnceLock::new();
+#[cfg(test)]
 fn think_re() -> &'static Regex {
     THINK_RE.get_or_init(|| Regex::new(r"(?s)<think>.*?</think>").unwrap())
 }
 
 /// The model's reply without a reasoning block or template markers.
+#[cfg(test)]
 fn clean_answer(text: &str) -> String {
     let without_think = think_re().replace_all(text, "");
     special_token_re().replace_all(&without_think, "").trim().to_owned()
 }
 
-/// Total budget for a whole unary request — invoke(), unload(), embed_texts().
-/// These answer in one shot, so a request still open after this long is a
-/// request that is not coming back.
+/// Total budget for a whole one-shot request — unload(), embed_texts().
+/// These answer in one go, so a request still open after this long is a
+/// request that is not coming back. Not for an answer: invoke() reads its
+/// reply as a stream, under the stream's limits (see below), because a long
+/// answer from a slow model legitimately takes longer than this.
 const HTTP_TIMEOUT_SECS: u64 = 180;
 
 /// Streaming gets no total budget at all, deliberately. `reqwest`'s
@@ -81,8 +88,9 @@ const REP_TAIL: usize = 800;         // chars of accumulated text to examine
 const REP_PHRASE_MIN: usize = 50;    // minimum phrase length to search for
 const REP_COUNT: usize = 3;          // occurrences threshold → stop
 
-/// `clean_answer` for a stream: the same removals, applied piece by piece
-/// while the answer is still arriving. A marker can be split across pieces
+/// The cleanup of a model's reply - no reasoning block, no chat template
+/// marker, no leading whitespace - applied piece by piece while the answer
+/// is still arriving. A marker can be split across pieces
 /// ("<thi" + "nk>"), so whatever could still be the start of one is held back
 /// until the next piece says what it is; `finish` releases what is left.
 /// What comes out is what the client sees and what is stored as the reply.
@@ -324,6 +332,18 @@ impl EullmClient {
         }
     }
 
+    /// The same client with other limits for the streaming connection, so a
+    /// test can watch them act in seconds rather than minutes.
+    #[cfg(test)]
+    fn with_stream_timeouts(mut self, connect: Duration, idle: Duration) -> Self {
+        self.http_stream = Client::builder()
+            .connect_timeout(connect)
+            .read_timeout(idle)
+            .build()
+            .expect("reqwest streaming Client build");
+        self
+    }
+
     /// The configured model name — e.g. for a cache key that must miss
     /// when the model changes.
     pub fn model_id(&self) -> &str {
@@ -359,24 +379,35 @@ impl EullmClient {
 
     // ── Non-streaming ─────────────────────────────────────────────────────────
 
-    /// Returns the model's reply, trimmed and cleaned (see `clean_answer`).
+    /// Returns the model's whole reply, cleaned like a streamed one.
+    ///
+    /// Asked for as a stream and gathered here, so it is bounded like one:
+    /// 30s to connect, at most STREAM_IDLE_TIMEOUT_SECS of silence between
+    /// two pieces, and no limit on the total - num_predict already bounds
+    /// the length. A one-shot request had a total budget of 180s, and a long
+    /// answer from a slow model (a large MoE with its experts in RAM at ~20
+    /// tokens/s, a 24B on a 16 GB card) outlasted it: /api/query answered
+    /// 502 while eullm was still writing. The two paths now behave the same.
     pub async fn invoke(&self, user_text: &str) -> Result<String> {
-        let url = format!("{}/api/chat", self.base_url);
-        let resp = self
-            .http
-            .post(&url)
-            .json(&self.request(user_text, false))
-            .send()
-            .await
-            .context("eullm POST")?;
-        let status = resp.status();
-        let body: serde_json::Value = resp.json().await.context("eullm response JSON")?;
-        if !status.is_success() {
-            let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
-            anyhow::bail!("eullm HTTP {status}: {msg}");
-        }
-        let text = body["message"]["content"].as_str().unwrap_or("");
-        Ok(clean_answer(text))
+        let (tx, mut rx) = mpsc::channel::<StreamItem>(256);
+        let produce = async move {
+            let result = self.stream_inner(user_text, &tx).await;
+            // The collector below ends when the last sender is gone.
+            drop(tx);
+            result
+        };
+        let collect = async {
+            let mut text = String::new();
+            while let Some(item) = rx.recv().await {
+                if let StreamItem::Token(piece) = item {
+                    text.push_str(&piece);
+                }
+            }
+            text
+        };
+        let (result, text) = tokio::join!(produce, collect);
+        result?;
+        Ok(text.trim_end().to_owned())
     }
 
     // ── Unload/reload (eullm ≥ EuLLM-v0.6.10, POST /api/unload) ─────────────────
@@ -513,9 +544,14 @@ impl EullmClient {
 
         loop {
             let chunk = response.chunk().await.context("eullm chunk read")?;
-            let Some(bytes) = chunk else { break };
-
-            buf.extend_from_slice(&bytes);
+            // At the end of the body a last line without its newline is still
+            // a line: given one, it goes through the same parsing below.
+            let ended = chunk.is_none();
+            if let Some(bytes) = chunk {
+                buf.extend_from_slice(&bytes);
+            } else if !buf.is_empty() {
+                buf.push(b'\n');
+            }
 
             // Drain all complete newline-delimited NDJSON lines from buf.
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
@@ -575,6 +611,9 @@ impl EullmClient {
                 if sc.done {
                     return Ok(());
                 }
+            }
+            if ended {
+                break;
             }
         }
         // The connection ended without a `done` line: what the cleaner still
@@ -879,6 +918,69 @@ mod tests {
         assert!(res.is_err(), "the error line must surface");
         assert_eq!(rx.recv().await, Some(StreamItem::Token("Half".into())));
         assert_eq!(rx.recv().await, Some(StreamItem::Failed));
+    }
+
+    /// Serves `lines` as an NDJSON body with no Content-Length, one line every
+    /// `gap`, then stays silent for `stall` before closing - the shape of a
+    /// slow model that keeps writing, or of one that stops.
+    async fn serve_slowly(lines: Vec<String>, gap: Duration, stall: Duration) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n";
+            if sock.write_all(head.as_bytes()).await.is_err() {
+                return;
+            }
+            for line in lines {
+                tokio::time::sleep(gap).await;
+                if sock.write_all(format!("{line}\n").as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+            tokio::time::sleep(stall).await;
+            let _ = sock.shutdown().await;
+        });
+        url
+    }
+
+    fn piece(text: &str) -> String {
+        serde_json::json!({"message": {"role": "assistant", "content": text}, "done": false}).to_string()
+    }
+
+    /// The fix: a reply whose total runs past the idle limit several times
+    /// over, with pieces arriving regularly, comes back whole. (The limits are
+    /// scaled down from 30s/180s so the test runs in seconds.)
+    #[tokio::test]
+    async fn a_long_unary_answer_with_steady_tokens_arrives_whole() {
+        let idle = Duration::from_millis(400);
+        let mut lines: Vec<String> = (0..12).map(|i| piece(&format!("w{i} "))).collect();
+        lines.push(r#"{"message":{"role":"assistant","content":"end."},"done":true}"#.into());
+        // 13 lines 150ms apart: ~2s in all, five times the idle limit.
+        let url = serve_slowly(lines, Duration::from_millis(150), Duration::ZERO).await;
+        let c = client_at(url).with_stream_timeouts(Duration::from_secs(5), idle);
+        let started = std::time::Instant::now();
+        let answer = c.invoke("Domanda?").await.expect("a steady answer must not time out");
+        assert!(started.elapsed() > idle * 4, "the test must outlast the idle limit");
+        let expected: String = (0..12).map(|i| format!("w{i} ")).collect::<String>() + "end.";
+        assert_eq!(answer, expected);
+    }
+
+    /// And the limit that remains: an eullm that stops sending is given up on
+    /// after the idle time, not waited for.
+    #[tokio::test]
+    async fn a_unary_answer_that_goes_silent_is_given_up_on() {
+        let idle = Duration::from_millis(400);
+        let url = serve_slowly(vec![piece("Half")], Duration::ZERO, Duration::from_secs(30)).await;
+        let c = client_at(url).with_stream_timeouts(Duration::from_secs(5), idle);
+        let started = std::time::Instant::now();
+        let err = c.invoke("Domanda?").await.expect_err("silence must end the request");
+        let waited = started.elapsed();
+        assert!(waited >= idle && waited < Duration::from_secs(5), "waited {waited:?}");
+        assert!(format!("{err:#}").contains("chunk read"), "{err:#}");
     }
 
     /// The non-streaming reply is read from `message.content` and cleaned.
