@@ -10,7 +10,8 @@ const BRANDING = {
   clientName: import.meta.env.VITE_BRANDING_NAME || 'i3k RAG Engine',
   primaryColor: '#3b82f6',
   poweredBy: 'I3K Technologies',
-  poweredBySubtitle: 'Ltd.',
+  poweredBySubtitle: 'Srl',
+  poweredByUrl: 'https://www.i3k.ai',
   version: import.meta.env.VITE_BRANDING_VERSION || 'Community'
 }
 
@@ -1842,9 +1843,14 @@ function App() {
         <div className="flex items-center justify-between text-xs text-slate-400">
           <div>
             <span>Powered by </span>
-            <span className="font-semibold text-blue-400">
+            <a
+              href={BRANDING.poweredByUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold text-blue-400 hover:text-blue-300 hover:underline"
+            >
               {BRANDING.poweredBy} {BRANDING.poweredBySubtitle}
-            </span>
+            </a>
             <span className="mx-2">•</span>
             <span>{BRANDING.version}</span>
           </div>
@@ -1854,7 +1860,7 @@ function App() {
               className="hover:text-white transition"
               onClick={(e) => {
                 e.preventDefault()
-                alert('This system uses AI to analyze documents and provide answers. Results should be verified and do not replace professional advice.\n\n© I3K Technologies - All rights reserved.')
+                alert('This system uses AI to analyze documents and provide answers. Results should be verified and do not replace professional advice.\n\n© I3K Technologies Srl - All rights reserved.')
               }}
             >
               Disclaimer
