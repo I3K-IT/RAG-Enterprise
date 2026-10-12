@@ -57,9 +57,9 @@ eullm 0.6.82, for embedding too when asked (see [Architecture](#architecture)).
 No separate GPU build or download is needed on any platform.
 
 ```sh
-mkdir i3k-rag-engine-v0.2.1-linux-x86_64
-tar -xzf i3k-rag-engine-v0.2.1-linux-x86_64.tar.gz -C i3k-rag-engine-v0.2.1-linux-x86_64
-cd i3k-rag-engine-v0.2.1-linux-x86_64
+mkdir i3k-rag-engine-v0.2.2-linux-x86_64
+tar -xzf i3k-rag-engine-v0.2.2-linux-x86_64.tar.gz -C i3k-rag-engine-v0.2.2-linux-x86_64
+cd i3k-rag-engine-v0.2.2-linux-x86_64
 
 printf 'AUTH__JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
 
@@ -337,4 +337,4 @@ Built on [Candle](https://github.com/huggingface/candle),
 [Qwen](https://huggingface.co/Qwen), [Tesseract](https://github.com/tesseract-ocr/tesseract)
 and [PDFium](https://pdfium.googlesource.com/pdfium/).
 
-Made in the EU by [i3k](https://www.i3k.eu).
+Made in the EU by [I3K Technologies Srl](https://www.i3k.ai).

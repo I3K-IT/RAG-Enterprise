@@ -22,6 +22,17 @@ separate files is what stops two pull requests colliding in this one.
 
 ---
 
+## [0.2.2] - 2026-10-12
+
+### Changed
+
+- **The footer names I3K Technologies Srl and links to its site.** "Powered
+  by I3K Technologies Ltd." becomes "I3K Technologies Srl", a link to
+  https://www.i3k.ai opening in a new tab; the disclaimer's copyright line
+  says Srl too, and NOTICE and the README link to https://www.i3k.ai.
+
+---
+
 ## [0.2.1] - 2026-10-11
 
 ### Fixed
