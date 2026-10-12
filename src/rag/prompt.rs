@@ -16,12 +16,12 @@
 pub const DEFAULT_INSTRUCTIONS: &str = r#"You are an expert research analyst. Answer based on the data below.
 
 INSTRUCTIONS:
-1. STRUCTURE: Start with a direct answer, then provide detailed supporting information with dates, names, locations, context, and explanations.
-2. VERIFIED DATA FIRST: Use STRUCTURED DATA as verified facts (dates, event types). Use RETRIEVED CHUNKS for additional context and details.
-3. CITATIONS: After each fact, cite its source by the file name shown in square brackets above the chunk it comes from, copied exactly, e.g. [annual-report-2025.pdf]. Cite only those file names; never write a placeholder, a shorthand such as “ibidem”, or a name that is not among them.
-4. SEMANTIC UNDERSTANDING: Recognize that terms may appear in different languages or synonyms (e.g., "attentato" = "attack" = "bombing").
-5. THOROUGH: Provide rich, detailed answers. Extract ALL relevant information from the chunks - don't summarize, elaborate. Include background, consequences, related events.
-6. LANGUAGE: Respond in the SAME LANGUAGE as the question.
+1. LANGUAGE: Respond in the SAME LANGUAGE as the question.
+2. STRUCTURE: Start with a direct answer, then provide detailed supporting information with dates, names, locations, context, and explanations.
+3. VERIFIED DATA FIRST: Use STRUCTURED DATA as verified facts (dates, event types). Use RETRIEVED CHUNKS for additional context and details.
+4. CITATIONS: After each fact, cite its source by the file name shown in square brackets above the chunk it comes from, copied exactly; cite only those file names; never write a placeholder, a shorthand such as “ibidem”, or a name that is not among them.
+5. SEMANTIC UNDERSTANDING: Recognize that terms may appear in different languages or synonyms (e.g., "attentato" = "attack" = "bombing").
+6. THOROUGH: Provide rich, detailed answers. Extract ALL relevant information from the chunks - don't summarize, elaborate. Include background, consequences, related events.
 7. NO INVENTION: Only use information present in the data. If inferring a connection, say "possibly related" or "may be connected"."#;
 
 /// The longest instructions an administrator may save, in characters. Every
@@ -42,7 +42,15 @@ RETRIEVED CHUNKS:
 
 QUESTION: {question}
 
-ANSWER:"#;
+{language_reminder}ANSWER:"#;
+
+/// Closes the prompt when the default instructions are in effect: their
+/// language rule again, last thing before ANSWER:. With English instructions
+/// a model like Qwen3.5-9B answered Italian questions in English, the rule
+/// being one point among seven above pages of chunks. Not added to an
+/// administrator's own instructions: language is theirs to set, and a
+/// closing line saying otherwise would overrule "always answer in English".
+const LANGUAGE_REMINDER: &str = "Answer in the language of the QUESTION.\n\n";
 
 /// The instructions to use: `custom` when it has any text, the default
 /// otherwise.
@@ -91,10 +99,14 @@ pub fn build_prompt(
     instructions: Option<&str>,
 ) -> String {
     let history_section = format_history(history);
+    let instructions = effective_instructions(instructions);
+    let language_reminder =
+        if instructions == DEFAULT_INSTRUCTIONS { LANGUAGE_REMINDER } else { "" };
     render(
         FRAME,
         &[
-            ("{instructions}", effective_instructions(instructions)),
+            ("{instructions}", instructions),
+            ("{language_reminder}", language_reminder),
             ("{structured_data_section}", ""),
             ("{history_section}", &history_section),
             ("{context}", context),
@@ -191,32 +203,42 @@ mod tests {
         assert!(out.ends_with("ANSWER:"), "{out}");
     }
 
-    /// The 0.1.48 template, verbatim. With nothing saved the prompt must be
-    /// exactly this, minus the two changes 0.2.0 made on purpose: no
-    /// `/no_think` line (thinking is switched off in the request now) and
-    /// the new citation instruction.
-    const PROMPT_0_1_48: &str = "/no_think\nYou are an expert research analyst. Answer based on the data below.\n\nINSTRUCTIONS:\n1. STRUCTURE: Start with a direct answer, then provide detailed supporting information with dates, names, locations, context, and explanations.\n2. VERIFIED DATA FIRST: Use STRUCTURED DATA as verified facts (dates, event types). Use RETRIEVED CHUNKS for additional context and details.\n3. CITATIONS: Cite sources as [Filename] after each fact.\n4. SEMANTIC UNDERSTANDING: Recognize that terms may appear in different languages or synonyms (e.g., \"attentato\" = \"attack\" = \"bombing\").\n5. THOROUGH: Provide rich, detailed answers. Extract ALL relevant information from the chunks - don't summarize, elaborate. Include background, consequences, related events.\n6. LANGUAGE: Respond in the SAME LANGUAGE as the question.\n7. NO INVENTION: Only use information present in the data. If inferring a connection, say \"possibly related\" or \"may be connected\".\n\n{structured_data_section}\n\n{history_section}\n\nRETRIEVED CHUNKS:\n{context}\n\nQUESTION: {question}\n\nANSWER:";
-
+    /// The whole default prompt, pinned: what the model gets with nothing
+    /// saved. Any change to the defaults or the frame shows up here first.
     #[test]
-    fn with_nothing_saved_the_prompt_is_the_old_one_but_for_the_citation_line() {
+    fn with_nothing_saved_the_prompt_is_the_default_one() {
         let history = vec![("Earlier?".to_owned(), "Yes.".to_owned())];
-        let old = render(
-            PROMPT_0_1_48,
-            &[
-                ("{structured_data_section}", ""),
-                ("{history_section}", &format_history(&history)),
-                ("{context}", "[a.pdf]\nText."),
-                ("{question}", "Why?"),
-            ],
+        let expected = format!(
+            "{DEFAULT_INSTRUCTIONS}\n\n\n\nCONVERSATION HISTORY:\nUser: Earlier?\nAssistant: Yes.\n\n\
+             RETRIEVED CHUNKS:\n[a.pdf]\nText.\n\nQUESTION: Why?\n\n\
+             Answer in the language of the QUESTION.\n\nANSWER:"
         );
-        let expected = old
-            .strip_prefix("/no_think\n")
-            .unwrap()
-            .replace(
-                "3. CITATIONS: Cite sources as [Filename] after each fact.",
-                DEFAULT_INSTRUCTIONS.lines().find(|l| l.starts_with("3. CITATIONS")).unwrap(),
-            );
         assert_eq!(build_prompt("[a.pdf]\nText.", "Why?", &history, None), expected);
+    }
+
+    /// Two findings of the evaluation, pinned. The citation line carries no
+    /// example, which models copied as a citation ([annual-report-2025.pdf]);
+    /// and the language rule comes first, then again right before ANSWER:.
+    #[test]
+    fn the_default_cites_without_an_example_and_states_the_language_twice() {
+        let citations = DEFAULT_INSTRUCTIONS.lines().find(|l| l.contains("CITATIONS:")).unwrap();
+        assert!(!citations.contains("e.g."), "{citations}");
+        assert!(!citations.contains(".pdf"), "{citations}");
+        let first = DEFAULT_INSTRUCTIONS.lines().find(|l| l.starts_with("1. ")).unwrap();
+        assert!(first.starts_with("1. LANGUAGE:"), "{first}");
+        for instructions in [None, Some(""), Some("  ")] {
+            let out = build_prompt("c", "q", &[], instructions);
+            assert!(out.ends_with("QUESTION: q\n\nAnswer in the language of the QUESTION.\n\nANSWER:"), "{out}");
+        }
+    }
+
+    /// An administrator's instructions decide the language: no closing line
+    /// may contradict "Always answer in English".
+    #[test]
+    fn custom_instructions_get_no_language_line_of_ours() {
+        let out = build_prompt("c", "Che cosa dice?", &[], Some("Always answer in English."));
+        assert!(!out.contains("Answer in the language of the QUESTION."), "{out}");
+        assert!(out.ends_with("QUESTION: Che cosa dice?\n\nANSWER:"), "{out}");
     }
 
     #[test]
