@@ -31,7 +31,6 @@ pub const MAX_INSTRUCTIONS_CHARS: usize = 8000;
 /// The part of the prompt the code owns. `{instructions}` is filled with a
 /// value like the other slots, so whatever the instructions contain -
 /// `{context}` and `{question}` included - stays text (see `render`).
-
 const FRAME: &str = r#"{instructions}
 
 {structured_data_section}
