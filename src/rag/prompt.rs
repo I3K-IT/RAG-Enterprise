@@ -31,12 +31,7 @@ pub const MAX_INSTRUCTIONS_CHARS: usize = 8000;
 /// The part of the prompt the code owns. `{instructions}` is filled with a
 /// value like the other slots, so whatever the instructions contain -
 /// `{context}` and `{question}` included - stays text (see `render`).
-///
-/// The language rule is repeated here, last thing before ANSWER:, and not
-/// only in the instructions: with English instructions a model like
-/// Qwen3.5-9B answered Italian questions in English, the rule being the
-/// sixth of seven points above several pages of chunks. Being in the frame,
-/// it also holds for instructions an administrator writes without it.
+
 const FRAME: &str = r#"{instructions}
 
 {structured_data_section}
@@ -48,9 +43,15 @@ RETRIEVED CHUNKS:
 
 QUESTION: {question}
 
-Answer in the language of the QUESTION.
+{language_reminder}ANSWER:"#;
 
-ANSWER:"#;
+/// Closes the prompt when the default instructions are in effect: their
+/// language rule again, last thing before ANSWER:. With English instructions
+/// a model like Qwen3.5-9B answered Italian questions in English, the rule
+/// being one point among seven above pages of chunks. Not added to an
+/// administrator's own instructions: language is theirs to set, and a
+/// closing line saying otherwise would overrule "always answer in English".
+const LANGUAGE_REMINDER: &str = "Answer in the language of the QUESTION.\n\n";
 
 /// The instructions to use: `custom` when it has any text, the default
 /// otherwise.
@@ -99,10 +100,14 @@ pub fn build_prompt(
     instructions: Option<&str>,
 ) -> String {
     let history_section = format_history(history);
+    let instructions = effective_instructions(instructions);
+    let language_reminder =
+        if instructions == DEFAULT_INSTRUCTIONS { LANGUAGE_REMINDER } else { "" };
     render(
         FRAME,
         &[
-            ("{instructions}", effective_instructions(instructions)),
+            ("{instructions}", instructions),
+            ("{language_reminder}", language_reminder),
             ("{structured_data_section}", ""),
             ("{history_section}", &history_section),
             ("{context}", context),
@@ -222,10 +227,19 @@ mod tests {
         assert!(!citations.contains(".pdf"), "{citations}");
         let first = DEFAULT_INSTRUCTIONS.lines().find(|l| l.starts_with("1. ")).unwrap();
         assert!(first.starts_with("1. LANGUAGE:"), "{first}");
-        for instructions in [None, Some("Answer in one line.")] {
+        for instructions in [None, Some(""), Some("  ")] {
             let out = build_prompt("c", "q", &[], instructions);
             assert!(out.ends_with("QUESTION: q\n\nAnswer in the language of the QUESTION.\n\nANSWER:"), "{out}");
         }
+    }
+
+    /// An administrator's instructions decide the language: no closing line
+    /// may contradict "Always answer in English".
+    #[test]
+    fn custom_instructions_get_no_language_line_of_ours() {
+        let out = build_prompt("c", "Che cosa dice?", &[], Some("Always answer in English."));
+        assert!(!out.contains("Answer in the language of the QUESTION."), "{out}");
+        assert!(out.ends_with("QUESTION: Che cosa dice?\n\nANSWER:"), "{out}");
     }
 
     #[test]

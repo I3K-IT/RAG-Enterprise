@@ -29,10 +29,12 @@ separate files is what stops two pull requests colliding in this one.
 - **The default instructions keep to the question's language and cite
   without an example.** With English instructions Qwen3.5-9B answered
   Italian questions in English, the language rule being the sixth of seven
-  points: it now comes first, and the frame repeats it right before
-  `ANSWER:` ("Answer in the language of the QUESTION."), so it holds for
-  instructions an admin writes too. The citation rule loses its example,
-  which the same model wrote as a citation (`[annual-report-2025.pdf]`).
+  points: it now comes first, and the prompt repeats it right before
+  `ANSWER:` ("Answer in the language of the QUESTION."). That closing line
+  is added only to the default instructions: an admin's own instructions
+  decide the language, and a line contradicting "always answer in English"
+  would overrule them. The citation rule loses its example, which the same
+  model wrote as a citation (`[annual-report-2025.pdf]`).
 
 ---
 
