@@ -337,4 +337,4 @@ Built on [Candle](https://github.com/huggingface/candle),
 [Qwen](https://huggingface.co/Qwen), [Tesseract](https://github.com/tesseract-ocr/tesseract)
 and [PDFium](https://pdfium.googlesource.com/pdfium/).
 
-Made in the EU by [i3k](https://www.i3k.eu).
+Made in the EU by [I3K Technologies Srl](https://www.i3k.ai).
