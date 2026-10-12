@@ -41,13 +41,18 @@ fn special_token_re() -> &'static Regex {
     })
 }
 
-// Strips residual <think>...</think> from model output.
+// The same cleanup on a whole text, in one pass: what StreamCleaner must
+// agree with, kept as the tests' reference now that every answer, unary
+// included, is read as a stream.
+#[cfg(test)]
 static THINK_RE: OnceLock<Regex> = OnceLock::new();
+#[cfg(test)]
 fn think_re() -> &'static Regex {
     THINK_RE.get_or_init(|| Regex::new(r"(?s)<think>.*?</think>").unwrap())
 }
 
 /// The model's reply without a reasoning block or template markers.
+#[cfg(test)]
 fn clean_answer(text: &str) -> String {
     let without_think = think_re().replace_all(text, "");
     special_token_re().replace_all(&without_think, "").trim().to_owned()
@@ -83,8 +88,9 @@ const REP_TAIL: usize = 800;         // chars of accumulated text to examine
 const REP_PHRASE_MIN: usize = 50;    // minimum phrase length to search for
 const REP_COUNT: usize = 3;          // occurrences threshold → stop
 
-/// `clean_answer` for a stream: the same removals, applied piece by piece
-/// while the answer is still arriving. A marker can be split across pieces
+/// The cleanup of a model's reply - no reasoning block, no chat template
+/// marker, no leading whitespace - applied piece by piece while the answer
+/// is still arriving. A marker can be split across pieces
 /// ("<thi" + "nk>"), so whatever could still be the start of one is held back
 /// until the next piece says what it is; `finish` releases what is left.
 /// What comes out is what the client sees and what is stored as the reply.
