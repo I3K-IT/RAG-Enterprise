@@ -212,7 +212,7 @@ async fn prepare(
     use_history: bool,
     conversation_id: Option<&str>,
     top_k: u64,
-) -> anyhow::Result<(String, Vec<Source>, PrepareTimings)> {
+) -> anyhow::Result<(prompt::Prompt, Vec<Source>, PrepareTimings)> {
     // 1. Embed the query. With ingestion_embedding=Eullm this now goes
     // through eullm's own POST /api/embed (an HTTP call, .await directly) —
     // the same on-demand coexist-or-evict eullm already does for ingestion
@@ -321,7 +321,7 @@ async fn prepare(
     let prompt_build = t.elapsed();
 
     tracing::info!(
-        chars = full_prompt.len(),
+        chars = full_prompt.system.len() + full_prompt.user.len(),
         chunks = sources.len(),
         history_pairs = history.len(),
         "prompt built"
@@ -413,7 +413,7 @@ pub async fn query(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
 
-    let answer = match state.eullm.invoke(&full_prompt).await {
+    let answer = match state.eullm.invoke(&full_prompt.system, &full_prompt.user).await {
         Ok(a) => a,
         Err(e) => return err(StatusCode::BAD_GATEWAY, format!("eullm: {e}")),
     };
@@ -514,9 +514,8 @@ pub async fn query_stream(
     // Start eullm streaming in background.
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamItem>(64);
     let eullm = state.eullm.clone();
-    let prompt_clone = full_prompt.clone();
     tokio::spawn(async move {
-        if let Err(e) = eullm.invoke_stream(&prompt_clone, tx).await {
+        if let Err(e) = eullm.invoke_stream(&full_prompt.system, &full_prompt.user, tx).await {
             tracing::error!("eullm stream error: {e}");
         }
     });

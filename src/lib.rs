@@ -367,7 +367,7 @@ async fn build_eullm_client(
 /// and can come back empty or truncated.
 async fn warmup_eullm(eullm: &clients::eullm::EullmClient) {
     tracing::info!("warming eullm up…");
-    match eullm.invoke("hi").await {
+    match eullm.invoke("", "hi").await {
         Ok(a) if a.trim().is_empty() => tracing::warn!(
             "eullm warmup: empty response — the model may not be ready (check eullm itself)"
         ),

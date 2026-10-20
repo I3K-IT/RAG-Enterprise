@@ -487,8 +487,9 @@ async fn run_inference(
     tracing::info!("starting eullm generation");
     let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamItem>(256);
     let eullm_task = eullm.clone();
-    let prompt_for_task = full_prompt.clone();
-    let gen_handle = tokio::spawn(async move { eullm_task.invoke_stream(&prompt_for_task, tx).await });
+    let gen_handle = tokio::spawn(async move {
+        eullm_task.invoke_stream(&full_prompt.system, &full_prompt.user, tx).await
+    });
 
     let gen_start = Instant::now();
     let mut ttft: Option<Duration> = None;
